@@ -32,6 +32,8 @@ Never trade a likely correction round for a cheaper first attempt.
 3. Search for an existing implementation or native feature.
 4. Declare the task class, proof level, diff budget, and escalation path.
 5. Use a fresh, scoped session; persist state in files, not conversation history.
+6. In an initialized project, run `007 begin --repo . --task-id <stable-id>`
+   before implementation so an omitted terminal receipt remains visible.
 
 Reuse ladder: need at all → existing code → standard library → platform feature
 → installed dependency → one line → minimum new code.
@@ -92,10 +94,11 @@ uncertainty: <remaining evidence gap or none>
 Missing telemetry stays `unmeasured` or `N/D`; never reconstruct it. Cost is a
 hard KPI: use the exact served route and an explicit accounting source. Never
 record missing cost as zero. In an initialized project, the operating contract
-requires every terminal outcome to call `007 record`; the command rejects
-unaccounted cost and duplicate task IDs. The dependency-free core cannot detect
-a host that omits the command, so dashboard coverage is explicitly limited to
-observed receipts. Schema:
+requires `007 begin` before implementation and `007 record` for every terminal
+outcome. The commands reject unsafe or duplicate task IDs, and terminal receipts
+reject unaccounted cost. The dependency-free core cannot detect a host that
+omits both commands, so dashboard coverage is explicitly limited to observed
+starts. Schema:
 [`references/receipt-schema.md`](references/receipt-schema.md).
 
 ## Learn without Goodharting
@@ -121,6 +124,7 @@ harness was wrong.
 
 ```bash
 007 init --repo .
+007 begin --repo . --task-id <stable-id>
 007 record --repo . --file task.receipt.json
 007 dashboard
 python3 scripts/harness_report.py --receipt-dir .007/receipts --format json

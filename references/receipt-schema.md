@@ -44,9 +44,9 @@ labels are rejected so spelling mistakes do not silently split the KPI.
 `cost_status` is `final` or `provisional`. A provider adapter may calculate cost
 from token classes and the exact served model, but the core never guesses a
 price table. Missing cost is not zero: `007 record` rejects it, and legacy or
-foreign receipts remain visible as unaccounted in the dashboard. Coverage uses
-recorded receipts as its denominator; a host that never calls `007 record` is
-not detectable by the dependency-free core.
+foreign receipts remain visible as unaccounted in the dashboard. Observation
+coverage uses task starts from `007 begin` as its denominator; work that never
+calls `begin` remains explicitly outside the dependency-free observer.
 
 Use `unmeasured`, `pending`, or `N/D` explicitly for telemetry the host cannot
 expose. Never infer model, effort, token usage, cost, or human rework from a

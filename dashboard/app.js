@@ -1,119 +1,147 @@
 "use strict";
 
-const SVG_NS = "http://www.w3.org/2000/svg";
 const state = { snapshot: null, selectedProject: null, timer: null, loading: false };
-
 const byId = (id) => document.getElementById(id);
 const percent = (value, digits = 0) => value == null ? "N/D" : `${(value * 100).toFixed(digits)}%`;
-const percentNumber = (value, digits = 0) => value == null ? "N/D" : `${value.toFixed(digits)}%`;
 const decimal = (value, digits = 1) => value == null ? "N/D" : Number(value).toFixed(digits);
 const money = (value) => value == null ? "N/D" : new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 3 : 2 }).format(value);
+const integer = (value) => new Intl.NumberFormat("pt-BR", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
+const observedMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/D";
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text != null) node.textContent = String(text);
-  return node;
-}
-
-function svgElement(tag, attributes = {}) {
-  const node = document.createElementNS(SVG_NS, tag);
-  Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
+  if (text != null) node.textContent = text;
   return node;
 }
 
 function selectedProject() {
-  if (!state.snapshot || !state.selectedProject) return null;
-  return state.snapshot.projects.find((project) => project.project_id === state.selectedProject) || null;
+  return state.snapshot?.projects.find((project) => project.project_id === state.selectedProject) || null;
 }
 
 function viewMetrics() {
   const project = selectedProject();
-  return project ? { ...project.metrics, touch: project.touch, evidence: project.evidence } : state.snapshot.aggregate;
+  return project ? { ...project.metrics, touch: project.touch, evidence: project.evidence, activity: project.activity } : state.snapshot.aggregate;
 }
 
 function setText(id, value) {
-  byId(id).textContent = value == null ? "N/D" : String(value);
+  const node = byId(id);
+  if (node) node.textContent = value;
 }
 
 function setTrack(id, value, max = 1) {
+  const node = byId(id);
+  if (!node) return;
   const bounded = value == null ? 0 : Math.max(0, Math.min(1, value / max));
-  byId(id).style.width = `${bounded * 100}%`;
+  node.style.width = `${bounded * 100}%`;
 }
 
 function statusLabel(status) {
-  return ({ "on-target": "No alvo", "needs-attention": "Atenção necessária", collecting: "Coletando evidência" })[status] || "Coletando evidência";
+  return ({
+    "instrumentation-inactive": "Instrumentação inativa",
+    "collecting": "Coletando evidência",
+    "on-target": "Dentro do alvo",
+    "needs-attention": "Requer atenção",
+    "unavailable": "Indisponível",
+  })[status] || "Estado desconhecido";
+}
+
+function reasonLabel(reason) {
+  const exact = {
+    "no observed task starts": "Nenhuma tarefa iniciou com 007 begin.",
+    "fewer than 5 matured accepted tasks": "Ainda há menos de cinco resultados aceitos com janela de sete dias madura.",
+    "reliable first-pass rate is N/D": "Reliable first-pass ainda não pode ser calculado.",
+    "mean repair rounds is N/D": "Rodadas de reparo ainda não foram medidas.",
+    "7-day escape rate is N/D": "A janela de sete dias ainda não amadureceu.",
+    "telemetry completeness is N/D": "A telemetria ainda não foi registrada.",
+    "cost coverage is N/D": "O custo ainda não foi contabilizado.",
+    "reliable first-pass rate below 70%": "Reliable first-pass está abaixo de 70%.",
+  };
+  return exact[reason] || reason || "Sem razão registrada.";
 }
 
 function renderHeader(metrics, project) {
   setText("breadcrumb-view", project ? project.name : "Visão geral");
-  setText("view-title", project ? project.name : "Visão geral do sistema");
+  setText("view-title", project ? `${project.name}: confiabilidade por dólar` : "O 007 está produzindo mais mudanças confiáveis por dólar?");
   setText("view-subtitle", project
-    ? "Resultados observados neste projeto com as mesmas definições do agregado."
-    : "O framework está produzindo mudanças aceitas que sobrevivem sem reparo?");
-  setText("scope-sample", `${metrics.tasks || 0} tarefas · ${metrics.accepted || 0} aceitas`);
-  setText("scope-boundary", state.snapshot.measurement_boundary.label);
+    ? "Mesma definição do agregado: correto, first-pass e intacto após sete dias."
+    : "Corretas, aceitas na primeira passagem e intactas após sete dias — sem esconder regressões ou retrabalho.");
+  setText("scope-sample", `${metrics.started_tasks || 0} iniciadas · ${metrics.tasks || 0} concluídas · ${metrics.accepted || 0} aceitas`);
+  setText("scope-boundary", "Uso real é evidência operacional; causalidade exige OLD×NEW.");
 
-  const verdict = metrics.evidence || { status: "collecting", reasons: ["sem evidência"] };
+  const verdict = metrics.evidence || { status: "collecting", reasons: [] };
   const card = byId("verdict-card");
-  card.classList.remove("on-target", "needs-attention", "collecting");
-  card.classList.add(verdict.status || "collecting");
+  card.className = `verdict-card ${verdict.status}`;
   setText("verdict-label", statusLabel(verdict.status));
-  setText("verdict-reason", verdict.reasons && verdict.reasons.length ? verdict.reasons[0] : "Todos os sinais maduros estão dentro dos alvos declarados.");
+  setText("verdict-reason", reasonLabel(verdict.reasons?.[0]));
+}
+
+function renderInstrumentation(metrics) {
+  const started = metrics.started_tasks || 0;
+  const terminal = metrics.tasks || 0;
+  const active = metrics.active_tasks || 0;
+  setText("instrumentation-started", started);
+  setText("instrumentation-terminal", terminal);
+  setText("instrumentation-active", active);
+  setText("instrumentation-coverage", percent(metrics.observation_coverage));
+  setText("instrumentation-title", started
+    ? `${started} tarefa${started === 1 ? "" : "s"} observada${started === 1 ? "" : "s"}; ${active} ainda ativa${active === 1 ? "" : "s"}`
+    : "Projetos conectados; captura ainda não iniciada");
+  setText("instrumentation-copy", started
+    ? "Cobertura compara starts com receipts terminais. Tarefas sem begin continuam fora do denominador e aparecem como legado."
+    : "O dashboard só mede tarefas que começam com 007 begin e terminam com um receipt válido.");
+  byId("instrumentation-panel").classList.toggle("is-active", started > 0);
+}
+
+function renderRuntimeActivity(activity = {}) {
+  setText("activity-sessions", activity.sessions || 0);
+  setText("activity-active", activity.active_sessions || 0);
+  setText("activity-tokens", integer(activity.tokens_total));
+  setText("activity-cost", observedMoney(activity));
+  byId("runtime-activity-panel").classList.toggle("is-active", (activity.sessions || 0) > 0);
 }
 
 function renderMetrics(metrics) {
-  setText("metric-first-pass", percent(metrics.first_pass_rate));
-  setText("metric-first-pass-detail", `${metrics.first_pass_yes || 0}/${metrics.first_pass_known || 0} observações conhecidas`);
-  setTrack("track-first-pass", metrics.first_pass_rate);
+  setText("metric-reliable", percent(metrics.reliable_first_pass_rate));
+  setText("metric-reliable-detail", `${metrics.reliable_first_pass_yes || 0}/${metrics.reliable_first_pass_known || 0} resultados maduros`);
+  setTrack("track-reliable", metrics.reliable_first_pass_rate);
 
-  setText("metric-cost", money(metrics.cost_usd_per_accepted));
-  const costStatus = metrics.cost_accounting_status ? ` · ${metrics.cost_accounting_status}` : "";
-  setText("metric-cost-detail", `Cobertura ${percent(metrics.cost_coverage)}${costStatus}`);
-  setTrack("track-cost", metrics.cost_coverage);
+  setText("metric-escape", percent(metrics.escape_7d_rate));
+  setText("metric-escape-detail", `${metrics.escape_7d_yes || 0} escapes · ${metrics.escape_7d_pending_tasks || 0} pendentes`);
+  setTrack("track-escape", metrics.escape_7d_rate, .1);
 
-  setText("metric-repairs", decimal(metrics.repair_rounds_mean, 2));
+  setText("metric-repairs", decimal(metrics.repair_rounds_mean));
   setText("metric-repairs-detail", `${metrics.repair_rounds_known_tasks || 0} tarefas com medição`);
   setTrack("track-repairs", metrics.repair_rounds_mean, 2);
 
-  const touch = metrics.touch && metrics.touch["30"];
-  setText("metric-touch", percentNumber(touch && touch.rate));
-  setText("metric-touch-detail", touch && touch.rate != null
-    ? `${touch.agent_lines_added || 0} linhas atribuídas`
-    : (touch && touch.reason) || "Atribuição Git não disponível");
-  setTrack("track-touch", touch && touch.rate, 100);
+  setText("metric-reliable-cost", money(metrics.cost_usd_per_reliable));
+  setText("metric-reliable-cost-detail", `Cobertura de custo ${percent(metrics.cost_coverage)} · inclui todas as tentativas`);
+  setTrack("track-cost", metrics.cost_coverage);
+}
 
-  setText("metric-escape", percent(metrics.escape_7d_rate));
-  setText("metric-escape-detail", `${metrics.escape_7d_pending_tasks || 0} janelas pendentes`);
-  setTrack("track-escape", metrics.escape_7d_rate);
-
-  setText("metric-telemetry", percent(metrics.telemetry_completeness));
-  setText("metric-telemetry-detail", `${metrics.telemetry_known || 0}/${metrics.telemetry_possible || 0} campos medidos`);
-  setTrack("track-telemetry", metrics.telemetry_completeness);
+function renderFunnel(metrics) {
+  setText("funnel-started", metrics.started_tasks || 0);
+  setText("funnel-terminal", metrics.tasks || 0);
+  setText("funnel-accepted", metrics.accepted || 0);
+  setText("funnel-first-pass", metrics.accepted_first_pass_yes || 0);
+  setText("funnel-reliable", metrics.reliable_first_pass_yes || 0);
+  setText("funnel-maturity", `${metrics.reliable_first_pass_known || 0} maduras · ${metrics.escape_7d_pending_tasks || 0} pendentes`);
 }
 
 function renderNavigation() {
   const snapshot = state.snapshot;
-  setText("overview-count", snapshot.aggregate.projects_total || 0);
-  setText("available-count", `${snapshot.aggregate.projects_available || 0} ativos`);
+  setText("overview-count", snapshot.projects.length);
+  setText("available-count", `${snapshot.aggregate.projects_available} ativos`);
   byId("overview-nav").classList.toggle("is-active", !state.selectedProject);
-
   const list = byId("project-nav");
   list.replaceChildren();
   snapshot.projects.forEach((project) => {
     const button = element("button", `project-button${project.project_id === state.selectedProject ? " is-active" : ""}`);
     button.type = "button";
     button.setAttribute("aria-label", `Abrir projeto ${project.name}`);
-    button.addEventListener("click", () => {
-      state.selectedProject = project.project_id;
-      render();
-    });
-    const dotStatus = project.available ? project.evidence.status : "unavailable";
-    button.append(
-      element("span", `project-dot ${dotStatus}`),
-      element("span", "project-name", project.name),
-      element("span", "project-tasks", project.metrics.tasks || 0),
-    );
+    const status = project.available ? project.evidence.status : "unavailable";
+    button.append(element("span", `project-dot ${status}`), element("span", "project-name", project.name), element("span", "project-tasks", `${project.activity?.sessions || 0} sessões`));
+    button.addEventListener("click", () => { state.selectedProject = project.project_id; render(); });
     list.append(button);
   });
 }
@@ -126,126 +154,36 @@ function renderProjects() {
   const body = byId("project-table-body");
   body.replaceChildren();
   state.snapshot.projects.forEach((project) => {
+    const metrics = project.metrics;
+    const activity = project.activity || {};
     const row = document.createElement("tr");
-    const status = projectStatus(project);
-    const touch = project.touch && project.touch["30"];
     const cells = [
       project.name,
-      statusLabel(status === "unavailable" ? "collecting" : status),
-      project.metrics.tasks || 0,
-      percent(project.metrics.first_pass_rate),
-      money(project.metrics.cost_usd_per_accepted),
-      percentNumber(touch && touch.rate),
+      statusLabel(projectStatus(project)),
+      activity.sessions || 0,
+      integer(activity.tokens_total),
+      observedMoney(activity),
+      percent(metrics.reliable_first_pass_rate),
+      money(metrics.cost_usd_per_reliable),
+      percent(metrics.observation_coverage),
     ];
     cells.forEach((value, index) => {
       const cell = document.createElement("td");
-      if (index === 1) {
-        const badge = element("span", "table-status");
-        badge.append(element("i", `project-dot ${status}`), document.createTextNode(value));
-        cell.append(badge);
-      } else {
-        cell.textContent = value;
-      }
+      if (index === 1) cell.append(element("span", `table-status ${projectStatus(project)}`, value));
+      else cell.textContent = value;
       row.append(cell);
     });
-    row.tabIndex = 0;
     row.addEventListener("click", () => { state.selectedProject = project.project_id; render(); });
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        state.selectedProject = project.project_id;
-        render();
-      }
-    });
     body.append(row);
   });
-  setText("projects-summary", `${state.snapshot.aggregate.projects_total || 0} registrados`);
-}
-
-function renderOutcome(metrics) {
-  const chart = byId("outcome-chart");
-  chart.replaceChildren();
-  const total = metrics.tasks || 0;
-  const radius = 70;
-  const circumference = 2 * Math.PI * radius;
-  const centerX = 360;
-  const centerY = 102;
-  chart.append(svgElement("circle", { cx: centerX, cy: centerY, r: radius, fill: "none", stroke: "rgba(255,255,255,.055)", "stroke-width": 18 }));
-  let offset = 0;
-  const values = [
-    [metrics.accepted || 0, "#62e6a7"],
-    [metrics.blocked || 0, "#ff7185"],
-    [metrics.no_op || 0, "#78a7ff"],
-    [Math.max(0, total - (metrics.accepted || 0) - (metrics.blocked || 0) - (metrics.no_op || 0)), "#425a72"],
-  ];
-  if (total) {
-    values.forEach(([count, color]) => {
-      if (!count) return;
-      const length = circumference * count / total;
-      const gap = Math.min(5, length * .18);
-      chart.append(svgElement("circle", {
-        cx: centerX, cy: centerY, r: radius, fill: "none", stroke: color,
-        "stroke-width": 18, "stroke-linecap": "round",
-        "stroke-dasharray": `${Math.max(0, length - gap)} ${circumference}`,
-        "stroke-dashoffset": -offset, transform: `rotate(-90 ${centerX} ${centerY})`,
-      }));
-      offset += length;
-    });
-  }
-  setText("outcome-total", total);
+  setText("projects-summary", `${state.snapshot.projects.length} registrados`);
 }
 
 function recentTasks() {
   const project = selectedProject();
-  const rows = project
-    ? project.recent_tasks.map((task) => ({ ...task, project_name: project.name }))
-    : state.snapshot.projects.flatMap((item) => item.recent_tasks.map((task) => ({ ...task, project_name: item.name })));
+  const rows = project ? project.recent_tasks : state.snapshot.projects.flatMap((item) => item.recent_tasks.map((task) => ({ ...task, project_name: item.name })));
   return rows.sort((a, b) => String(b.completed_at || "").localeCompare(String(a.completed_at || ""))).slice(0, 20);
 }
-
-function renderTrend(tasks) {
-  const chart = byId("trend-chart");
-  chart.replaceChildren();
-  const known = tasks.filter((task) => task.first_pass === "yes" || task.first_pass === "no").reverse();
-  setText("trend-sample", `${known.length} observações`);
-  const left = 44, right = 696, top = 22, bottom = 205;
-  [0, .5, .7, 1].forEach((value) => {
-    const y = bottom - value * (bottom - top);
-    chart.append(svgElement("line", { x1: left, y1: y, x2: right, y2: y, stroke: value === .7 ? "rgba(98,230,167,.25)" : "rgba(151,181,216,.08)", "stroke-dasharray": value === .7 ? "5 6" : "0" }));
-    const label = svgElement("text", { x: 4, y: y + 4, fill: value === .7 ? "#62e6a7" : "#60758a", "font-size": 10 });
-    label.textContent = `${Math.round(value * 100)}%`;
-    chart.append(label);
-  });
-  if (!known.length) {
-    const label = svgElement("text", { x: 360, y: 120, fill: "#60758a", "font-size": 12, "text-anchor": "middle" });
-    label.textContent = "Aguardando first-pass conhecido";
-    chart.append(label);
-    return;
-  }
-  let yes = 0;
-  const points = known.map((task, index) => {
-    yes += int(task.first_pass === "yes");
-    const x = known.length === 1 ? left : left + index * (right - left) / (known.length - 1);
-    const y = bottom - (yes / (index + 1)) * (bottom - top);
-    return [x, y];
-  });
-  const area = svgElement("path", {
-    d: `M ${points[0][0]} ${bottom} L ${points.map((point) => point.join(" ")).join(" L ")} L ${points[points.length - 1][0]} ${bottom} Z`,
-    fill: "rgba(85,216,255,.07)", stroke: "none",
-  });
-  chart.append(area);
-  chart.append(svgElement("polyline", {
-    points: points.map((point) => point.join(",")).join(" "), fill: "none",
-    stroke: "#55d8ff", "stroke-width": 3, "stroke-linecap": "round", "stroke-linejoin": "round",
-  }));
-  points.forEach(([x, y], index) => {
-    if (index === points.length - 1 || index % 3 === 0) {
-      chart.append(svgElement("circle", { cx: x, cy: y, r: 4, fill: "#07101c", stroke: "#55d8ff", "stroke-width": 2 }));
-    }
-  });
-}
-
-function int(value) { return value ? 1 : 0; }
 
 function taskRoute(task) {
   const provider = task.served_provider || task.provider || task.requested_provider || "provider N/D";
@@ -256,20 +194,14 @@ function taskRoute(task) {
 function renderActivity(tasks) {
   const list = byId("activity-list");
   list.replaceChildren();
-  if (!tasks.length) {
-    list.append(element("p", "empty-copy", "Nenhum receipt terminal disponível."));
-    return;
-  }
-  tasks.slice(0, 8).forEach((task) => {
+  if (!tasks.length) { list.append(element("p", "empty-copy", "Nenhum receipt terminal. O funil começará assim que uma tarefa instrumentada terminar.")); return; }
+  tasks.forEach((task) => {
     const row = element("div", "activity-row");
+    row.append(element("span", `activity-status ${task.status || ""}`));
     const main = element("div", "activity-main");
-    main.append(
-      element("strong", null, task.task_id || "task sem id"),
-      element("span", null, `${task.project_name} · ${taskRoute(task)}`),
-    );
-    const cost = task.cost_usd != null && task.cost_source && task.cost_status
-      ? `${money(task.cost_usd)} · ${task.cost_status}` : "custo N/D";
-    row.append(element("i", `activity-status ${task.status || "unknown"}`), main, element("span", "activity-meta", cost));
+    main.append(element("strong", "", task.task_id || "tarefa sem ID"), element("span", "", `${task.project_name || ""} · ${task.status || "N/D"} · ${taskRoute(task)}`));
+    const cost = task.cost_usd != null && task.cost_source && task.cost_status ? money(task.cost_usd) : "custo N/D";
+    row.append(main, element("span", "activity-meta", cost));
     list.append(row);
   });
 }
@@ -277,46 +209,41 @@ function renderActivity(tasks) {
 function renderRoutes(metrics) {
   const list = byId("route-list");
   list.replaceChildren();
-  const routes = metrics.routes || [];
-  if (!routes.length) {
-    list.append(element("p", "empty-copy", "Nenhuma rota de modelo observada."));
-    return;
-  }
-  routes.slice().sort((a, b) => b.tasks - a.tasks).slice(0, 8).forEach((route) => {
+  const verified = metrics.routes || [];
+  const routes = verified.length ? verified : (metrics.activity?.routes || []);
+  if (!routes.length) { list.append(element("p", "empty-copy", "Nenhuma rota observada. Provider e modelo aparecem após o primeiro log ou receipt.")); return; }
+  routes.forEach((route) => {
     const row = element("div", "route-row");
     const main = element("div", "route-main");
-    main.append(
-      element("strong", null, route.key),
-      element("span", null, `${route.binding} · ${route.accepted}/${route.tasks} aceitas`),
+    main.append(element("strong", "", `${route.provider}/${route.model}`), element("span", "", route.binding || "atividade local observada"));
+    const values = element("div", "route-metrics");
+    values.append(
+      element("strong", "", verified.length ? `${route.accepted}/${route.tasks}` : `${route.sessions}`),
+      element("strong", "", money(verified.length ? route.cost_usd_known_sum : route.cost_usd_estimate)),
+      element("span", "", verified.length ? "aceitas" : `${integer(route.tokens)} tokens`),
+      element("span", "", "custo")
     );
-    const metricsNode = element("div", "route-metrics");
-    metricsNode.append(
-      element("strong", null, route.cost_usd_known_tasks ? money(route.cost_usd_known_sum / route.cost_usd_known_tasks) : "N/D"),
-      element("strong", null, percent(route.tasks ? route.accepted / route.tasks : null)),
-      element("span", null, "custo / medição"),
-      element("span", null, "aceite"),
-    );
-    row.append(main, metricsNode);
+    row.append(main, values);
     list.append(row);
   });
 }
 
 function diagnostics(metrics, project) {
   const values = [];
+  if (!metrics.started_tasks) values.push("Instrumentação inativa: nenhuma tarefa começou com 007 begin.");
+  if (metrics.active_tasks) values.push(`${metrics.active_tasks} tarefa(s) iniciada(s) ainda sem receipt terminal.`);
+  if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} receipt(s) legado(s) não têm start correspondente.`);
+  if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo ${percent(metrics.cost_coverage)}; o KPI exige 100% dos receipts.`);
+  if (metrics.activity?.sessions && metrics.activity.pricing_coverage !== 1) values.push(`Preço Headroom/LiteLLM cobre ${percent(metrics.activity.pricing_coverage)} das sessões locais; o restante permanece N/D.`);
+  if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) aguardam maturação de sete dias.`);
+  const touch = metrics.touch?.["30"];
+  if (!touch || touch.rate == null) values.push(`Touch 30d: ${touch?.reason || "N/D"}.`);
   const projects = project ? [project] : state.snapshot.projects;
-  projects.forEach((item) => {
-    if (!item.available) values.push(`${item.name}: ${item.error}`);
-    item.invalid_receipts.forEach((error) => values.push(`${item.name}/${error.file}: receipt inválido`));
-  });
-  state.snapshot.registry_errors.forEach((error) => values.push(`Registro: ${error.error}`));
-  if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo em ${percent(metrics.cost_coverage)}; alvo obrigatório é 100%`);
-  if (metrics.cost_provisional_tasks) values.push(`${metrics.cost_provisional_tasks} custo(s) provisório(s) aguardando reconciliação`);
-  if (metrics.tokens_missing_tasks) values.push(`${metrics.tokens_missing_tasks} tarefa(s) sem tokens medidos`);
-  if (metrics.first_pass_unknown_tasks) values.push(`${metrics.first_pass_unknown_tasks} tarefa(s) sem first-pass conhecido`);
-  values.push(state.snapshot.measurement_boundary.label);
-  const touch = metrics.touch && metrics.touch["30"];
-  if (touch && touch.rate == null && touch.reason) values.push(`Touch 30d: ${touch.reason}`);
-  return [...new Set(values)];
+  const invalidReceipts = projects.reduce((total, item) => total + (item.invalid_receipts?.length || 0), 0);
+  const invalidStarts = projects.reduce((total, item) => total + (item.invalid_task_starts?.length || 0), 0);
+  if (invalidReceipts) values.push(`${invalidReceipts} receipt(s) inválido(s) foram excluídos das métricas.`);
+  if (invalidStarts) values.push(`${invalidStarts} start(s) inválido(s) foram excluídos das métricas.`);
+  return values;
 }
 
 function renderDiagnostics(metrics, project) {
@@ -324,75 +251,61 @@ function renderDiagnostics(metrics, project) {
   setText("diagnostic-count", values.length);
   const list = byId("diagnostic-list");
   list.replaceChildren();
-  if (!values.length) {
-    list.append(element("li", null, "Nenhuma incerteza material nos dados maduros."));
-    return;
-  }
-  values.slice(0, 8).forEach((value) => list.append(element("li", null, value)));
+  if (!values.length) values.push("Nenhuma lacuna de dados conhecida neste escopo.");
+  values.forEach((value) => list.append(element("li", "", value)));
 }
 
 function renderEvidence() {
   const evidence = state.snapshot.causal_evidence;
-  setText("causal-claim", evidence.claim);
-  setText("causal-boundary", evidence.boundary);
+  setText("causal-claim", evidence?.claim || "Nenhum experimento causal publicado.");
+  setText("causal-boundary", evidence?.boundary || "Uso operacional não prova causalidade.");
 }
 
 function render() {
   if (!state.snapshot) return;
   const project = selectedProject();
   const metrics = viewMetrics();
-  const tasks = recentTasks();
+  const hasProjects = state.snapshot.projects.length > 0;
+  byId("empty-state").hidden = hasProjects;
   renderNavigation();
   renderHeader(metrics, project);
+  renderInstrumentation(metrics);
+  renderRuntimeActivity(metrics.activity);
   renderMetrics(metrics);
-  renderOutcome(metrics);
-  renderTrend(tasks);
+  renderFunnel(metrics);
   renderProjects();
-  renderActivity(tasks);
+  renderActivity(recentTasks());
   renderRoutes(metrics);
-  renderDiagnostics(metrics, project);
   renderEvidence();
+  renderDiagnostics(metrics, project);
   setText("framework-version", `v${state.snapshot.framework_version}`);
-  setText("last-updated", new Date(state.snapshot.generated_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-  setText("server-status", "Conectado · atualização a cada 2s");
-  byId("empty-state").hidden = state.snapshot.aggregate.projects_total !== 0;
+  setText("last-updated", new Date(state.snapshot.generated_at).toLocaleTimeString("pt-BR"));
+  setText("server-status", "Atualização a cada 2 segundos");
   byId("dashboard-content").setAttribute("aria-busy", "false");
 }
 
-async function refresh() {
+async function loadSnapshot() {
   if (state.loading) return;
   state.loading = true;
   byId("refresh-button").classList.add("is-loading");
   try {
     const response = await fetch("/api/snapshot", { cache: "no-store" });
-    if (!response.ok) throw new Error(`snapshot HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.snapshot = await response.json();
+    if (state.selectedProject && !state.snapshot.projects.some((item) => item.project_id === state.selectedProject)) state.selectedProject = null;
     byId("error-banner").hidden = true;
     render();
   } catch (error) {
-    byId("error-banner").textContent = `Não foi possível atualizar: ${error.message}`;
     byId("error-banner").hidden = false;
-    setText("server-status", "Conexão interrompida");
+    setText("error-banner", `Não foi possível atualizar o cockpit: ${error.message}`);
+    setText("server-status", "Sem conexão");
   } finally {
     state.loading = false;
     byId("refresh-button").classList.remove("is-loading");
   }
 }
 
-function startPolling() {
-  window.clearInterval(state.timer);
-  state.timer = document.hidden ? null : window.setInterval(refresh, 2000);
-}
-
-byId("overview-nav").addEventListener("click", () => {
-  state.selectedProject = null;
-  render();
-});
-byId("refresh-button").addEventListener("click", refresh);
-document.addEventListener("visibilitychange", () => {
-  startPolling();
-  if (!document.hidden) refresh();
-});
-
-refresh();
-startPolling();
+byId("overview-nav").addEventListener("click", () => { state.selectedProject = null; render(); });
+byId("refresh-button").addEventListener("click", loadSnapshot);
+loadSnapshot();
+state.timer = window.setInterval(loadSnapshot, 2000);

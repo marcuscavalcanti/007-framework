@@ -13,14 +13,18 @@ from urllib.parse import urlsplit
 
 import framework_cli
 import harness_report
+import local_activity
 import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/D", "unknown", None}
 VERSION = "1.1.0"
+ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
     "tasks", "accepted", "blocked", "no_op",
+    "started_tasks", "matched_terminal_tasks", "active_tasks", "unstarted_terminal_tasks",
+    "accepted_first_pass_yes", "reliable_first_pass_yes", "reliable_first_pass_known",
     "first_pass_yes", "first_pass_known",
     "repair_rounds_sum", "repair_rounds_known_tasks",
     "tokens_known_sum", "tokens_known_tasks",
@@ -220,6 +224,56 @@ def metrics_from_receipts(receipts):
     return result
 
 
+def metrics_from_observations(receipts, starts):
+    result = metrics_from_receipts(receipts)
+    start_ids = {item["task_id"] for item in starts}
+    receipt_ids = {
+        item.get("task_id") for item in receipts
+        if isinstance(item.get("task_id"), str)
+    }
+    matched = len(start_ids & receipt_ids)
+    accepted = [item for item in receipts if item.get("status") == "accepted"]
+    accepted_first_pass = [item for item in accepted if item.get("first_pass") == "yes"]
+    reliable_known = [
+        item for item in accepted
+        if item.get("first_pass") in ("yes", "no")
+        and item.get("escape_7d") in (True, False, "yes", "no")
+    ]
+    reliable = [
+        item for item in reliable_known
+        if item.get("first_pass") == "yes" and item.get("escape_7d") in (False, "no")
+    ]
+    result.update({
+        "started_tasks": len(start_ids),
+        "matched_terminal_tasks": matched,
+        "active_tasks": len(start_ids) - matched,
+        "unstarted_terminal_tasks": len(receipt_ids - start_ids),
+        "accepted_first_pass_yes": len(accepted_first_pass),
+        "reliable_first_pass_yes": len(reliable),
+        "reliable_first_pass_known": len(reliable_known),
+        "observation_coverage": ratio(matched, len(start_ids)),
+        "reliable_first_pass_rate": ratio(len(reliable), len(reliable_known)),
+        "cost_usd_per_reliable": (
+            ratio(result["cost_usd_known_sum"], len(reliable))
+            if reliable and result["cost_usd_known_tasks"] == result["tasks"] else None
+        ),
+    })
+    return result
+
+
+def load_task_starts(path):
+    path = Path(path)
+    if not path.exists():
+        return [], []
+    starts, errors = [], []
+    for source in sorted(path.glob("*.task.json")):
+        try:
+            starts.append(framework_cli.validate_task_start(framework_cli.read_json(source)))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append({"file": source.name, "error": str(exc)})
+    return starts, errors
+
+
 def unknown_touch(days, reason):
     return {
         "window_days": days,
@@ -232,21 +286,25 @@ def unknown_touch(days, reason):
     }
 
 
-def evidence_state(metrics, touch, invalid_receipts=0, unavailable_projects=0, registry_errors=0):
+def evidence_state(metrics, touch, invalid_receipts=0, unavailable_projects=0, registry_errors=0, invalid_starts=0):
     data_failures = []
     if invalid_receipts:
         data_failures.append(f"{invalid_receipts} invalid receipt(s)")
+    if invalid_starts:
+        data_failures.append(f"{invalid_starts} invalid task start(s)")
     if unavailable_projects:
         data_failures.append(f"{unavailable_projects} unavailable project(s)")
     if registry_errors:
         data_failures.append(f"{registry_errors} registry error(s)")
     if data_failures:
         return {"status": "needs-attention", "reasons": data_failures}
+    if metrics.get("started_tasks", 0) == 0:
+        return {"status": "instrumentation-inactive", "reasons": ["no observed task starts"]}
     reasons = []
-    if metrics["accepted"] < 5:
-        reasons.append("fewer than 5 accepted tasks")
+    if metrics.get("reliable_first_pass_known", 0) < 5:
+        reasons.append("fewer than 5 matured accepted tasks")
     required = {
-        "first-pass rate": metrics.get("first_pass_rate"),
+        "reliable first-pass rate": metrics.get("reliable_first_pass_rate"),
         "mean repair rounds": metrics.get("repair_rounds_mean"),
         "7-day escape rate": metrics.get("escape_7d_rate"),
         "30-day touch proxy": touch.get("30", {}).get("rate"),
@@ -257,8 +315,8 @@ def evidence_state(metrics, touch, invalid_receipts=0, unavailable_projects=0, r
     if reasons:
         return {"status": "collecting", "reasons": reasons}
     failures = []
-    if required["first-pass rate"] < 0.70:
-        failures.append("first-pass rate below 70%")
+    if required["reliable first-pass rate"] < 0.70:
+        failures.append("reliable first-pass rate below 70%")
     if required["mean repair rounds"] > 0.5:
         failures.append("mean repair rounds above 0.5")
     if required["7-day escape rate"] > 0.05:
@@ -293,7 +351,7 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
         receipts, errors = harness_report.load_receipts(receipt_dir)
     except (OSError, ValueError) as exc:
         touch = {str(days): unknown_touch(days, str(exc)) for days in (7, 30)}
-        metrics = metrics_from_receipts([])
+        metrics = metrics_from_observations([], [])
         return {
             **base,
             "available": False,
@@ -302,6 +360,7 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
             "touch": touch,
             "recent_tasks": [],
             "invalid_receipts": [],
+            "invalid_task_starts": [],
             "evidence": {"status": "collecting", "reasons": [str(exc)]},
         }
 
@@ -311,7 +370,8 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
             touch[str(days)] = touch_provider(path, days)
         except (OSError, RuntimeError, ValueError) as exc:
             touch[str(days)] = unknown_touch(days, f"touch sensor failed: {exc}")
-    metrics = metrics_from_receipts(receipts)
+    starts, start_errors = load_task_starts(path / ".007" / "tasks")
+    metrics = metrics_from_observations(receipts, starts)
     recent = [safe_task(item) for item in receipts[-20:]][::-1]
     invalid = [{"file": Path(item["file"]).name, "error": item["error"]} for item in errors]
     return {
@@ -322,7 +382,8 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
         "touch": touch,
         "recent_tasks": recent,
         "invalid_receipts": invalid,
-        "evidence": evidence_state(metrics, touch, len(invalid)),
+        "invalid_task_starts": start_errors,
+        "evidence": evidence_state(metrics, touch, len(invalid), invalid_starts=len(start_errors)),
     }
 
 
@@ -392,6 +453,15 @@ def aggregate_projects(projects, registry_error_count=0):
             ratio(result["accepted_cost_usd_known_sum"], result["accepted"])
             if result["accepted"] and result["accepted_cost_usd_known_tasks"] == result["accepted"] else None
         ),
+        "observation_coverage": ratio(result["matched_terminal_tasks"], result["started_tasks"]),
+        "reliable_first_pass_rate": ratio(
+            result["reliable_first_pass_yes"], result["reliable_first_pass_known"]
+        ),
+        "cost_usd_per_reliable": (
+            ratio(result["cost_usd_known_sum"], result["reliable_first_pass_yes"])
+            if result["reliable_first_pass_yes"]
+            and result["cost_usd_known_tasks"] == result["tasks"] else None
+        ),
         "cost_coverage": ratio(result["cost_usd_known_tasks"], result["tasks"]),
         "cost_accounting_status": (
             None if not result["cost_usd_known_tasks"]
@@ -406,9 +476,12 @@ def aggregate_projects(projects, registry_error_count=0):
     touch = {str(days): aggregate_touch(projects, days) for days in (7, 30)}
     result["touch"] = touch
     invalid = sum(len(project.get("invalid_receipts", [])) for project in available)
+    invalid_starts = sum(len(project.get("invalid_task_starts", [])) for project in available)
     result["invalid_receipts"] = invalid
+    result["invalid_task_starts"] = invalid_starts
     result["evidence"] = evidence_state(
-        result, touch, invalid, result["projects_unavailable"], registry_error_count
+        result, touch, invalid, result["projects_unavailable"], registry_error_count,
+        invalid_starts,
     )
     return result
 
@@ -453,30 +526,38 @@ def registry_entries(path):
     return entries, errors
 
 
-def build_snapshot(registry, touch_provider=touch_rate.calculate):
+def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provider=None):
     entries, registry_errors = registry_entries(registry)
     projects = [project_snapshot(entry, touch_provider) for entry in entries]
+    activity = (activity_provider or ACTIVITY_COLLECTOR.collect)(entries)
+    for project in projects:
+        project["activity"] = activity.get("projects", {}).get(
+            project["project_id"], local_activity.empty_summary(ACTIVITY_COLLECTOR.lookback_hours)
+        )
+    aggregate = aggregate_projects(projects, len(registry_errors))
+    aggregate["activity"] = activity.get("aggregate", local_activity.empty_summary(ACTIVITY_COLLECTOR.lookback_hours))
     return {
         "schema": "007-framework/dashboard-snapshot/v1",
         "framework_version": VERSION,
         "telemetry_fields": list(TELEMETRY_FIELDS),
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "aggregate": aggregate_projects(projects, len(registry_errors)),
+        "aggregate": aggregate,
         "projects": projects,
         "registry_errors": registry_errors,
+        "activity_errors": activity.get("errors", []),
         "measurement_boundary": {
-            "cost_denominator": "recorded-receipts",
-            "label": "Cobertura calculada apenas sobre receipts observados; execuções omitidas pelo host não são detectáveis.",
+            "cost_denominator": "observed-terminal-receipts",
+            "label": "A cobertura operacional começa em 007 begin e termina em 007 record. Execuções anteriores ou externas a esse ciclo permanecem fora do denominador.",
         },
         "causal_evidence": {
             "status": "narrow-positive",
-            "claim": "One frozen mechanism test observed OLD 0/3 versus NEW 3/3.",
-            "boundary": "Operational project metrics are observational and do not prove causality.",
+            "claim": "Um teste mecanístico congelado observou OLD 0/3 versus NEW 3/3.",
+            "boundary": "As métricas dos projetos são observacionais; somente experimentos OLD×NEW congelados sustentam alegações causais.",
         },
     }
 
 
-def handler_class(registry, static_dir, touch_provider):
+def handler_class(registry, static_dir, touch_provider, activity_provider=None):
     static_dir = Path(static_dir)
     assets = {
         "/": (static_dir / "index.html", "text/html; charset=utf-8"),
@@ -513,7 +594,7 @@ def handler_class(registry, static_dir, touch_provider):
                 return
             if request.path == "/api/snapshot":
                 try:
-                    self.json_response(200, build_snapshot(registry, touch_provider))
+                    self.json_response(200, build_snapshot(registry, touch_provider, activity_provider))
                 except Exception:
                     self.json_response(500, {"error": "snapshot unavailable"})
                 return
@@ -537,10 +618,10 @@ def handler_class(registry, static_dir, touch_provider):
     return Handler
 
 
-def create_server(host, port, registry, static_dir):
+def create_server(host, port, registry, static_dir, activity_provider=None):
     cache = TouchCache()
     server = ThreadingHTTPServer(
-        (host, port), handler_class(Path(registry), Path(static_dir), cache)
+        (host, port), handler_class(Path(registry), Path(static_dir), cache, activity_provider)
     )
     server.daemon_threads = True
     return server

@@ -2,6 +2,17 @@
 
 All notable changes are documented here.
 
+## [Unreleased]
+
+### Added
+
+- atomic, no-replace task-start records that expose missing terminal receipts;
+- an Evidence Cockpit focused on reliable first-pass outcomes, observation
+  coverage, cost per reliable outcome, and an explicit operational-versus-causal boundary.
+- sanitized Codex/Claude activity per project with 24-hour token deltas;
+- Headroom/LiteLLM-equivalent cost estimates with explicit lower bounds and
+  unknown-model coverage.
+
 ## [1.1.0] - 2026-08-30
 
 ### Added

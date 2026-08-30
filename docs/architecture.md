@@ -25,16 +25,20 @@ scope and route ──► isolated execution ──► repository-native gates
 - `scripts/touch_rate.py`: approximates attributable code survival from Git.
 - `scripts/replay_eval.py`: runs frozen OLD×NEW policies against reconstructed
   historical source and task-specific acceptance commands.
-- `bin/007` and `scripts/framework_cli.py`: initialize projects, validate and
-  atomically persist terminal receipts, and launch the local dashboard.
+- `bin/007` and `scripts/framework_cli.py`: initialize projects, atomically
+  persist task starts and terminal receipts, and launch the local dashboard.
 - `scripts/dashboard.py` and `dashboard/`: aggregate registered projects and
   serve a loopback-only, dependency-free control room.
+- `scripts/local_activity.py`: read sanitized Codex/Claude metadata and token
+  deltas, reconcile Git worktrees, and cache unchanged logs.
+- `scripts/headroom_pricing.py`: optional local worker using Headroom's LiteLLM
+  model resolution and per-token pricing; it receives no transcript content.
 - `tests/`: protects package identity, public boundaries, and script behavior.
 
 ## State model
 
-The framework owns only local measurement state: a project marker and receipts
-under `.007/`, plus the user-level project registry at
+The framework owns only local measurement state: a project marker, task starts,
+and receipts under `.007/`, plus the user-level project registry at
 `~/.007-framework/projects.json`. `007 init` excludes `.007/` through the local
 Git exclude file, so telemetry does not dirty or alter repository history.
 Durable engineering authority remains in Git, repository instructions, tests,
@@ -66,9 +70,12 @@ tokens, and wall time.
 6. **Cost boundary:** every new terminal receipt needs numeric cost, accounting
    source, and final/provisional state. Prices are supplied by the host or a
    provider adapter; the core contains no provider-specific price table.
-7. **Observation boundary:** receipt and cost coverage use recorded receipts as
-   the denominator. A host adapter that omits `007 record` is outside what the
-   dependency-free core can observe.
+   Separately, observed runtime activity may show a Headroom/LiteLLM estimate or
+   lower bound. That estimate is not copied into an outcome receipt.
+7. **Observation boundary:** local logs establish activity only. `007 begin`
+   establishes the outcome denominator and
+   `007 record` closes it. Work that bypasses `begin` remains explicitly outside
+   what the dependency-free core can observe.
 
 ## Extension points
 

@@ -25,8 +25,9 @@ code that looks finished but must be rewritten, repaired, or explained again.
 - a polished localhost dashboard that reconciles all registered projects;
 - an OLD×NEW replay runner for causal tests on real historical tasks.
 
-No server, database, API key, package manager, or runtime dependency is added.
-The included tools use Python's standard library.
+No database, API key, package manager, or model-runtime dependency is added.
+The included tools use Python's standard library. If Headroom is installed,
+the dashboard reuses its LiteLLM pricing engine for local cost estimates.
 
 ## Install
 
@@ -72,7 +73,7 @@ Remove a stale or retired path without deleting any project files:
 Ask your agent to use `007-framework` for a coding task. A normal run follows:
 
 ```text
-scope → route → minimal implementation → repository harness → outcome receipt
+task start → scope → route → minimal implementation → repository harness → outcome receipt
 ```
 
 Example request:
@@ -96,7 +97,14 @@ uncertainty: runtime not exercised
 ```
 
 For initialized projects, the operating contract requires the agent host to
-persist every terminal task through the fail-closed receipt command. Start from
+observe the task before implementation and persist every terminal task through
+the fail-closed receipt command:
+
+```bash
+007 begin --repo . --task-id pagination-regression
+```
+
+The returned task ID must match the terminal receipt. Start from
 [`examples/task.receipt.example.json`](examples/task.receipt.example.json):
 
 ```bash
@@ -121,11 +129,18 @@ registered by `007 init`, updates every two seconds, and keeps aggregate totals
 mathematically reconcilable with the project views. It has no login because it
 binds locally; do not expose it on a public interface.
 
-Cost coverage is the percentage of **recorded receipts** with valid accounting.
-The dependency-free core cannot observe a model run whose host never invoked
-`007 record`; the dashboard exposes this boundary instead of claiming total
-execution coverage. Host adapters can close that gap by invoking the command on
-every terminal outcome.
+The activity lane reads only sanitized session metadata and token counters from
+local Codex and Claude logs. It maps Git worktrees back to their registered
+project and shows sessions, active state, served route, 24-hour token deltas,
+and Headroom/LiteLLM-equivalent USD. Partial pricing is shown as a lower bound;
+unknown models are `N/D`, never free. This lane does not infer acceptance,
+first-pass success, or reliability from a completed session.
+
+Observation coverage is the percentage of starts created by `007 begin` with a
+matching terminal receipt. Cost coverage is the percentage of terminal receipts
+with valid accounting. Work that bypasses `007 begin` remains outside the
+dependency-free observer and appears as legacy/unstarted data rather than being
+silently counted as complete.
 
 ## Measure
 
@@ -168,7 +183,7 @@ The repository root is the installable skill:
 ```text
 SKILL.md        operating contract
 references/     detailed doctrine loaded on demand
-scripts/        receipts, touch-rate, and replay sensors
+scripts/        receipts, local activity/cost, touch-rate, and replay sensors
 dashboard/      dependency-free localhost control room
 bin/007         project registration, receipt, and dashboard CLI
 tests/          deterministic package contract

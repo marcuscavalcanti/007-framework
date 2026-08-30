@@ -36,11 +36,13 @@ verification, and learning as one measured loop:
 
 ## Success metrics
 
-- first-pass accepted rate;
+- reliable first-pass rate: accepted on the first pass and without a known
+  seven-day escape;
 - corrective touch rate at 7 and 30 days;
 - repair rounds and escaped regressions;
-- cost and wall time per accepted task;
-- percentage of outcomes with complete, non-invented telemetry.
+- cost per reliable outcome, including failed and blocked attempts;
+- observation coverage from task start to terminal receipt;
+- percentage of outcomes with complete, non-invented telemetry and cost.
 
 ## Non-goals for V1
 
@@ -53,9 +55,9 @@ verification, and learning as one measured loop:
 ## Adoption path
 
 Install the skill and `007` command, run `007 init` once in each Git project,
-then use the framework on scoped work. The operating contract requires every
-terminal task to be recorded in the project-local `.007/receipts` directory
-with mandatory cost accounting. The
+then run `007 begin --repo .` before scoped work and `007 record` at its terminal
+outcome. Starts live under `.007/tasks`; receipts live under `.007/receipts` and
+require explicit cost accounting. The
 global local registry lets `007 dashboard` reconcile all projects with the
 aggregate view. Adopt causal replay only for a concrete mechanism whose failure
 matters.
@@ -65,7 +67,11 @@ touch-rate, escapes, telemetry, and cost. It does not turn those operational
 signals into causal proof. Release-level causal evidence remains a separate,
 frozen OLD×NEW experiment.
 
-Receipt completeness is a host responsibility in V1.1: `007 record` validates
-what it receives, but the core cannot detect an execution that was never
-reported. Consequently, dashboard cost coverage always means coverage among
-recorded receipts.
+Before receipts exist, a separate local-activity lane can already show Codex and
+Claude sessions, served routes, 24-hour token deltas, and Headroom/LiteLLM cost
+estimates. This is operational visibility only; it never creates an accepted or
+reliable outcome.
+
+The start/receipt pair makes missing terminal outcomes visible. Work performed
+without `007 begin` remains outside the observable denominator and is shown as
+legacy/unstarted data rather than silently treated as complete.

@@ -5,210 +5,96 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#07111f">
-  <title>007 Framework — Control Room</title>
+  <title>007 Framework — Evidence Cockpit</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <div class="ambient ambient-one" aria-hidden="true"></div>
   <div class="ambient ambient-two" aria-hidden="true"></div>
-
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true"><span>007</span></div>
-        <div>
-          <strong>CONTROL ROOM</strong>
-          <span>Framework intelligence</span>
-        </div>
+        <div><strong>EVIDENCE COCKPIT</strong><span>Reliable agentic delivery</span></div>
       </div>
-
       <nav class="project-navigation" aria-label="Navegação de projetos">
-        <p class="nav-label">Visões</p>
-        <button class="nav-item is-active" id="overview-nav" type="button">
-          <span class="nav-icon" aria-hidden="true">⌁</span>
-          <span>Todos os projetos</span>
-          <span class="nav-count" id="overview-count">0</span>
-        </button>
+        <p class="nav-label">Escopo</p>
+        <button class="nav-item is-active" id="overview-nav" type="button"><span class="nav-icon" aria-hidden="true">⌁</span><span>Todos os projetos</span><span class="nav-count" id="overview-count">0</span></button>
         <div class="nav-divider"></div>
-        <div class="nav-heading">
-          <p class="nav-label">Projetos registrados</p>
-          <span id="available-count">0 ativos</span>
-        </div>
+        <div class="nav-heading"><p class="nav-label">Projetos</p><span id="available-count">0 ativos</span></div>
         <div class="project-list" id="project-nav"></div>
       </nav>
-
-      <div class="sidebar-footer">
-        <div class="connection-state">
-          <span class="pulse-dot" aria-hidden="true"></span>
-          <div>
-            <strong>Local observer</strong>
-            <span id="server-status">Conectando…</span>
-          </div>
-        </div>
-        <p>Dados permanecem nesta máquina.</p>
-      </div>
+      <div class="sidebar-footer"><div class="connection-state"><span class="pulse-dot" aria-hidden="true"></span><div><strong>Observador local</strong><span id="server-status">Conectando…</span></div></div><p>Receipts e Git permanecem nesta máquina.</p></div>
     </aside>
 
     <main class="workspace">
       <header class="topbar">
-        <div>
-          <p class="breadcrumb"><span>007 Framework</span><b>/</b><span id="breadcrumb-view">Visão geral</span></p>
-          <p class="last-update" aria-live="polite">Atualizado <span id="last-updated">—</span></p>
-        </div>
-        <div class="topbar-actions">
-          <span class="version-pill" id="framework-version">v—</span>
-          <button class="refresh-button" id="refresh-button" type="button">
-            <span aria-hidden="true">↻</span> Atualizar
-          </button>
-        </div>
+        <div><p class="breadcrumb"><span>007 Framework</span><b>/</b><span id="breadcrumb-view">Visão geral</span></p><p class="last-update" aria-live="polite">Atualizado <span id="last-updated">—</span></p></div>
+        <div class="topbar-actions"><span class="version-pill" id="framework-version">v—</span><button class="refresh-button" id="refresh-button" type="button"><span aria-hidden="true">↻</span> Atualizar</button></div>
       </header>
-
       <div class="error-banner" id="error-banner" role="alert" hidden></div>
 
       <div class="content" id="dashboard-content" aria-busy="true">
         <section class="hero-panel" aria-labelledby="view-title">
           <div class="hero-copy">
-            <div class="eyebrow"><span></span> Evidência operacional</div>
-            <h1 id="view-title">Visão geral do sistema</h1>
-            <p id="view-subtitle">O framework está produzindo mudanças aceitas que sobrevivem sem reparo?</p>
-            <div class="scope-line">
-              <span id="scope-sample">Aguardando dados</span>
-              <span aria-hidden="true">•</span>
-              <span id="scope-boundary">Resultados operacionais, não prova causal</span>
-            </div>
+            <div class="eyebrow"><span></span> Pergunta decisória</div>
+            <h1 id="view-title">O 007 está produzindo mais mudanças confiáveis por dólar?</h1>
+            <p id="view-subtitle">Corretas, aceitas na primeira passagem e intactas após sete dias — sem esconder regressões ou retrabalho.</p>
+            <div class="scope-line"><span id="scope-sample">Aguardando dados</span><span aria-hidden="true">•</span><span id="scope-boundary">Uso real é evidência operacional; causalidade exige OLD×NEW.</span></div>
           </div>
-          <div class="verdict-card" id="verdict-card">
-            <div class="verdict-topline">
-              <span class="status-orbit" aria-hidden="true"><i></i></span>
-              <span>Estado da evidência</span>
-            </div>
-            <strong id="verdict-label">Coletando</strong>
-            <p id="verdict-reason">O dashboard está aguardando receipts suficientes.</p>
+          <div class="verdict-card" id="verdict-card"><div class="verdict-topline"><span class="status-orbit" aria-hidden="true"><i></i></span><span>Resposta agora</span></div><strong id="verdict-label">Sem dados</strong><p id="verdict-reason">A instrumentação ainda não observou uma tarefa.</p></div>
+        </section>
+
+        <section class="instrumentation-panel" id="instrumentation-panel" aria-labelledby="instrumentation-title">
+          <div><p class="panel-kicker">Cobertura primeiro</p><h2 id="instrumentation-title">Projetos conectados; captura ainda não iniciada</h2><p id="instrumentation-copy">O dashboard só mede tarefas que começam com <code>007 begin</code> e terminam com um receipt válido.</p></div>
+          <div class="instrumentation-stats" aria-label="Cobertura da instrumentação"><span><strong id="instrumentation-started">0</strong> iniciadas</span><span><strong id="instrumentation-terminal">0</strong> concluídas</span><span><strong id="instrumentation-active">0</strong> ativas</span><span><strong id="instrumentation-coverage">N/D</strong> cobertura</span></div>
+          <div class="command-path"><code>007 begin --repo . --task-id minha-tarefa</code><span>→</span><code>007 record --repo . --file task.receipt.json</code></div>
+        </section>
+
+        <section class="panel runtime-activity-panel" id="runtime-activity-panel" aria-labelledby="runtime-activity-title">
+          <div class="panel-heading"><div><p class="panel-kicker">Pulso operacional · últimas 24h</p><h2 id="runtime-activity-title">Atividade local observada</h2></div><span class="live-tag"><i></i> Codex + Claude</span></div>
+          <div class="runtime-activity-grid">
+            <article><span>Sessões</span><strong id="activity-sessions">0</strong></article>
+            <article><span>Ativas agora</span><strong id="activity-active">0</strong></article>
+            <article><span>Tokens</span><strong id="activity-tokens">0</strong></article>
+            <article><span>Custo estimado</span><strong id="activity-cost">N/D</strong></article>
+          </div>
+          <p class="measurement-note">Atividade local não é outcome verificado. Tokens e USD vêm dos logs locais; o custo usa a mesma precificação Headroom/LiteLLM e fica N/D quando o modelo não tem preço.</p>
+        </section>
+
+        <section class="metric-grid decision-metrics" aria-label="Indicadores que decidem o objetivo">
+          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>Reliable first-pass · 7d</span><i class="metric-signal signal-cyan"></i></div><strong id="metric-reliable">N/D</strong><p id="metric-reliable-detail">Aguardando resultados maduros</p><div class="micro-track"><span id="track-reliable"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>Escapes / regressões · 7d</span><i class="metric-signal signal-red"></i></div><strong id="metric-escape">N/D</strong><p id="metric-escape-detail">Aguardando janela de sete dias</p><div class="micro-track inverse"><span id="track-escape"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>Rodadas de reparo</span><i class="metric-signal signal-amber"></i></div><strong id="metric-repairs">N/D</strong><p id="metric-repairs-detail">Correções após a primeira entrega</p><div class="micro-track inverse"><span id="track-repairs"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>Custo / resultado confiável</span><i class="metric-signal signal-violet"></i></div><strong id="metric-reliable-cost">N/D</strong><p id="metric-reliable-cost-detail">Inclui tentativas bloqueadas e falhas</p><div class="micro-track"><span id="track-cost"></span></div></article>
+        </section>
+
+        <section class="panel funnel-panel" id="reliability-funnel" aria-labelledby="funnel-title">
+          <div class="panel-heading"><div><p class="panel-kicker">Da atividade ao resultado</p><h2 id="funnel-title">Funil de confiabilidade</h2></div><span class="sample-pill" id="funnel-maturity">0 maduras</span></div>
+          <p class="panel-intro">Cada etapa mostra onde o resultado se perdeu. Contagens, não uma nota composta.</p>
+          <div class="funnel-grid">
+            <article><span>01</span><strong id="funnel-started">0</strong><b>Iniciadas</b><small>denominador observável</small></article>
+            <article><span>02</span><strong id="funnel-terminal">0</strong><b>Concluídas</b><small>receipt terminal válido</small></article>
+            <article><span>03</span><strong id="funnel-accepted">0</strong><b>Aceitas</b><small>gate requerido atingido</small></article>
+            <article><span>04</span><strong id="funnel-first-pass">0</strong><b>First-pass</b><small>sem rodada de reparo</small></article>
+            <article class="funnel-final"><span>05</span><strong id="funnel-reliable">0</strong><b>Confiáveis · 7d</b><small>sem escape conhecido</small></article>
           </div>
         </section>
 
-        <section class="metric-grid" aria-label="Indicadores principais">
-          <article class="metric-card metric-card-primary">
-            <div class="metric-heading"><span>First-pass aceito</span><i class="metric-signal signal-cyan"></i></div>
-            <strong id="metric-first-pass">N/D</strong>
-            <p id="metric-first-pass-detail">Sem amostra conhecida</p>
-            <div class="micro-track"><span id="track-first-pass"></span></div>
-          </article>
-          <article class="metric-card">
-            <div class="metric-heading"><span>Custo / tarefa aceita</span><i class="metric-signal signal-violet"></i></div>
-            <strong id="metric-cost">N/D</strong>
-            <p id="metric-cost-detail">Cobertura de custo 0%</p>
-            <div class="micro-track"><span id="track-cost"></span></div>
-          </article>
-          <article class="metric-card">
-            <div class="metric-heading"><span>Rodadas de reparo</span><i class="metric-signal signal-amber"></i></div>
-            <strong id="metric-repairs">N/D</strong>
-            <p id="metric-repairs-detail">Média por tarefa observada</p>
-            <div class="micro-track inverse"><span id="track-repairs"></span></div>
-          </article>
-          <article class="metric-card">
-            <div class="metric-heading"><span>Touch proxy · 30d</span><i class="metric-signal signal-green"></i></div>
-            <strong id="metric-touch">N/D</strong>
-            <p id="metric-touch-detail">Atribuição Git não disponível</p>
-            <div class="micro-track inverse"><span id="track-touch"></span></div>
-          </article>
-          <article class="metric-card">
-            <div class="metric-heading"><span>Escapes · 7d</span><i class="metric-signal signal-red"></i></div>
-            <strong id="metric-escape">N/D</strong>
-            <p id="metric-escape-detail">Janela ainda imatura</p>
-            <div class="micro-track inverse"><span id="track-escape"></span></div>
-          </article>
-          <article class="metric-card">
-            <div class="metric-heading"><span>Telemetria completa</span><i class="metric-signal signal-blue"></i></div>
-            <strong id="metric-telemetry">N/D</strong>
-            <p id="metric-telemetry-detail">Provider, modelo, esforço, tokens e tempo</p>
-            <div class="micro-track"><span id="track-telemetry"></span></div>
-          </article>
-        </section>
-
-        <section class="analytics-grid" aria-label="Análises visuais">
-          <article class="panel chart-panel">
-            <div class="panel-heading">
-              <div><p class="panel-kicker">Qualidade de entrega</p><h2>Resultados recentes</h2></div>
-              <div class="legend" aria-label="Legenda">
-                <span><i class="legend-accepted"></i>Aceito</span>
-                <span><i class="legend-blocked"></i>Bloqueado</span>
-                <span><i class="legend-noop"></i>No-op</span>
-              </div>
-            </div>
-            <div class="outcome-visual">
-              <svg id="outcome-chart" role="img" aria-label="Distribuição de resultados" viewBox="0 0 720 200"></svg>
-              <div class="outcome-total"><strong id="outcome-total">0</strong><span>tarefas</span></div>
-            </div>
-          </article>
-
-          <article class="panel chart-panel">
-            <div class="panel-heading">
-              <div><p class="panel-kicker">Sinal acumulado</p><h2>First-pass nas últimas tarefas</h2></div>
-              <span class="sample-pill" id="trend-sample">0 observações</span>
-            </div>
-            <svg class="trend-chart" id="trend-chart" role="img" aria-label="Tendência de first-pass" viewBox="0 0 720 240"></svg>
-          </article>
-        </section>
-
-        <section class="panel table-panel" aria-labelledby="projects-title">
-          <div class="panel-heading">
-            <div><p class="panel-kicker">Portfólio local</p><h2 id="projects-title">Projetos</h2></div>
-            <span class="sample-pill" id="projects-summary">0 registrados</span>
-          </div>
-          <div class="table-scroll">
-            <table>
-              <thead><tr><th>Projeto</th><th>Estado</th><th>Tarefas</th><th>First-pass</th><th>Custo / aceita</th><th>Touch 30d</th></tr></thead>
-              <tbody id="project-table-body"></tbody>
-            </table>
-          </div>
-        </section>
+        <section class="panel table-panel" aria-labelledby="projects-title"><div class="panel-heading"><div><p class="panel-kicker">Mesmo contrato em todo lugar</p><h2 id="projects-title">Projetos</h2></div><span class="sample-pill" id="projects-summary">0 registrados</span></div><div class="table-scroll"><table><thead><tr><th>Projeto</th><th>Estado</th><th>Sessões 24h</th><th>Tokens 24h</th><th>Custo 24h</th><th>Reliable 7d</th><th>Custo / confiável</th><th>Cobertura</th></tr></thead><tbody id="project-table-body"></tbody></table></div></section>
 
         <section class="analytics-grid lower-grid">
-          <article class="panel">
-            <div class="panel-heading">
-              <div><p class="panel-kicker">Execução</p><h2>Atividade recente</h2></div>
-              <span class="live-tag"><i></i> near real-time</span>
-            </div>
-            <div class="activity-list" id="activity-list"></div>
-          </article>
-
-          <article class="panel">
-            <div class="panel-heading">
-              <div><p class="panel-kicker">Economia por rota</p><h2>Modelos e custo</h2></div>
-              <span class="sample-pill">served &gt; requested</span>
-            </div>
-            <div class="route-list" id="route-list"></div>
-          </article>
+          <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Ledger operacional</p><h2>Resultados recentes</h2></div><span class="live-tag"><i></i> near real-time</span></div><div class="activity-list" id="activity-list"></div></article>
+          <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Economia por rota</p><h2>Modelo, custo e aceite</h2></div><span class="sample-pill">served &gt; requested</span></div><div class="route-list" id="route-list"></div></article>
         </section>
 
         <section class="boundary-grid">
-          <article class="panel evidence-panel">
-            <div class="evidence-icon" aria-hidden="true">Δ</div>
-            <div>
-              <p class="panel-kicker">Fronteira científica</p>
-              <h2>Evidência causal da release</h2>
-              <p id="causal-claim">Carregando o registro causal congelado…</p>
-              <div class="evidence-boundary" id="causal-boundary"></div>
-            </div>
-          </article>
-          <article class="panel diagnostics-panel">
-            <div class="panel-heading">
-              <div><p class="panel-kicker">Qualidade dos dados</p><h2>Incertezas visíveis</h2></div>
-              <span class="diagnostic-count" id="diagnostic-count">0</span>
-            </div>
-            <ul id="diagnostic-list"></ul>
-          </article>
+          <article class="panel evidence-panel"><div class="evidence-icon" aria-hidden="true">Δ</div><div><p class="panel-kicker">O framework causou melhora?</p><h2>Evidência causal congelada</h2><p id="causal-claim">Carregando a comparação OLD×NEW…</p><div class="evidence-boundary" id="causal-boundary"></div></div></article>
+          <article class="panel diagnostics-panel"><div class="panel-heading"><div><p class="panel-kicker">Podemos confiar no painel?</p><h2>Qualidade dos dados</h2></div><span class="diagnostic-count" id="diagnostic-count">0</span></div><ul id="diagnostic-list"></ul></article>
         </section>
 
-        <section class="empty-state" id="empty-state" hidden>
-          <div class="empty-radar" aria-hidden="true"><span></span></div>
-          <p class="panel-kicker">Nenhum projeto registrado</p>
-          <h2>Conecte o primeiro projeto ao Control Room</h2>
-          <p>Execute o comando abaixo dentro de um repositório Git. O dashboard reconhecerá o projeto no próximo ciclo.</p>
-          <code>007 init</code>
-        </section>
+        <section class="empty-state" id="empty-state" hidden><div class="empty-radar" aria-hidden="true"><span></span></div><p class="panel-kicker">Nenhum projeto registrado</p><h2>Conecte o primeiro projeto</h2><p>Execute dentro de um repositório Git. O cockpit reconhecerá o projeto no próximo ciclo.</p><code>007 init</code></section>
       </div>
     </main>
   </div>

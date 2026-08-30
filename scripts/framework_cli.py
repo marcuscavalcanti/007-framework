@@ -18,6 +18,7 @@ from pathlib import Path
 PROJECT_SCHEMA = "007-framework/project/v1"
 REGISTRY_SCHEMA = "007-framework/registry/v1"
 RECEIPT_SCHEMA = "007-framework/receipt/v1"
+TASK_START_SCHEMA = "007-framework/task-start/v1"
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 COST_SOURCES = {
     "provider-reported", "rate-card-estimate", "subscription-allocated", "local-compute",
@@ -85,7 +86,7 @@ def write_json_atomic(path, value):
         raise
 
 
-def write_json_no_replace(path, value):
+def write_json_no_replace(path, value, label="receipt"):
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -95,7 +96,7 @@ def write_json_no_replace(path, value):
         try:
             os.link(name, path)
         except FileExistsError as exc:
-            raise ValueError(f"receipt already exists: {path.name}") from exc
+            raise ValueError(f"{label} already exists: {path.name}") from exc
     finally:
         try:
             os.unlink(name)
@@ -127,6 +128,21 @@ def load_registry(path):
         for item in value["projects"]
     ):
         raise ValueError(f"invalid registry entry: {path}")
+    return value
+
+
+def validate_task_id(task_id):
+    if not isinstance(task_id, str) or not TASK_ID.fullmatch(task_id):
+        raise ValueError("task_id must use only letters, numbers, dot, dash, or underscore")
+    return task_id
+
+
+def validate_task_start(value):
+    if not isinstance(value, dict) or value.get("schema") != TASK_START_SCHEMA:
+        raise ValueError(f"task start schema must be {TASK_START_SCHEMA}")
+    validate_task_id(value.get("task_id"))
+    if not isinstance(value.get("started_at"), str) or not value["started_at"]:
+        raise ValueError("started_at must be a timestamp string")
     return value
 
 
@@ -186,12 +202,32 @@ def unregister_project(project, registry_path):
     return removed[0]
 
 
+def begin_task(repo, task_id=None, now=None):
+    root = git_root(repo)
+    marker_path = root / ".007" / "project.json"
+    if not marker_path.exists():
+        raise ValueError("project is not initialized; run 007 init first")
+    validate_marker(read_json(marker_path))
+    instant = now or datetime.now(timezone.utc)
+    if task_id is None:
+        stamp = instant.strftime("%Y%m%dT%H%M%SZ")
+        task_id = f"task-{stamp}-{uuid.uuid4().hex[:8]}"
+    validate_task_id(task_id)
+    task = {
+        "schema": TASK_START_SCHEMA,
+        "task_id": task_id,
+        "started_at": instant.isoformat().replace("+00:00", "Z"),
+    }
+    validate_task_start(task)
+    destination = marker_path.parent / "tasks" / f"{task_id}.task.json"
+    write_json_no_replace(destination, task, "task start")
+    return task
+
+
 def validate_receipt(value):
     if not isinstance(value, dict) or value.get("schema") != RECEIPT_SCHEMA:
         raise ValueError(f"receipt schema must be {RECEIPT_SCHEMA}")
-    task_id = value.get("task_id")
-    if not isinstance(task_id, str) or not TASK_ID.fullmatch(task_id):
-        raise ValueError("task_id must use only letters, numbers, dot, dash, or underscore")
+    validate_task_id(value.get("task_id"))
     if value.get("status") not in ("accepted", "blocked", "no-op"):
         raise ValueError("status must be accepted, blocked, or no-op")
     cost = value.get("cost_usd")
@@ -258,6 +294,9 @@ def parser():
     init = commands.add_parser("init", help="register a Git project for 007 telemetry")
     init.add_argument("--repo", default=".")
     init.add_argument("--registry", type=Path, default=default_registry_path())
+    begin = commands.add_parser("begin", help="observe the start of one task")
+    begin.add_argument("--repo", default=".")
+    begin.add_argument("--task-id")
     record = commands.add_parser("record", help="validate and persist one terminal task receipt")
     record.add_argument("--repo", default=".")
     record.add_argument("--file", required=True, help="receipt JSON path, or - for stdin")
@@ -297,6 +336,10 @@ def main(argv=None):
             entry = init_project(args.repo, args.registry)
             print(f"registered {entry['name']} ({entry['path']})")
             print(f"receipts: {Path(entry['path']) / '.007' / 'receipts'}")
+            return 0
+        if args.command == "begin":
+            task = begin_task(args.repo, args.task_id)
+            print(f"started: {task['task_id']}")
             return 0
         if args.command == "record":
             destination = record_receipt(args.repo, args.file)
