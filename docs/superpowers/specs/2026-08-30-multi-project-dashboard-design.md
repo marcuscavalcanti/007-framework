@@ -129,6 +129,7 @@ The overview and project views expose the same definitions:
 - attributable line touch proxy at 7 and 30 days;
 - known 7-day escapes and pending/unknown escape windows;
 - tokens, wall time, and optional cost per accepted task when measured;
+- outcomes and measured cost grouped by provider/model route;
 - telemetry completeness;
 - invalid receipts and unavailable projects.
 
@@ -139,9 +140,30 @@ proof.
 
 Default transparent operating targets are first-pass accepted >= 70%, mean
 repair rounds <= 0.5, known 7-day escape rate <= 5%, 30-day touch proxy <= 15%,
-and telemetry completeness >= 80%. `on-target` additionally requires at least
-five accepted tasks and all required metrics known. Unknown required metrics
-yield `collecting`, not a pass.
+telemetry completeness >= 80%, and cost coverage = 100%. `on-target`
+additionally requires at least five accepted tasks and all required metrics
+known. Unknown required metrics yield `collecting`, not a pass; cost coverage
+below 100% is a hard `needs-attention` signal once the minimum sample matures.
+
+### Provider-neutral cost contract
+
+Requested and served provider, model, and effort are distinct receipt fields.
+The dashboard groups by the served route when measured and labels a requested
+fallback as unverified. Provider and model values are open strings; there is no
+closed provider catalog.
+
+`cost_usd` is accepted only with `cost_source` and `cost_status` (`provisional`
+or `final`). Examples include `provider-reported`, `subscription-allocated`,
+and `local-compute`. Without an accounted source, the task is
+`cost_unaccounted`; model name plus aggregate tokens is insufficient because
+input, output, cache, reasoning, date, provider, and subscription terms differ.
+Cost per accepted task appears only when every accepted task in the selected
+slice has accounted cost. A slice containing provisional values is labelled
+provisional until reconciled.
+
+A user-owned rate card may later produce an explicitly labelled estimate, but
+v1.1.0 ships no mutable provider price table and performs no network price
+lookup.
 
 ## Interface
 

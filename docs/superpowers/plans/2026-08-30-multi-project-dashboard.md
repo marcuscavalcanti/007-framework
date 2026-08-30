@@ -15,6 +15,7 @@
 - Bind to `127.0.0.1` by default.
 - Add no runtime or development dependency.
 - Keep DuckDB deferred until the adoption gate in the spec is measured.
+- Never infer monetary cost from a model name and aggregate token count.
 - The aggregate is calculated from raw project totals, never averaged project percentages.
 - Missing attribution or telemetry remains `N/D`, `pending`, or `unmeasured`.
 - Operational evidence and causal evidence remain visually and semantically separate.
@@ -245,6 +246,10 @@ Create a dark engineering-console layout with sidebar, live header, metric cards
 
 Render project data through DOM creation and `textContent`. The overview uses server aggregate values. The selected project uses its server record. Display raw numerators beside derived percentages and show `N/D` with its server-supplied reason. Pause polling when the page is hidden and refresh immediately when visible.
 
+Group outcomes by open-string provider/model route, preferring served values;
+label requested-only routes as unverified. Show monetary cost only when the
+backend marks it measured with `cost_source`.
+
 - [ ] **Step 5: Run static and server tests**
 
 Run: `python3 -m unittest tests.test_dashboard -v`
@@ -287,7 +292,7 @@ Expected: version and dashboard-contract assertions fail against V1.0.0 docs.
 
 - [ ] **Step 3: Update the skill and public documentation**
 
-Add only the opt-in receipt rule to the core workflow. Document CLI installation through a symlink to `bin/007`, initialization, dashboard launch, metric definitions, observational-versus-causal boundary, localhost trust boundary, and uninstallation. Add optional `completed_at` and `cost_usd` fields to the receipt schema without making them required.
+Add only the opt-in receipt rule to the core workflow. Document CLI installation through a symlink to `bin/007`, initialization, dashboard launch, metric definitions, observational-versus-causal boundary, localhost trust boundary, and uninstallation. Add optional `completed_at`, requested/served provider-model-effort, token breakdown, `cost_usd`, and `cost_source` fields without making them required.
 
 - [ ] **Step 4: Run package and full tests**
 

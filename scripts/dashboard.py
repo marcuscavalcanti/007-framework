@@ -28,6 +28,7 @@ RAW_METRICS = (
     "accepted_wall_s_known_sum", "accepted_wall_s_known_tasks",
     "cost_usd_known_sum", "cost_usd_known_tasks",
     "accepted_cost_usd_known_sum", "accepted_cost_usd_known_tasks",
+    "cost_final_tasks", "cost_provisional_tasks",
     "escape_7d_yes", "escape_7d_known",
     "telemetry_known", "telemetry_possible",
     "delta_files", "delta_added", "delta_deleted",
@@ -42,6 +43,14 @@ def is_known_label(value):
     return isinstance(value, str) and value not in MISSING
 
 
+def has_accounted_cost(receipt):
+    return (
+        is_number(receipt.get("cost_usd"))
+        and is_known_label(receipt.get("cost_source"))
+        and receipt.get("cost_status") in ("final", "provisional")
+    )
+
+
 def ratio(numerator, denominator):
     return numerator / denominator if denominator else None
 
@@ -52,7 +61,10 @@ def safe_task(receipt):
         for key in (
             "task_id", "status", "proof_required", "proof_reached",
             "first_pass", "repair_rounds", "corrective_lines", "escape_7d",
-            "model", "effort", "tokens", "wall_s", "cost_usd",
+            "requested_provider", "requested_model", "requested_effort",
+            "served_provider", "served_model", "served_effort",
+            "provider", "model", "effort", "tokens", "wall_s",
+            "cost_usd", "cost_source", "cost_status",
             "completed_at", "uncertainty",
         )
         if key in receipt
@@ -67,17 +79,55 @@ def safe_task(receipt):
     return task
 
 
+def route_for(receipt):
+    served_provider = receipt.get("served_provider") or receipt.get("provider")
+    served_model = receipt.get("served_model") or receipt.get("model")
+    if is_known_label(served_model):
+        provider = served_provider if is_known_label(served_provider) else "provider-unmeasured"
+        return provider, served_model, "served"
+    requested_provider = receipt.get("requested_provider")
+    requested_model = receipt.get("requested_model")
+    if is_known_label(requested_model):
+        provider = requested_provider if is_known_label(requested_provider) else "provider-unmeasured"
+        return provider, requested_model, "requested-unverified"
+    return "provider-unmeasured", "model-unmeasured", "unmeasured"
+
+
+def route_metrics(receipts):
+    routes = {}
+    for receipt in receipts:
+        provider, model, binding = route_for(receipt)
+        key = f"{provider}/{model}"
+        row = routes.setdefault(key, {
+            "key": key, "provider": provider, "model": model, "binding": binding,
+            "tasks": 0, "accepted": 0,
+            "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0,
+        })
+        if row["binding"] != binding:
+            row["binding"] = "mixed"
+        row["tasks"] += 1
+        row["accepted"] += int(receipt.get("status") == "accepted")
+        if has_accounted_cost(receipt):
+            row["cost_usd_known_sum"] += receipt["cost_usd"]
+            row["cost_usd_known_tasks"] += 1
+    for row in routes.values():
+        row["cost_usd_known_sum"] = round(row["cost_usd_known_sum"], 6)
+    return [routes[key] for key in sorted(routes)]
+
+
 def metrics_from_receipts(receipts):
     statuses = Counter(str(item.get("status", "unknown")) for item in receipts)
     first_pass = Counter(str(item.get("first_pass", "unmeasured")) for item in receipts)
     repairs = [item.get("repair_rounds") for item in receipts if is_number(item.get("repair_rounds"))]
     tokens = [item.get("tokens") for item in receipts if is_number(item.get("tokens"))]
     wall = [item.get("wall_s") for item in receipts if is_number(item.get("wall_s"))]
-    costs = [item.get("cost_usd") for item in receipts if is_number(item.get("cost_usd"))]
+    costs = [item.get("cost_usd") for item in receipts if has_accounted_cost(item)]
     accepted = [item for item in receipts if item.get("status") == "accepted"]
     accepted_tokens = [item.get("tokens") for item in accepted if is_number(item.get("tokens"))]
     accepted_wall = [item.get("wall_s") for item in accepted if is_number(item.get("wall_s"))]
-    accepted_cost = [item.get("cost_usd") for item in accepted if is_number(item.get("cost_usd"))]
+    accepted_cost = [
+        item.get("cost_usd") for item in accepted if has_accounted_cost(item)
+    ]
 
     escape_yes = 0
     escape_known = 0
@@ -124,6 +174,8 @@ def metrics_from_receipts(receipts):
         "cost_usd_known_tasks": len(costs),
         "accepted_cost_usd_known_sum": round(sum(accepted_cost), 6),
         "accepted_cost_usd_known_tasks": len(accepted_cost),
+        "cost_final_tasks": sum(has_accounted_cost(item) and item.get("cost_status") == "final" for item in receipts),
+        "cost_provisional_tasks": sum(has_accounted_cost(item) and item.get("cost_status") == "provisional" for item in receipts),
         "escape_7d_yes": escape_yes,
         "escape_7d_known": escape_known,
         "telemetry_known": telemetry_known,
@@ -131,6 +183,7 @@ def metrics_from_receipts(receipts):
         "delta_files": delta_totals["files"],
         "delta_added": delta_totals["added"],
         "delta_deleted": delta_totals["deleted"],
+        "routes": route_metrics(receipts),
     }
     result.update({
         "first_pass_rate": ratio(result["first_pass_yes"], first_pass_known),
@@ -148,6 +201,12 @@ def metrics_from_receipts(receipts):
         "cost_usd_per_accepted": (
             ratio(sum(accepted_cost), len(accepted))
             if accepted and len(accepted_cost) == len(accepted) else None
+        ),
+        "cost_coverage": ratio(len(costs), tasks),
+        "cost_accounting_status": (
+            None if not costs
+            else "provisional" if any(item.get("cost_status") == "provisional" for item in receipts if has_accounted_cost(item))
+            else "final"
         ),
         "escape_7d_rate": ratio(escape_yes, escape_known),
         "escape_7d_pending_tasks": tasks - escape_known,
@@ -180,6 +239,7 @@ def evidence_state(metrics, touch, invalid_receipts=0):
         "7-day escape rate": metrics.get("escape_7d_rate"),
         "30-day touch proxy": touch.get("30", {}).get("rate"),
         "telemetry completeness": metrics.get("telemetry_completeness"),
+        "cost coverage": metrics.get("cost_coverage"),
     }
     reasons.extend(f"{name} is N/D" for name, value in required.items() if value is None)
     if reasons:
@@ -195,6 +255,8 @@ def evidence_state(metrics, touch, invalid_receipts=0):
         failures.append("30-day touch proxy above 15%")
     if required["telemetry completeness"] < 0.80:
         failures.append("telemetry completeness below 80%")
+    if required["cost coverage"] < 1:
+        failures.append("cost coverage below 100%")
     return {
         "status": "needs-attention" if failures else "on-target",
         "reasons": failures,
@@ -280,6 +342,18 @@ def aggregate_projects(projects):
             result[key] += project.get("metrics", {}).get(key, 0)
     result["cost_usd_known_sum"] = round(result["cost_usd_known_sum"], 6)
     result["accepted_cost_usd_known_sum"] = round(result["accepted_cost_usd_known_sum"], 6)
+    combined_routes = {}
+    for project in available:
+        for route in project.get("metrics", {}).get("routes", []):
+            row = combined_routes.setdefault(route["key"], {
+                key: route[key] for key in ("key", "provider", "model", "binding")
+            } | {"tasks": 0, "accepted": 0, "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0})
+            if row["binding"] != route["binding"]:
+                row["binding"] = "mixed"
+            for key in ("tasks", "accepted", "cost_usd_known_sum", "cost_usd_known_tasks"):
+                row[key] += route[key]
+    for row in combined_routes.values():
+        row["cost_usd_known_sum"] = round(row["cost_usd_known_sum"], 6)
     result.update({
         "projects_total": len(projects),
         "projects_available": len(available),
@@ -300,9 +374,16 @@ def aggregate_projects(projects):
             ratio(result["accepted_cost_usd_known_sum"], result["accepted"])
             if result["accepted"] and result["accepted_cost_usd_known_tasks"] == result["accepted"] else None
         ),
+        "cost_coverage": ratio(result["cost_usd_known_tasks"], result["tasks"]),
+        "cost_accounting_status": (
+            None if not result["cost_usd_known_tasks"]
+            else "provisional" if result["cost_provisional_tasks"]
+            else "final"
+        ),
         "escape_7d_rate": ratio(result["escape_7d_yes"], result["escape_7d_known"]),
         "escape_7d_pending_tasks": result["tasks"] - result["escape_7d_known"],
         "telemetry_completeness": ratio(result["telemetry_known"], result["telemetry_possible"]),
+        "routes": [combined_routes[key] for key in sorted(combined_routes)],
     })
     touch = {str(days): aggregate_touch(projects, days) for days in (7, 30)}
     result["touch"] = touch

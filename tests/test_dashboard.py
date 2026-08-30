@@ -159,6 +159,43 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["wall_s_per_accepted"], 10)
         self.assertEqual(result["cost_usd_per_accepted"], 0.5)
 
+    def test_routes_prefer_served_model_and_cost_requires_source(self):
+        dashboard = self.module("dashboard")
+        receipts = [
+            {
+                "status": "accepted",
+                "requested_provider": "openai", "requested_model": "gpt-requested",
+                "served_provider": "openai", "served_model": "gpt-served",
+                "cost_usd": 0.4, "cost_source": "provider-reported", "cost_status": "final",
+            },
+            {
+                "status": "accepted",
+                "requested_provider": "moonshot", "requested_model": "kimi-k3",
+                "cost_usd": 0.2,
+            },
+        ]
+
+        metrics = dashboard.metrics_from_receipts(receipts)
+
+        self.assertEqual(metrics["cost_usd_known_sum"], 0.4)
+        self.assertEqual(metrics["cost_usd_known_tasks"], 1)
+        self.assertEqual(metrics["cost_coverage"], 0.5)
+        self.assertEqual(metrics["cost_final_tasks"], 1)
+        self.assertEqual(metrics["cost_provisional_tasks"], 0)
+        self.assertEqual(metrics["cost_usd_per_accepted"], None)
+        self.assertEqual(metrics["routes"], [
+            {
+                "key": "moonshot/kimi-k3", "provider": "moonshot", "model": "kimi-k3",
+                "binding": "requested-unverified", "tasks": 1, "accepted": 1,
+                "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0,
+            },
+            {
+                "key": "openai/gpt-served", "provider": "openai", "model": "gpt-served",
+                "binding": "served", "tasks": 1, "accepted": 1,
+                "cost_usd_known_sum": 0.4, "cost_usd_known_tasks": 1,
+            },
+        ])
+
     def test_project_snapshot_sanitizes_receipts_and_preserves_unknowns(self):
         dashboard = self.module("dashboard")
         with tempfile.TemporaryDirectory() as tmp:
