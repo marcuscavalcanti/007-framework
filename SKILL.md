@@ -6,7 +6,7 @@ description: >-
   code when minimal diffs, explicit proof, low rework, and auditable outcomes
   matter.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # 007 Framework
@@ -21,7 +21,7 @@ Optimize in this order:
 1. Correctness and no regression.
 2. Low rework: code should remain useful without another human or agent rewrite.
 3. Small context and smallest sufficient diff.
-4. Cost and latency.
+4. Cost and latency, measured for every terminal outcome.
 
 Never trade a likely correction round for a cheaper first attempt.
 
@@ -85,11 +85,15 @@ delta: <files, +lines/-lines, dependencies>
 first_pass: yes | no | unmeasured; repair_rounds=<n|unmeasured>
 rework: corrective_lines=<n|pending|unmeasured>; escape_7d=<yes|no|pending>
 telemetry: model=<served|unmeasured>; effort=<served|unmeasured>; tokens=<n|unmeasured>; wall_s=<n|unmeasured>
+cost: usd=<measured>; source=<provider-reported|rate-card-estimate|subscription-allocated|local-compute|other>; status=<final|provisional>
 uncertainty: <remaining evidence gap or none>
 ```
 
-Missing telemetry stays `unmeasured` or `N/D`; never reconstruct it. Persist a
-receipt only when the repository already has a receipt convention. Schema:
+Missing telemetry stays `unmeasured` or `N/D`; never reconstruct it. Cost is a
+hard KPI: use the exact served route and an explicit accounting source. Never
+record missing cost as zero. In an initialized project, persist every terminal
+outcome with `007 record`; the command rejects unaccounted cost and duplicate
+task IDs. Schema:
 [`references/receipt-schema.md`](references/receipt-schema.md).
 
 ## Learn without Goodharting
@@ -114,7 +118,10 @@ harness was wrong.
 ## Included tools
 
 ```bash
-python3 scripts/harness_report.py --receipt-dir receipts --format json
+007 init --repo .
+007 record --repo . --file task.receipt.json
+007 dashboard
+python3 scripts/harness_report.py --receipt-dir .007/receipts --format json
 python3 scripts/touch_rate.py --repo . --days 30
 python3 scripts/replay_eval.py --set replay-set.json list
 ```

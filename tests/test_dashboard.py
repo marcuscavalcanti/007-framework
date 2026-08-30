@@ -57,6 +57,13 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(projects[0]["project_id"], marker["project_id"])
             self.assertEqual(projects[0]["path"], str(repo.resolve()))
             self.assertTrue((repo / ".007/receipts").is_dir())
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--short"], cwd=repo,
+                    capture_output=True, text=True, check=True,
+                ).stdout,
+                "",
+            )
 
     def test_init_rejects_non_git_directory_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -88,6 +95,80 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("invalid registry", result.stderr)
             self.assertNotIn("Traceback", result.stderr)
+
+    def test_record_requires_cost_and_writes_no_replace_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            receipt = {
+                "schema": "007-framework/receipt/v1",
+                "task_id": "task-001",
+                "status": "accepted",
+                "proof_required": "integrated",
+                "proof_reached": "integrated",
+                "checks": [{"command": "python3 -m unittest", "exit": 0}],
+                "delta": {"files": 1, "added": 3, "deleted": 1, "dependencies": 0},
+                "first_pass": "yes",
+                "repair_rounds": 0,
+                "corrective_lines": "pending",
+                "escape_7d": "pending",
+                "requested_provider": "openai",
+                "requested_model": "gpt-requested",
+                "requested_effort": "high",
+                "served_provider": "openai",
+                "served_model": "gpt-served",
+                "served_effort": "xhigh",
+                "tokens": 1200,
+                "wall_s": 31,
+                "cost_usd": 0.42,
+                "cost_source": "provider-reported",
+                "cost_status": "final",
+                "uncertainty": "none",
+            }
+            source = Path(tmp, "receipt.json")
+            source.write_text(json.dumps(receipt))
+
+            first = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+            second = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(second.returncode, 2)
+            stored = json.loads((repo / ".007/receipts/task-001.receipt.json").read_text())
+            self.assertEqual(stored["cost_usd"], 0.42)
+            self.assertEqual(stored["served_model"], "gpt-served")
+            self.assertRegex(stored["completed_at"], r"Z$")
+
+    def test_record_rejects_unaccounted_cost(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            source = Path(tmp, "receipt.json")
+            source.write_text(json.dumps({
+                "schema": "007-framework/receipt/v1",
+                "task_id": "task-no-cost",
+                "status": "blocked",
+                "cost_usd": "unmeasured",
+                "cost_source": "unaccounted",
+                "cost_status": "unaccounted",
+            }))
+
+            result = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("cost_usd", result.stderr)
+            self.assertFalse((repo / ".007/receipts/task-no-cost.receipt.json").exists())
 
     def test_bin_entrypoint_exposes_help(self):
         result = subprocess.run(
@@ -196,6 +277,22 @@ class DashboardTests(unittest.TestCase):
                 "cost_usd_known_sum": 0.4, "cost_usd_known_tasks": 1,
             },
         ])
+
+    def test_telemetry_completeness_uses_served_route(self):
+        dashboard = self.module("dashboard")
+        metrics = dashboard.metrics_from_receipts([{
+            "status": "accepted",
+            "served_provider": "anthropic",
+            "served_model": "claude-opus-5",
+            "served_effort": "xhigh",
+            "tokens": 100,
+            "wall_s": 2,
+            "cost_usd": 0.1,
+            "cost_source": "provider-reported",
+            "cost_status": "final",
+        }])
+
+        self.assertEqual(metrics["telemetry_completeness"], 1.0)
 
     def test_project_snapshot_sanitizes_receipts_and_preserves_unknowns(self):
         dashboard = self.module("dashboard")

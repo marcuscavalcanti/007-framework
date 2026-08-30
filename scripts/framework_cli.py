@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,8 @@ from pathlib import Path
 
 PROJECT_SCHEMA = "007-framework/project/v1"
 REGISTRY_SCHEMA = "007-framework/registry/v1"
+RECEIPT_SCHEMA = "007-framework/receipt/v1"
+TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def default_registry_path():
@@ -32,6 +35,29 @@ def git_root(path):
     if result.returncode:
         raise ValueError(f"not a Git repository: {Path(path).expanduser()}")
     return Path(result.stdout.strip()).resolve()
+
+
+def exclude_local_state(root):
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-path", "info/exclude"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode:
+        raise ValueError("cannot locate Git exclude file")
+    path = Path(result.stdout.strip())
+    if not path.is_absolute():
+        path = root / path
+    marker = "/.007/"
+    current = path.read_text() if path.exists() else ""
+    if marker not in current.splitlines():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as output:
+            if current and not current.endswith("\n"):
+                output.write("\n")
+            output.write(marker + "\n")
 
 
 def read_json(path):
@@ -52,6 +78,24 @@ def write_json_atomic(path, value):
         except FileNotFoundError:
             pass
         raise
+
+
+def write_json_no_replace(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w") as output:
+            json.dump(value, output, indent=2, sort_keys=True)
+            output.write("\n")
+        try:
+            os.link(name, path)
+        except FileExistsError as exc:
+            raise ValueError(f"receipt already exists: {path.name}") from exc
+    finally:
+        try:
+            os.unlink(name)
+        except FileNotFoundError:
+            pass
 
 
 def validate_marker(value):
@@ -83,6 +127,7 @@ def load_registry(path):
 
 def init_project(repo, registry_path, now=None):
     root = git_root(repo)
+    exclude_local_state(root)
     marker_path = root / ".007" / "project.json"
     if marker_path.exists():
         marker = validate_marker(read_json(marker_path))
@@ -121,12 +166,73 @@ def init_project(repo, registry_path, now=None):
     return entry
 
 
+def validate_receipt(value):
+    if not isinstance(value, dict) or value.get("schema") != RECEIPT_SCHEMA:
+        raise ValueError(f"receipt schema must be {RECEIPT_SCHEMA}")
+    task_id = value.get("task_id")
+    if not isinstance(task_id, str) or not TASK_ID.fullmatch(task_id):
+        raise ValueError("task_id must use only letters, numbers, dot, dash, or underscore")
+    if value.get("status") not in ("accepted", "blocked", "no-op"):
+        raise ValueError("status must be accepted, blocked, or no-op")
+    cost = value.get("cost_usd")
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+        raise ValueError("cost_usd must be a non-negative measured number")
+    if not isinstance(value.get("cost_source"), str) or not value["cost_source"].strip():
+        raise ValueError("cost_source must identify the accounting source")
+    if value.get("cost_status") not in ("final", "provisional"):
+        raise ValueError("cost_status must be final or provisional")
+    required_strings = (
+        "proof_required", "proof_reached", "first_pass", "corrective_lines",
+        "escape_7d", "requested_provider", "requested_model", "requested_effort",
+        "served_provider", "served_model", "served_effort", "uncertainty",
+    )
+    missing = [key for key in required_strings if not isinstance(value.get(key), str) or not value[key]]
+    if missing:
+        raise ValueError(f"missing receipt field(s): {', '.join(missing)}")
+    if not isinstance(value.get("checks"), list) or not isinstance(value.get("delta"), dict):
+        raise ValueError("checks must be a list and delta must be an object")
+    repairs = value.get("repair_rounds")
+    if repairs != "unmeasured" and (isinstance(repairs, bool) or not isinstance(repairs, int) or repairs < 0):
+        raise ValueError("repair_rounds must be a non-negative integer or unmeasured")
+    for key in ("tokens", "wall_s"):
+        measured = value.get(key)
+        if measured != "unmeasured" and (
+            isinstance(measured, bool) or not isinstance(measured, (int, float)) or measured < 0
+        ):
+            raise ValueError(f"{key} must be a non-negative number or unmeasured")
+    return value
+
+
+def record_receipt(repo, source, now=None):
+    root = git_root(repo)
+    marker_path = root / ".007" / "project.json"
+    if not marker_path.exists():
+        raise ValueError("project is not initialized; run 007 init first")
+    marker = validate_marker(read_json(marker_path))
+    if source == "-":
+        value = json.load(sys.stdin)
+    else:
+        value = read_json(Path(source).expanduser())
+    receipt = validate_receipt(value)
+    if "completed_at" not in receipt:
+        instant = now or datetime.now(timezone.utc)
+        receipt["completed_at"] = instant.isoformat().replace("+00:00", "Z")
+    elif not isinstance(receipt["completed_at"], str) or not receipt["completed_at"]:
+        raise ValueError("completed_at must be a timestamp string")
+    destination = marker_path.parent / marker["receipt_dir"] / f"{receipt['task_id']}.receipt.json"
+    write_json_no_replace(destination, receipt)
+    return destination
+
+
 def parser():
     result = argparse.ArgumentParser(description="007 Framework local tooling")
     commands = result.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="register a Git project for 007 telemetry")
     init.add_argument("--repo", default=".")
     init.add_argument("--registry", type=Path, default=default_registry_path())
+    record = commands.add_parser("record", help="validate and persist one terminal task receipt")
+    record.add_argument("--repo", default=".")
+    record.add_argument("--file", required=True, help="receipt JSON path, or - for stdin")
     dashboard = commands.add_parser("dashboard", help="start the local multi-project dashboard")
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=7007)
@@ -160,6 +266,10 @@ def main(argv=None):
             entry = init_project(args.repo, args.registry)
             print(f"registered {entry['name']} ({entry['path']})")
             print(f"receipts: {Path(entry['path']) / '.007' / 'receipts'}")
+            return 0
+        if args.command == "record":
+            destination = record_receipt(args.repo, args.file)
+            print(f"recorded: {destination}")
             return 0
         if args.command == "dashboard":
             return run_dashboard(args.host, args.port, args.registry, not args.no_open)

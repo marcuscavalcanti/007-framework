@@ -128,6 +128,28 @@ class ScriptContractTests(unittest.TestCase):
             self.assertEqual(data["tokens_missing_tasks"], 1)
             self.assertEqual(len(data["invalid_receipts"]), 1)
 
+    def test_report_exposes_mandatory_cost_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "accounted.receipt.json").write_text(json.dumps({
+                "schema": "007-framework/receipt/v1", "status": "accepted",
+                "tokens": 100, "cost_usd": 0.25,
+                "cost_source": "provider-reported", "cost_status": "final",
+            }))
+            Path(tmp, "missing.receipt.json").write_text(json.dumps({
+                "schema": "007-framework/receipt/v1", "status": "blocked",
+                "tokens": 50,
+            }))
+
+            result = self.run_script("harness_report.py", "--receipt-dir", tmp, "--format", "json")
+            data = json.loads(result.stdout)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(data["cost_usd_known_sum"], 0.25)
+            self.assertEqual(data["cost_usd_known_tasks"], 1)
+            self.assertEqual(data["cost_unaccounted_tasks"], 1)
+            self.assertEqual(data["cost_coverage"], 0.5)
+            self.assertEqual(data["cost_usd_per_accepted"], 0.25)
+
     def test_replay_requires_a_preregistered_seed(self):
         sys.path.insert(0, str(SCRIPTS))
         try:

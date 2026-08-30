@@ -140,8 +140,8 @@ def metrics_from_receipts(receipts):
             escape_known += 1
         elif escape in (False, "no"):
             escape_known += 1
-        for key in ("model", "effort"):
-            if is_known_label(item.get(key)):
+        for served, legacy in (("served_model", "model"), ("served_effort", "effort")):
+            if is_known_label(item.get(served) or item.get(legacy)):
                 telemetry_known += 1
         telemetry_known += int(is_number(item.get("tokens")))
         telemetry_known += int(is_number(item.get("wall_s")))

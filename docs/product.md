@@ -52,7 +52,14 @@ verification, and learning as one measured loop:
 
 ## Adoption path
 
-Install the skill, use it on scoped work, keep the outcome block, and add
-machine-readable receipts only where the repository already has a receipt
-location. After enough attributable history exists, run the included reports.
-Adopt causal replay only for a concrete mechanism whose failure matters.
+Install the skill and `007` command, run `007 init` once in each Git project,
+then use the framework on scoped work. Every terminal task is recorded in the
+project-local `.007/receipts` directory with mandatory cost accounting. The
+global local registry lets `007 dashboard` reconcile all projects with the
+aggregate view. Adopt causal replay only for a concrete mechanism whose failure
+matters.
+
+The dashboard is observational: it measures accepted outcomes, repair pressure,
+touch-rate, escapes, telemetry, and cost. It does not turn those operational
+signals into causal proof. Release-level causal evidence remains a separate,
+frozen OLD×NEW experiment.

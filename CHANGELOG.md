@@ -2,6 +2,21 @@
 
 All notable changes are documented here.
 
+## [1.1.0] - Unreleased
+
+### Added
+
+- automatic local registration for every Git project using the framework;
+- atomic, no-replace terminal receipts with mandatory provider-neutral cost accounting;
+- localhost multi-project dashboard with aggregate/project reconciliation and near-real-time polling;
+- requested-versus-served provider/model/effort telemetry and cost coverage gates.
+
+### Deliberately deferred
+
+- provider-specific rate tables and model allowlists;
+- DuckDB or another database before receipt volume or query latency demonstrates a need;
+- login/authentication while the dashboard remains loopback-only.
+
 ## [1.0.0] - 2026-08-30
 
 ### Added

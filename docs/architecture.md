@@ -25,13 +25,28 @@ scope and route ──► isolated execution ──► repository-native gates
 - `scripts/touch_rate.py`: approximates attributable code survival from Git.
 - `scripts/replay_eval.py`: runs frozen OLD×NEW policies against reconstructed
   historical source and task-specific acceptance commands.
+- `bin/007` and `scripts/framework_cli.py`: initialize projects, validate and
+  atomically persist terminal receipts, and launch the local dashboard.
+- `scripts/dashboard.py` and `dashboard/`: aggregate registered projects and
+  serve a loopback-only, dependency-free control room.
 - `tests/`: protects package identity, public boundaries, and script behavior.
 
 ## State model
 
-The framework owns no service state. Durable authority remains in Git, repository
-instructions, tests, task handoffs, and optional receipts. Conversations and raw
-transcripts are temporary context, not operational authority.
+The framework owns only local measurement state: a project marker and receipts
+under `.007/`, plus the user-level project registry at
+`~/.007-framework/projects.json`. `007 init` excludes `.007/` through the local
+Git exclude file, so telemetry does not dirty or alter repository history.
+Durable engineering authority remains in Git, repository instructions, tests,
+and task handoffs. Conversations and raw transcripts are temporary context, not
+operational authority.
+
+The browser polls a read-only aggregate snapshot every two seconds. The HTTP
+server binds to `127.0.0.1` by default and exposes only allowlisted static and
+JSON routes. Aggregate metrics are recomputed from raw project totals; project
+percentages are never averaged. JSON receipts remain the source of truth. A
+database is intentionally deferred until measured volume or query latency makes
+the standard-library scan insufficient.
 
 ## Trust boundaries
 
@@ -44,6 +59,9 @@ transcripts are temporary context, not operational authority.
    cannot replace executable proof or human release authority.
 5. **Evidence boundary:** receipts record measured values and explicit unknowns;
    they do not reconstruct missing telemetry.
+6. **Cost boundary:** every new terminal receipt needs numeric cost, accounting
+   source, and final/provisional state. Prices are supplied by the host or a
+   provider adapter; the core contains no provider-specific price table.
 
 ## Extension points
 

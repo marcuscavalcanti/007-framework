@@ -8,6 +8,8 @@ The north-star family measures whether agent output survives use:
 - **repair rounds** — attempts after the first implementation;
 - **escape rate** — accepted changes that later produce a regression or incident;
 - **cost per accepted task** — tokens or money divided by accepted outcomes.
+- **cost coverage** — terminal outcomes with numeric cost, source, and
+  final/provisional accounting status.
 
 Rules:
 
@@ -16,6 +18,10 @@ Rules:
 3. Report medians and distributions; tiny samples are not trends.
 4. Tokens and wall time are costs, not quality proxies.
 5. Similarity to a prior patch is not correctness.
+6. Cost coverage is a hard gate: below 100%, the operational state cannot be
+   `on-target`. Missing cost is unaccounted, never zero.
+7. Group cost by the served provider/model/effort when measured; otherwise keep
+   the requested route explicitly marked as unverified.
 
 `scripts/touch_rate.py` is an approximation based on attributable Git commits.
 Renames, deletion, formatting, and mixed-author commits can distort it; use the

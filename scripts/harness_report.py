@@ -3,9 +3,22 @@
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter
 from pathlib import Path
+
+
+def has_accounted_cost(receipt):
+    value = receipt.get("cost_usd")
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and isinstance(receipt.get("cost_source"), str)
+        and bool(receipt["cost_source"])
+        and receipt.get("cost_status") in ("final", "provisional")
+    )
 
 
 def load_receipts(directory):
@@ -28,6 +41,9 @@ def summarize(receipts, errors):
     numeric_tokens = [r["tokens"] for r in receipts if isinstance(r.get("tokens"), int)]
     tokens = sum(numeric_tokens) if len(numeric_tokens) == len(receipts) and receipts else "unmeasured"
     repairs = [r["repair_rounds"] for r in receipts if isinstance(r.get("repair_rounds"), int)]
+    costs = [r["cost_usd"] for r in receipts if has_accounted_cost(r)]
+    accepted = [r for r in receipts if r.get("status") == "accepted"]
+    accepted_costs = [r["cost_usd"] for r in accepted if has_accounted_cost(r)]
     return {
         "tasks": len(receipts),
         "accepted": statuses["accepted"],
@@ -39,6 +55,19 @@ def summarize(receipts, errors):
         "tokens_known_sum": sum(numeric_tokens),
         "tokens_known_tasks": len(numeric_tokens),
         "tokens_missing_tasks": len(receipts) - len(numeric_tokens),
+        "cost_usd_known_sum": round(sum(costs), 6),
+        "cost_usd_known_tasks": len(costs),
+        "cost_unaccounted_tasks": len(receipts) - len(costs),
+        "cost_coverage": len(costs) / len(receipts) if receipts else None,
+        "cost_usd_per_accepted": (
+            round(sum(accepted_costs) / len(accepted), 6)
+            if accepted and len(accepted_costs) == len(accepted) else None
+        ),
+        "cost_status": (
+            None if not costs
+            else "provisional" if any(r.get("cost_status") == "provisional" for r in receipts if has_accounted_cost(r))
+            else "final"
+        ),
         "invalid_receipts": errors,
     }
 
@@ -54,6 +83,7 @@ def main():
     else:
         print(f"tasks={summary['tasks']} accepted={summary['accepted']} blocked={summary['blocked']} no_op={summary['no_op']}")
         print(f"first_pass_yes={summary['first_pass_yes']} repair_rounds_known={summary['repair_rounds_known']} tokens={summary['tokens']}")
+        print(f"cost_usd={summary['cost_usd_known_sum']} coverage={summary['cost_coverage']} status={summary['cost_status']}")
         print(f"invalid_receipts={len(summary['invalid_receipts'])}")
     return 1 if errors_are_fatal(summary) else 0
 

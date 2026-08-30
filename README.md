@@ -9,7 +9,7 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Status:** v1.0.0 is ready to test. A controlled mechanism test observed an
+> **Status:** v1.1.0 is ready to test. A controlled mechanism test observed an
 > OLD 0/3 vs NEW 3/3 contrast on one decision; the complete framework is not
 > claimed to be universally superior or production-proven. See
 > [Evidence](docs/evidence.md).
@@ -19,8 +19,10 @@ code that looks finished but must be rewritten, repaired, or explained again.
 - risk-based routing instead of “largest model by default”;
 - reuse-first, minimal-diff implementation discipline;
 - explicit proof levels and fail-closed quality gates;
-- a compact outcome receipt with honest `unmeasured` fields;
+- a compact outcome receipt with provider-neutral route telemetry and mandatory
+  cost accounting;
 - Git-based corrective touch-rate and receipt reporting;
+- a polished localhost dashboard that reconciles all registered projects;
 - an OLD×NEW replay runner for causal tests on real historical tasks.
 
 No server, database, API key, package manager, or runtime dependency is added.
@@ -34,6 +36,8 @@ Clone the repository into the skills directory used by your coding-agent host:
 git clone https://github.com/marcuscavalcanti/007-framework.git
 mkdir -p ~/.codex/skills
 ln -s "$PWD/007-framework" ~/.codex/skills/007-framework
+mkdir -p ~/.local/bin
+ln -s "$PWD/007-framework/bin/007" ~/.local/bin/007
 ```
 
 For another skills-compatible host, use its documented skills directory. The
@@ -49,6 +53,15 @@ python3 -m py_compile scripts/*.py
 ```
 
 ## Use
+
+Register each Git project once. Registration is idempotent, adds `.007/` only to
+the repository's local Git exclude file, and updates the user-level project
+registry automatically:
+
+```bash
+cd /path/to/project
+007 init
+```
 
 Ask your agent to use `007-framework` for a coding task. A normal run follows:
 
@@ -72,15 +85,41 @@ delta: 2 files, +18/-4, dependencies=0
 first_pass: yes; repair_rounds=0
 rework: corrective_lines=pending; escape_7d=pending
 telemetry: model=served-model; effort=medium; tokens=unmeasured; wall_s=31
+cost: usd=0.42; source=provider-reported; status=final
 uncertainty: runtime not exercised
 ```
+
+For initialized projects, every terminal task is persisted through the
+fail-closed receipt command. Start from
+[`examples/task.receipt.example.json`](examples/task.receipt.example.json):
+
+```bash
+007 record --repo . --file task.receipt.json
+```
+
+The command rejects missing cost, malformed task IDs, and duplicate receipts.
+Provider/model/effort are open values, with requested and actually served routes
+kept separately. Cost may be provider-reported, estimated by an external rate
+card, allocated from a subscription, or derived from local compute; its source
+and provisional/final state must be explicit.
+
+Start the all-project control room:
+
+```bash
+007 dashboard
+```
+
+The loopback dashboard opens at `http://127.0.0.1:7007`, discovers all projects
+registered by `007 init`, updates every two seconds, and keeps aggregate totals
+mathematically reconcilable with the project views. It has no login because it
+binds locally; do not expose it on a public interface.
 
 ## Measure
 
 Summarize machine-readable receipts:
 
 ```bash
-python3 scripts/harness_report.py --receipt-dir receipts --format json
+python3 scripts/harness_report.py --receipt-dir .007/receipts --format json
 ```
 
 Receipt filenames end in `.receipt.json`; unrelated JSON files in the same tree
@@ -117,6 +156,8 @@ The repository root is the installable skill:
 SKILL.md        operating contract
 references/     detailed doctrine loaded on demand
 scripts/        receipts, touch-rate, and replay sensors
+dashboard/      dependency-free localhost control room
+bin/007         project registration, receipt, and dashboard CLI
 tests/          deterministic package contract
 docs/           product, architecture, evidence, and research history
 evidence/       release-specific, sanitized proof
