@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -362,6 +363,34 @@ class DashboardTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_dashboard_shell_is_semantic_and_self_contained(self):
+        class ShellParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.tags = []
+                self.urls = []
+                self.live_regions = 0
+
+            def handle_starttag(self, tag, attrs):
+                self.tags.append(tag)
+                values = dict(attrs)
+                for key in ("src", "href"):
+                    if values.get(key):
+                        self.urls.append(values[key])
+                self.live_regions += int("aria-live" in values)
+
+        static = ROOT / "dashboard"
+        self.assertTrue((static / "index.html").is_file(), "dashboard shell is missing")
+        self.assertTrue((static / "styles.css").is_file(), "dashboard styles are missing")
+        self.assertTrue((static / "app.js").is_file(), "dashboard application is missing")
+        parser = ShellParser()
+        parser.feed((static / "index.html").read_text())
+
+        self.assertTrue({"header", "nav", "main", "section"}.issubset(parser.tags))
+        self.assertGreaterEqual(parser.live_regions, 1)
+        self.assertEqual(set(parser.urls), {"/styles.css", "/app.js"})
+        self.assertFalse(any(url.startswith(("http://", "https://", "//")) for url in parser.urls))
 
 
 if __name__ == "__main__":

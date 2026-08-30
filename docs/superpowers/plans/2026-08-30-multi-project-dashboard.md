@@ -339,7 +339,7 @@ Inspect desktop and mobile widths. Verify overview, project filter, empty state,
 git status --short --branch -uall
 git diff v1.0.0...HEAD --stat
 git diff v1.0.0...HEAD --check
-rg -n '/Users/marcus|BEGIN .*PRIVATE KEY|sk-ant-' --glob '!docs/superpowers/**' .
+python3 -m unittest tests.test_package.PackageContractTests.test_public_bytes_exclude_private_paths_and_secret_markers -v
 ```
 
 - [ ] **Step 5: Prepare bounded adversarial review**
