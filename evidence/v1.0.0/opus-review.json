@@ -1,0 +1,42 @@
+{
+  "schema": "007-framework/release-review/v1",
+  "release": "v1.0.0",
+  "verdict": "approve",
+  "highest_severity": "low",
+  "model": "claude-opus-5",
+  "effort": "xhigh",
+  "validation_strength": "structural-opus-5-xhigh",
+  "tools_enabled": false,
+  "fallback_used": false,
+  "timed_out": false,
+  "context_sha256": "05cfd223556d22e038fd13f3bd96a9cf5df5b1cfa7d8d8578198a1b0eec84836",
+  "result_sha256": "6b9bd34846f77249578f32c3a706ad0fb030afe477ae8f51d1bd729112dad272",
+  "manifest_sha256": "d0c01134fe58780be56b4ec033fa27b0d6e5c583fd6a70d3bc6aa2375ff26bbf",
+  "review_history": [
+    {
+      "stage": "r4",
+      "verdict": "reject",
+      "highest_severity": "medium",
+      "result_sha256": "8a9e92a241b37729f91194fb30b6951cfa953f2ac0ba02c7185c88193d5ec0d1"
+    },
+    {
+      "stage": "r5",
+      "verdict": "reject",
+      "highest_severity": "medium",
+      "result_sha256": "7a31b62f7fac171c74d858d05f78746d1d15079c1bf7a488654e4ea1c7b3ddd6"
+    },
+    {
+      "stage": "r6",
+      "verdict": "reject",
+      "highest_severity": "medium",
+      "result_sha256": "63513ef2bbf66f663324354c8a6e3ee891fc74860ae4d5a70b87201b5a9a4653"
+    }
+  ],
+  "non_blocking_backlog": [
+    "Expose partial known token totals in text output as well as JSON.",
+    "Clarify cleanup behavior for archive creation failures.",
+    "Make the install snippet more visibly host-neutral.",
+    "Document additional touch-rate bias from moved or renamed files.",
+    "Preserve the descriptive evidence ceiling until broader trials exist."
+  ]
+}

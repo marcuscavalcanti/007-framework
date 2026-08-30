@@ -1,0 +1,22 @@
+# Metrics
+
+The north-star family measures whether agent output survives use:
+
+- **first-pass accepted rate** — accepted without a corrective agent round;
+- **corrective touch rate** — attributable agent lines later changed to correct
+  behavior, ideally measured over 7 and 30 days;
+- **repair rounds** — attempts after the first implementation;
+- **escape rate** — accepted changes that later produce a regression or incident;
+- **cost per accepted task** — tokens or money divided by accepted outcomes.
+
+Rules:
+
+1. Missing attribution or telemetry is `N/D`, never zero.
+2. Separate corrective edits from feature evolution when the data permits.
+3. Report medians and distributions; tiny samples are not trends.
+4. Tokens and wall time are costs, not quality proxies.
+5. Similarity to a prior patch is not correctness.
+
+`scripts/touch_rate.py` is an approximation based on attributable Git commits.
+Renames, deletion, formatting, and mixed-author commits can distort it; use the
+trend with receipts and incident data.

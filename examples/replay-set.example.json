@@ -1,0 +1,43 @@
+{
+  "seed": 7,
+  "repos": {
+    "example": "/absolute/path/to/source-repository"
+  },
+  "agent_command": [
+    "codex",
+    "exec",
+    "--cd",
+    "{cwd}",
+    "-m",
+    "{model}",
+    "-c",
+    "model_reasoning_effort={effort}",
+    "-"
+  ],
+  "arms": {
+    "OLD": {
+      "model": "served-model-id",
+      "effort": "medium",
+      "doctrine": "Baseline instructions frozen before the experiment."
+    },
+    "NEW": {
+      "model": "served-model-id",
+      "effort": "medium",
+      "doctrine": "The same baseline plus exactly one target mechanism."
+    }
+  },
+  "tasks": [
+    {
+      "id": "real-regression-1",
+      "repo": "example",
+      "class": "implement",
+      "subject": "Reproduce a historical correction without exposing its patch",
+      "base": "base-commit-sha",
+      "accepted": "accepted-commit-sha",
+      "prompt": "Implement the requested behavior and run the repository tests.",
+      "acceptance": [
+        ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"]
+      ]
+    }
+  ]
+}
