@@ -61,6 +61,12 @@ class PackageContractTests(unittest.TestCase):
         self.assertEqual(set(example["arms"]), {"OLD", "NEW"})
         self.assertEqual(len(example["tasks"]), 1)
 
+    def test_release_manifest_gate_targets_the_current_tag(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        self.assertIn("if: startsWith(github.ref, 'refs/tags/v')", workflow)
+        self.assertIn('evidence/${GITHUB_REF_NAME}/manifest.sha256', workflow)
+        self.assertNotIn("sha256sum --check evidence/v1.1.0/manifest.sha256", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

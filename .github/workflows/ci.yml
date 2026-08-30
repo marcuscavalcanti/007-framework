@@ -20,4 +20,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m py_compile scripts/*.py
       - run: python -m unittest discover -s tests -v
-      - run: sha256sum --check evidence/v1.1.0/manifest.sha256
+      - name: Verify release manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: sha256sum --check "evidence/${GITHUB_REF_NAME}/manifest.sha256"
