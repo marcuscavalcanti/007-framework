@@ -288,6 +288,36 @@ def record_receipt(repo, source, now=None):
     return destination
 
 
+def run_task(repo, task_id, receipt, command):
+    root = git_root(repo)
+    command = command[1:] if command[:1] == ["--"] else command
+    if not command:
+        raise ValueError("run requires a command after --")
+    receipt_path = Path(receipt).expanduser()
+    if not receipt_path.is_absolute():
+        receipt_path = root / receipt_path
+    receipt_path = receipt_path.resolve()
+    if receipt_path.exists():
+        raise ValueError(f"terminal receipt already exists: {receipt_path}")
+
+    task = begin_task(root, task_id)
+    environment = {
+        **os.environ,
+        "FRAMEWORK_007_TASK_ID": task["task_id"],
+        "FRAMEWORK_007_RECEIPT_PATH": str(receipt_path),
+        "FRAMEWORK_007_REPO": str(root),
+    }
+    completed = subprocess.run(command, cwd=root, env=environment)
+    if completed.returncode:
+        return completed.returncode, None
+    if not receipt_path.is_file():
+        raise ValueError(f"command did not produce terminal receipt: {receipt_path}")
+    receipt_value = validate_receipt(read_json(receipt_path))
+    if receipt_value["task_id"] != task["task_id"]:
+        raise ValueError("terminal receipt task_id does not match the observed task")
+    return 0, record_receipt(root, receipt_path)
+
+
 def parser():
     result = argparse.ArgumentParser(description="007 Framework local tooling")
     commands = result.add_subparsers(dest="command", required=True)
@@ -300,6 +330,11 @@ def parser():
     record = commands.add_parser("record", help="validate and persist one terminal task receipt")
     record.add_argument("--repo", default=".")
     record.add_argument("--file", required=True, help="receipt JSON path, or - for stdin")
+    run = commands.add_parser("run", help="observe a command and require its terminal receipt")
+    run.add_argument("--repo", default=".")
+    run.add_argument("--task-id")
+    run.add_argument("--receipt", required=True)
+    run.add_argument("argv", nargs=argparse.REMAINDER, help="command after --")
     unregister = commands.add_parser("unregister", help="remove a stale project from the local registry")
     unregister.add_argument("--project", required=True, help="registered project path or project ID")
     unregister.add_argument("--registry", type=Path, default=default_registry_path())
@@ -345,6 +380,11 @@ def main(argv=None):
             destination = record_receipt(args.repo, args.file)
             print(f"recorded: {destination}")
             return 0
+        if args.command == "run":
+            status, destination = run_task(args.repo, args.task_id, args.receipt, args.argv)
+            if destination:
+                print(f"recorded: {destination}")
+            return status
         if args.command == "unregister":
             entry = unregister_project(args.project, args.registry)
             print(f"unregistered: {entry['name']} ({entry['path']})")

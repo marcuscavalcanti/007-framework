@@ -26,8 +26,9 @@ code that looks finished but must be rewritten, repaired, or explained again.
 - an OLD×NEW replay runner for causal tests on real historical tasks.
 
 No database, API key, package manager, or model-runtime dependency is added.
-The included tools use Python's standard library. If Headroom is installed,
-the dashboard reuses its LiteLLM pricing engine for local cost estimates.
+The included tools use Python's standard library. Outcome cost comes from the
+terminal receipt. If Headroom is installed, the dashboard may additionally use
+its LiteLLM pricing engine for a non-authoritative local estimate.
 
 ## Install
 
@@ -118,6 +119,19 @@ kept separately. Cost may be provider-reported, estimated by an external rate
 card, allocated from a subscription, or derived from local compute; its source
 and provisional/final state must be explicit.
 
+To make the lifecycle automatic for any agent CLI, wrap it with `007 run`:
+
+```bash
+007 run --repo . --task-id pagination-regression \
+  --receipt task.receipt.json -- your-agent-command
+```
+
+The wrapped command receives `FRAMEWORK_007_TASK_ID`,
+`FRAMEWORK_007_RECEIPT_PATH`, and `FRAMEWORK_007_REPO`. Its provider adapter
+writes the normalized receipt to that path. A failed command, missing receipt,
+or mismatched task ID stays visibly open; the core never infers success or cost
+from an exit code or transcript.
+
 Start the all-project control room:
 
 ```bash
@@ -130,11 +144,13 @@ mathematically reconcilable with the project views. It has no login because it
 binds locally; do not expose it on a public interface.
 
 The activity lane reads only sanitized session metadata and token counters from
-local Codex and Claude logs. It maps Git worktrees back to their registered
-project and shows sessions, active state, served route, 24-hour token deltas,
-and Headroom/LiteLLM-equivalent USD. Partial pricing is shown as a lower bound;
-unknown models are `N/D`, never free. This lane does not infer acceptance,
-first-pass success, or reliability from a completed session.
+local Codex, Claude, Kimi Code, and Gemini CLI logs. It maps Git worktrees back
+to their registered project and shows sessions, active state, served route, and
+24-hour token deltas. Provider-reported terminal USD is preserved when present.
+Headroom/LiteLLM, RTK, or another rate card may supply a separate diagnostic
+estimate, but never closes the cost gate. Unknown cost is `N/D`, never free.
+This lane does not infer acceptance, first-pass success, or reliability from a
+completed session.
 
 Observation coverage is the percentage of starts created by `007 begin` with a
 matching terminal receipt. Cost coverage is the percentage of terminal receipts

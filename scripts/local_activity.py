@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read sanitized local Codex/Claude usage for the 007 dashboard."""
+"""Read sanitized local coding-agent usage for the 007 dashboard."""
 
 import json
 import math
@@ -46,12 +46,15 @@ def pricing_request(session):
     cached = int(safe_number(usage.get("cached_input_tokens")))
     cache_write = int(safe_number(usage.get("cache_write_input_tokens")))
     prompt = int(safe_number(usage.get("input_tokens")))
-    if not usage.get("input_includes_cache"):
-        prompt += cached + cache_write
+    if usage.get("input_includes_cache"):
+        prompt = max(0, prompt - cached - cache_write)
     return {
         "model": session.get("model"),
         "prompt_tokens": prompt,
-        "completion_tokens": int(safe_number(usage.get("output_tokens"))),
+        "completion_tokens": int(safe_number(usage.get("output_tokens"))) + (
+            0 if usage.get("output_includes_reasoning", True)
+            else int(safe_number(usage.get("reasoning_output_tokens")))
+        ),
         "cache_read_input_tokens": cached,
         "cache_creation_input_tokens": cache_write,
         "cache_creation_1h_input_tokens": int(safe_number(usage.get("cache_write_1h_input_tokens"))),
@@ -244,10 +247,14 @@ def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookb
     usage["usage_complete"] = complete
     usage["input_includes_cache"] = False
     model = effort = None
+    reported_costs = []
     updated = iso_datetime(meta.get("timestamp"))
     rows = json_rows(path) if complete else json_rows(path, max_bytes=4 * 1024 * 1024, from_tail=True)
     for row in rows:
         stamp = iso_datetime(row.get("timestamp"))
+        cost = row.get("total_cost_usd")
+        if row.get("type") == "result" and stamp and stamp >= cutoff and isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0:
+            reported_costs.append(float(cost))
         if stamp and (updated is None or stamp > updated):
             updated = stamp
         message = row.get("message") if row.get("type") == "assistant" else None
@@ -283,6 +290,79 @@ def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookb
         "model": model or "unmeasured",
         "effort": effort or "unmeasured",
         "usage": usage,
+        "cost_usd_reported": sum(reported_costs) if reported_costs else None,
+    }
+
+
+def parse_kimi_session(path, now=None, lookback_hours=24):
+    now = now or datetime.now(timezone.utc)
+    cutoff_ms = int((now - timedelta(hours=lookback_hours)).timestamp() * 1000)
+    state = json.loads(Path(path).read_text())
+    session_id, cwd = state.get("id"), state.get("cwd")
+    if not isinstance(session_id, str) or not isinstance(cwd, str):
+        return None
+    usage = empty_usage()
+    usage.update({"usage_complete": True, "input_includes_cache": False})
+    model = None
+    for wire in Path(path).parent.glob("agents/*/wire.jsonl"):
+        for row in json_rows(wire):
+            raw = row.get("usage")
+            if row.get("type") != "usage.record" or row.get("time", 0) < cutoff_ms or not isinstance(raw, dict):
+                continue
+            model = row.get("model") or model
+            usage["input_tokens"] += int(safe_number(raw.get("inputOther")))
+            usage["cached_input_tokens"] += int(safe_number(raw.get("inputCacheRead")))
+            usage["cache_write_input_tokens"] += int(safe_number(raw.get("inputCacheCreation")))
+            usage["output_tokens"] += int(safe_number(raw.get("output")))
+    usage["total_tokens"] = sum(usage[key] for key in (
+        "input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens",
+    ))
+    updated_ms = int(safe_number(state.get("updatedAt")))
+    updated = datetime.fromtimestamp(updated_ms / 1000, timezone.utc) if updated_ms else None
+    active = bool(updated and (now - updated).total_seconds() <= 120 and state.get("lastTurnReason") not in ("completed", "cancelled", "error"))
+    started_ms = int(safe_number(state.get("createdAt")))
+    return {
+        "session_id": session_id, "source": "kimi", "runtime_provider": "moonshot",
+        "cwd": cwd,
+        "started_at": datetime.fromtimestamp(started_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z") if started_ms else None,
+        "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
+        "status": "active" if active else "idle", "model": model or "unmeasured",
+        "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
+    }
+
+
+def parse_gemini_session(path, cwd, now=None, lookback_hours=24):
+    if not isinstance(cwd, str):
+        return None
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=lookback_hours)
+    meta = first_matching(path, lambda row: isinstance(row.get("sessionId"), str))
+    if not meta:
+        return None
+    usage = empty_usage()
+    usage.update({"usage_complete": True, "input_includes_cache": True, "output_includes_reasoning": False})
+    model = None
+    updated = iso_datetime(meta.get("startTime"))
+    for row in json_rows(path):
+        stamp = iso_datetime(row.get("timestamp"))
+        if stamp and (updated is None or stamp > updated):
+            updated = stamp
+        raw = row.get("tokens")
+        if row.get("type") != "gemini" or not stamp or stamp < cutoff or not isinstance(raw, dict):
+            continue
+        model = row.get("model") or model
+        usage["input_tokens"] += int(safe_number(raw.get("input"))) + int(safe_number(raw.get("tool")))
+        usage["cached_input_tokens"] += int(safe_number(raw.get("cached")))
+        usage["output_tokens"] += int(safe_number(raw.get("output")))
+        usage["reasoning_output_tokens"] += int(safe_number(raw.get("thoughts")))
+        usage["total_tokens"] += int(safe_number(raw.get("total")))
+    active = bool(updated and (now - updated).total_seconds() <= 120)
+    return {
+        "session_id": meta["sessionId"], "source": "gemini", "runtime_provider": "google",
+        "cwd": cwd, "started_at": meta.get("startTime"),
+        "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
+        "status": "active" if active else "idle", "model": model or "unmeasured",
+        "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
     }
 
 
@@ -312,6 +392,9 @@ def empty_summary(window_hours):
         "priced_sessions": 0,
         "unpriced_sessions": 0,
         "pricing_coverage": None,
+        "cost_usd_reported_sum": 0,
+        "reported_cost_sessions": 0,
+        "reported_cost_coverage": None,
         "routes": [],
         "recent_sessions": [],
     }
@@ -332,6 +415,10 @@ def summarize(sessions, window_hours):
     result["pricing_coverage"] = len(priced) / len(sessions) if sessions else None
     result["cost_usd_known_sum"] = round(sum(item["cost_usd_estimate"] for item in priced), 6)
     result["cost_usd_estimate"] = result["cost_usd_known_sum"] if sessions and len(priced) == len(sessions) else None
+    reported = [item for item in sessions if item.get("cost_usd_reported") is not None]
+    result["cost_usd_reported_sum"] = round(sum(item["cost_usd_reported"] for item in reported), 6)
+    result["reported_cost_sessions"] = len(reported)
+    result["reported_cost_coverage"] = len(reported) / len(sessions) if sessions else None
     routes = {}
     for item in sessions:
         key = (item["runtime_provider"], item["model"], item["effort"])
@@ -349,10 +436,12 @@ def summarize(sessions, window_hours):
 
 
 class ActivityCollector:
-    def __init__(self, codex_root=None, claude_root=None, pricer=None, lookback_hours=24):
+    def __init__(self, codex_root=None, claude_root=None, kimi_root=None, gemini_root=None, pricer=None, lookback_hours=24):
         home = Path.home()
         self.codex_root = Path(codex_root or home / ".codex/sessions")
         self.claude_root = Path(claude_root or home / ".claude/projects")
+        self.kimi_root = Path(kimi_root or home / ".kimi-code/sessions")
+        self.gemini_root = Path(gemini_root or home / ".gemini")
         self.pricer = pricer or HeadroomPricer()
         self.lookback_hours = lookback_hours
         self.cache = {}
@@ -360,10 +449,16 @@ class ActivityCollector:
 
     def candidates(self, now):
         cutoff = (now - timedelta(hours=self.lookback_hours)).timestamp()
-        for source, root in (("codex", self.codex_root), ("claude", self.claude_root)):
+        sources = (
+            ("codex", self.codex_root, "*.jsonl"),
+            ("claude", self.claude_root, "*.jsonl"),
+            ("kimi", self.kimi_root, "state.json"),
+            ("gemini", self.gemini_root / "tmp", "session-*.jsonl"),
+        )
+        for source, root, pattern in sources:
             if not root.exists():
                 continue
-            for path in root.rglob("*.jsonl"):
+            for path in root.rglob(pattern):
                 try:
                     if path.is_file() and path.stat().st_mtime >= cutoff:
                         yield source, path
@@ -376,7 +471,17 @@ class ActivityCollector:
         cached = self.cache.get(path)
         if cached and cached[0] == key:
             return cached[1]
-        value = parse_codex_session(path, now, self.lookback_hours) if source == "codex" else parse_claude_session(path, now, lookback_hours=self.lookback_hours)
+        if source == "codex":
+            value = parse_codex_session(path, now, self.lookback_hours)
+        elif source == "claude":
+            value = parse_claude_session(path, now, lookback_hours=self.lookback_hours)
+        elif source == "kimi":
+            value = parse_kimi_session(path, now, self.lookback_hours)
+        else:
+            slug = path.parents[1].name
+            projects = json.loads((self.gemini_root / "projects.json").read_text()).get("projects", {})
+            cwd = next((project for project, key in projects.items() if key == slug), None)
+            value = parse_gemini_session(path, cwd, now, self.lookback_hours)
         self.cache[path] = (key, value)
         return value
 

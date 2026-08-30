@@ -21,6 +21,13 @@ def write_jsonl(path, rows):
     os.utime(path, (timestamp, timestamp))
 
 
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
+    timestamp = NOW.timestamp()
+    os.utime(path, (timestamp, timestamp))
+
+
 def codex_rows(session_id, cwd, model="gpt-5.6-sol"):
     return [
         {
@@ -89,7 +96,7 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(result["usage"]["total_tokens"], 1_100_000)
         self.assertEqual(request, {
             "model": "gpt-5.6-sol",
-            "prompt_tokens": 1_000_000,
+            "prompt_tokens": 400_000,
             "completion_tokens": 100_000,
             "cache_read_input_tokens": 500_000,
             "cache_creation_input_tokens": 100_000,
@@ -153,6 +160,7 @@ class LocalActivityTests(unittest.TestCase):
                         "output_tokens": 5_000, "output_tokens_details": {"thinking_tokens": 1_000},
                     }},
                 },
+                {"type": "result", "timestamp": "2026-08-30T14:59:31Z", "total_cost_usd": 1.25},
             ]
             write_jsonl(path, rows)
 
@@ -165,7 +173,8 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(result["usage"]["cache_write_5m_input_tokens"], 10_000)
         self.assertEqual(result["usage"]["cache_write_1h_input_tokens"], 20_000)
         self.assertEqual(result["usage"]["output_tokens"], 15_000)
-        self.assertEqual(request["prompt_tokens"], 380_000)
+        self.assertEqual(result["cost_usd_reported"], 1.25)
+        self.assertEqual(request["prompt_tokens"], 150_000)
         self.assertEqual(request["cache_read_input_tokens"], 200_000)
         self.assertEqual(request["cache_creation_input_tokens"], 30_000)
         self.assertEqual(request["cache_creation_1h_input_tokens"], 20_000)
@@ -187,6 +196,115 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(result["usage"]["input_tokens"], 10)
         self.assertEqual(result["usage"]["output_tokens"], 2)
         self.assertEqual(result["usage"]["total_tokens"], 12)
+
+    def test_claude_reported_cost_sums_results_inside_window(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "claude-cost-window.jsonl")
+            write_jsonl(path, [
+                {"type": "user", "cwd": str(Path(tmp)), "sessionId": "claude-cost", "timestamp": "2026-08-28T12:00:00Z"},
+                {"type": "result", "timestamp": "2026-08-29T12:00:00Z", "total_cost_usd": 9.0},
+                {"type": "result", "timestamp": "2026-08-30T13:00:00Z", "total_cost_usd": 1.0},
+                {"type": "result", "timestamp": "2026-08-30T14:00:00Z", "total_cost_usd": 0.5},
+            ])
+
+            result = activity.parse_claude_session(path, NOW, lookback_hours=24)
+
+        self.assertEqual(result["cost_usd_reported"], 1.5)
+
+    def test_kimi_session_normalizes_turn_usage(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp, "session-1", "state.json")
+            write_json(state, {
+                "id": "kimi-1", "cwd": tmp,
+                "createdAt": int(NOW.timestamp() * 1000) - 60_000,
+                "updatedAt": int(NOW.timestamp() * 1000),
+                "lastTurnReason": "completed",
+            })
+            write_jsonl(state.parent / "agents/main/wire.jsonl", [
+                {"type": "usage.record", "model": "kimi-code/k3", "time": int(NOW.timestamp() * 1000), "usage": {
+                    "inputOther": 100, "inputCacheRead": 200,
+                    "inputCacheCreation": 30, "output": 40,
+                }},
+            ])
+
+            result = activity.parse_kimi_session(state, NOW)
+            request = activity.pricing_request(result)
+
+        self.assertEqual(result["session_id"], "kimi-1")
+        self.assertEqual(result["source"], "kimi")
+        self.assertEqual(result["runtime_provider"], "moonshot")
+        self.assertEqual(result["model"], "kimi-code/k3")
+        self.assertEqual(result["usage"]["total_tokens"], 370)
+        self.assertEqual(request["prompt_tokens"], 100)
+        self.assertEqual(request["completion_tokens"], 40)
+
+    def test_gemini_session_normalizes_usage_and_project_mapping(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "tmp/project-slug/chats/session-1.jsonl")
+            write_jsonl(path, [
+                {"sessionId": "gemini-1", "projectHash": "project-slug", "startTime": "2026-08-30T14:00:00Z"},
+                {"type": "gemini", "timestamp": "2026-08-30T14:01:00Z", "model": "gemini-3.1-flash-lite", "tokens": {
+                    "input": 100, "cached": 40, "output": 20,
+                    "thoughts": 5, "tool": 3, "total": 128,
+                }},
+            ])
+
+            result = activity.parse_gemini_session(path, tmp, NOW)
+            request = activity.pricing_request(result)
+
+        self.assertEqual(result["session_id"], "gemini-1")
+        self.assertEqual(result["source"], "gemini")
+        self.assertEqual(result["runtime_provider"], "google")
+        self.assertEqual(result["cwd"], tmp)
+        self.assertEqual(result["usage"]["input_tokens"], 103)
+        self.assertEqual(result["usage"]["total_tokens"], 128)
+        self.assertEqual(request["prompt_tokens"], 63)
+        self.assertEqual(request["cache_read_input_tokens"], 40)
+        self.assertEqual(request["completion_tokens"], 25)
+
+    def test_summary_keeps_provider_reported_cost_separate_from_rate_card(self):
+        activity = self.module()
+        sessions = [{
+            "status": "idle", "runtime_provider": "anthropic",
+            "model": "claude-opus-5", "effort": "xhigh",
+            "usage": activity.empty_usage(),
+            "cost_usd_estimate": 2.0, "cost_usd_reported": 1.5,
+        }]
+
+        result = activity.summarize(sessions, 24)
+
+        self.assertEqual(result["cost_usd_estimate"], 2.0)
+        self.assertEqual(result["cost_usd_reported_sum"], 1.5)
+        self.assertEqual(result["reported_cost_coverage"], 1.0)
+
+    def test_collector_discovers_kimi_and_gemini_for_registered_project(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, repo = Path(tmp), Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            kimi = root / "kimi/session-1/state.json"
+            write_json(kimi, {"id": "kimi-1", "cwd": str(repo), "createdAt": int(NOW.timestamp() * 1000), "updatedAt": int(NOW.timestamp() * 1000), "lastTurnReason": "completed"})
+            write_jsonl(kimi.parent / "agents/main/wire.jsonl", [{"type": "usage.record", "model": "kimi-code/k3", "time": int(NOW.timestamp() * 1000), "usage": {"inputOther": 1, "output": 1}}])
+            gemini = root / "gemini"
+            write_json(gemini / "projects.json", {"projects": {str(repo): "repo-slug"}})
+            write_jsonl(gemini / "tmp/repo-slug/chats/session-1.jsonl", [
+                {"sessionId": "gemini-1", "startTime": "2026-08-30T14:00:00Z"},
+                {"type": "gemini", "timestamp": "2026-08-30T14:01:00Z", "model": "gemini-3.1-flash-lite", "tokens": {"input": 1, "output": 1, "total": 2}},
+            ])
+            collector = activity.ActivityCollector(
+                codex_root=root / "codex", claude_root=root / "claude",
+                kimi_root=root / "kimi", gemini_root=gemini,
+                pricer=activity.HeadroomPricer(runner=lambda rows: [{"cost_usd": 1} for _ in rows]),
+            )
+
+            result = collector.collect([{"project_id": "p", "name": "Repo", "path": str(repo), "registered_at": "2026-08-30T12:00:00Z"}], NOW)
+
+        self.assertEqual(result["projects"]["p"]["sessions"], 2)
+        self.assertEqual({item["source"] for item in result["projects"]["p"]["recent_sessions"]}, {"kimi", "gemini"})
 
     def test_headroom_pricer_is_batch_cached_and_unknown_model_is_unpriced(self):
         activity = self.module()
@@ -252,6 +370,8 @@ class LocalActivityTests(unittest.TestCase):
             collector = activity.ActivityCollector(
                 codex_root=codex_root,
                 claude_root=claude_root,
+                kimi_root=root / "kimi",
+                gemini_root=root / "gemini",
                 pricer=activity.HeadroomPricer(runner=price),
                 lookback_hours=24,
             )

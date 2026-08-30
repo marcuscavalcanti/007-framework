@@ -9,9 +9,14 @@ All notable changes are documented here.
 - atomic, no-replace task-start records that expose missing terminal receipts;
 - an Evidence Cockpit focused on reliable first-pass outcomes, observation
   coverage, cost per reliable outcome, and an explicit operational-versus-causal boundary.
-- sanitized Codex/Claude activity per project with 24-hour token deltas;
+- sanitized Codex/Claude/Kimi/Gemini activity per project with 24-hour token deltas;
 - Headroom/LiteLLM-equivalent cost estimates with explicit lower bounds and
-  unknown-model coverage.
+  unknown-model coverage;
+- terminal-receipt cost as the KPI authority, with Headroom/RTK/rate-card values
+  kept as optional diagnostics;
+- corrected cache accounting that avoids charging cached input twice;
+- provider-neutral `007 run` lifecycle wrapper for automatic starts and
+  fail-closed terminal receipts.
 
 ## [1.1.0] - 2026-08-30
 

@@ -62,15 +62,20 @@ global local registry lets `007 dashboard` reconcile all projects with the
 aggregate view. Adopt causal replay only for a concrete mechanism whose failure
 matters.
 
+Hosts may replace the two manual lifecycle calls with `007 run`, which wraps an
+arbitrary command and requires its adapter to emit the same normalized receipt.
+The wrapper is provider-neutral and does not store raw model output.
+
 The dashboard is observational: it measures accepted outcomes, repair pressure,
 touch-rate, escapes, telemetry, and cost. It does not turn those operational
 signals into causal proof. Release-level causal evidence remains a separate,
 frozen OLD×NEW experiment.
 
-Before receipts exist, a separate local-activity lane can already show Codex and
-Claude sessions, served routes, 24-hour token deltas, and Headroom/LiteLLM cost
-estimates. This is operational visibility only; it never creates an accepted or
-reliable outcome.
+Before receipts exist, a separate local-activity lane can already show Codex,
+Claude, Kimi, and Gemini sessions, served routes, and 24-hour token deltas.
+Provider-reported terminal cost is shown when available; external rate-card
+estimates remain optional diagnostics. This is operational visibility only; it
+never creates an accepted or reliable outcome.
 
 The start/receipt pair makes missing terminal outcomes visible. Work performed
 without `007 begin` remains outside the observable denominator and is shown as

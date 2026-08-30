@@ -235,6 +235,82 @@ class DashboardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cost_source"):
             cli.validate_receipt({**base, "cost_source": "provider_reported"})
 
+    def test_run_wraps_command_with_one_observed_task_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "value['uncertainty'] = os.environ['FRAMEWORK_007_REPO']\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                "print('adapter-ok')\n"
+            )
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "wrapped-001",
+                "--receipt", "task.receipt.json", "--",
+                sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json"),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("adapter-ok", result.stdout)
+            self.assertTrue((repo / ".007/tasks/wrapped-001.task.json").is_file())
+            stored = json.loads((repo / ".007/receipts/wrapped-001.receipt.json").read_text())
+            self.assertEqual(stored["task_id"], "wrapped-001")
+            self.assertEqual(stored["uncertainty"], str(repo.resolve()))
+
+    def test_run_leaves_start_open_when_command_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "wrapped-failed",
+                "--receipt", "task.receipt.json", "--",
+                sys.executable, "-c", "raise SystemExit(7)",
+            )
+
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertTrue((repo / ".007/tasks/wrapped-failed.task.json").is_file())
+            self.assertFalse((repo / ".007/receipts/wrapped-failed.receipt.json").exists())
+
+    def test_run_rejects_success_without_terminal_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "wrapped-missing",
+                "--receipt", "task.receipt.json", "--", sys.executable, "-c", "pass",
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("did not produce terminal receipt", result.stderr)
+            self.assertTrue((repo / ".007/tasks/wrapped-missing.task.json").is_file())
+            self.assertFalse((repo / ".007/receipts/wrapped-missing.receipt.json").exists())
+
     def test_unregister_removes_only_the_registry_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")
@@ -755,6 +831,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot["aggregate"]["accepted"], 0)
         self.assertEqual(snapshot["aggregate"]["evidence"]["status"], "instrumentation-inactive")
         self.assertEqual(snapshot["activity_errors"], [])
+        self.assertEqual(snapshot["measurement_boundary"]["cost_authority"], "terminal-receipt")
 
     def test_dashboard_shell_is_semantic_and_self_contained(self):
         class ShellParser(HTMLParser):
@@ -793,10 +870,13 @@ class DashboardTests(unittest.TestCase):
             'id="funnel-reliable"', 'id="runtime-activity-panel"',
             'id="activity-sessions"', 'id="activity-active"',
             'id="activity-tokens"', 'id="activity-cost"',
+            'id="activity-equivalent-cost"',
         ):
             self.assertIn(required_id, shell)
         self.assertIn("O 007 está produzindo mais mudanças confiáveis por dólar", shell)
         self.assertIn("Atividade local não é outcome verificado", shell)
+        self.assertIn("Codex · Claude · Kimi · Gemini", shell)
+        self.assertIn("USD terminal observado", shell)
 
 
 if __name__ == "__main__":

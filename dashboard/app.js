@@ -6,7 +6,8 @@ const percent = (value, digits = 0) => value == null ? "N/D" : `${(value * 100).
 const decimal = (value, digits = 1) => value == null ? "N/D" : Number(value).toFixed(digits);
 const money = (value) => value == null ? "N/D" : new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 3 : 2 }).format(value);
 const integer = (value) => new Intl.NumberFormat("pt-BR", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
-const observedMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/D";
+const equivalentMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/D";
+const terminalMoney = (activity = {}) => activity.reported_cost_sessions ? `${activity.reported_cost_coverage < 1 ? "≥ " : ""}${money(activity.cost_usd_reported_sum)} · ${percent(activity.reported_cost_coverage)}` : "N/D";
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -97,7 +98,8 @@ function renderRuntimeActivity(activity = {}) {
   setText("activity-sessions", activity.sessions || 0);
   setText("activity-active", activity.active_sessions || 0);
   setText("activity-tokens", integer(activity.tokens_total));
-  setText("activity-cost", observedMoney(activity));
+  setText("activity-cost", terminalMoney(activity));
+  setText("activity-equivalent-cost", `Estimativa opcional: ${equivalentMoney(activity)}`);
   byId("runtime-activity-panel").classList.toggle("is-active", (activity.sessions || 0) > 0);
 }
 
@@ -162,7 +164,7 @@ function renderProjects() {
       statusLabel(projectStatus(project)),
       activity.sessions || 0,
       integer(activity.tokens_total),
-      observedMoney(activity),
+      terminalMoney(activity),
       percent(metrics.reliable_first_pass_rate),
       money(metrics.cost_usd_per_reliable),
       percent(metrics.observation_coverage),
@@ -221,7 +223,7 @@ function renderRoutes(metrics) {
       element("strong", "", verified.length ? `${route.accepted}/${route.tasks}` : `${route.sessions}`),
       element("strong", "", money(verified.length ? route.cost_usd_known_sum : route.cost_usd_estimate)),
       element("span", "", verified.length ? "aceitas" : `${integer(route.tokens)} tokens`),
-      element("span", "", "custo")
+      element("span", "", verified.length ? "custo terminal" : "API-equiv. opcional")
     );
     row.append(main, values);
     list.append(row);
@@ -234,7 +236,7 @@ function diagnostics(metrics, project) {
   if (metrics.active_tasks) values.push(`${metrics.active_tasks} tarefa(s) iniciada(s) ainda sem receipt terminal.`);
   if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} receipt(s) legado(s) não têm start correspondente.`);
   if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo ${percent(metrics.cost_coverage)}; o KPI exige 100% dos receipts.`);
-  if (metrics.activity?.sessions && metrics.activity.pricing_coverage !== 1) values.push(`Preço Headroom/LiteLLM cobre ${percent(metrics.activity.pricing_coverage)} das sessões locais; o restante permanece N/D.`);
+  if (metrics.activity?.sessions && metrics.activity.reported_cost_coverage !== 1) values.push(`Custo terminal cobre ${percent(metrics.activity.reported_cost_coverage)} das sessões locais; estimativas externas não fecham esse gate.`);
   if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) aguardam maturação de sete dias.`);
   const touch = metrics.touch?.["30"];
   if (!touch || touch.rate == null) values.push(`Touch 30d: ${touch?.reason || "N/D"}.`);

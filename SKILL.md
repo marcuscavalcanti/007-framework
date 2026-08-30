@@ -34,6 +34,8 @@ Never trade a likely correction round for a cheaper first attempt.
 5. Use a fresh, scoped session; persist state in files, not conversation history.
 6. In an initialized project, run `007 begin --repo . --task-id <stable-id>`
    before implementation so an omitted terminal receipt remains visible.
+   Hosts may use `007 run --receipt <file> -- <command>` to automate this
+   lifecycle when the command emits the normalized receipt.
 
 Reuse ladder: need at all → existing code → standard library → platform feature
 → installed dependency → one line → minimum new code.
@@ -126,6 +128,7 @@ harness was wrong.
 007 init --repo .
 007 begin --repo . --task-id <stable-id>
 007 record --repo . --file task.receipt.json
+007 run --repo . --task-id <stable-id> --receipt task.receipt.json -- <command>
 007 dashboard
 python3 scripts/harness_report.py --receipt-dir .007/receipts --format json
 python3 scripts/touch_rate.py --repo . --days 30

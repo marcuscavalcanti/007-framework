@@ -53,14 +53,14 @@
         </section>
 
         <section class="panel runtime-activity-panel" id="runtime-activity-panel" aria-labelledby="runtime-activity-title">
-          <div class="panel-heading"><div><p class="panel-kicker">Pulso operacional · últimas 24h</p><h2 id="runtime-activity-title">Atividade local observada</h2></div><span class="live-tag"><i></i> Codex + Claude</span></div>
+          <div class="panel-heading"><div><p class="panel-kicker">Pulso operacional · últimas 24h</p><h2 id="runtime-activity-title">Atividade local observada</h2></div><span class="live-tag"><i></i> Codex · Claude · Kimi · Gemini</span></div>
           <div class="runtime-activity-grid">
             <article><span>Sessões</span><strong id="activity-sessions">0</strong></article>
             <article><span>Ativas agora</span><strong id="activity-active">0</strong></article>
             <article><span>Tokens</span><strong id="activity-tokens">0</strong></article>
-            <article><span>Custo estimado</span><strong id="activity-cost">N/D</strong></article>
+            <article><span>USD terminal observado</span><strong id="activity-cost">N/D</strong><small id="activity-equivalent-cost">Estimativa opcional: N/D</small></article>
           </div>
-          <p class="measurement-note">Atividade local não é outcome verificado. Tokens e USD vêm dos logs locais; o custo usa a mesma precificação Headroom/LiteLLM e fica N/D quando o modelo não tem preço.</p>
+          <p class="measurement-note">Atividade local não é outcome verificado. O KPI usa o custo capturado no receipt terminal; Headroom, RTK ou outro rate card são apenas diagnósticos opcionais. Ausência permanece N/D, nunca zero.</p>
         </section>
 
         <section class="metric-grid decision-metrics" aria-label="Indicadores que decidem o objetivo">
@@ -82,7 +82,7 @@
           </div>
         </section>
 
-        <section class="panel table-panel" aria-labelledby="projects-title"><div class="panel-heading"><div><p class="panel-kicker">Mesmo contrato em todo lugar</p><h2 id="projects-title">Projetos</h2></div><span class="sample-pill" id="projects-summary">0 registrados</span></div><div class="table-scroll"><table><thead><tr><th>Projeto</th><th>Estado</th><th>Sessões 24h</th><th>Tokens 24h</th><th>Custo 24h</th><th>Reliable 7d</th><th>Custo / confiável</th><th>Cobertura</th></tr></thead><tbody id="project-table-body"></tbody></table></div></section>
+        <section class="panel table-panel" aria-labelledby="projects-title"><div class="panel-heading"><div><p class="panel-kicker">Mesmo contrato em todo lugar</p><h2 id="projects-title">Projetos</h2></div><span class="sample-pill" id="projects-summary">0 registrados</span></div><div class="table-scroll"><table><thead><tr><th>Projeto</th><th>Estado</th><th>Sessões 24h</th><th>Tokens 24h</th><th>USD terminal 24h</th><th>Reliable 7d</th><th>Custo / confiável</th><th>Cobertura</th></tr></thead><tbody id="project-table-body"></tbody></table></div></section>
 
         <section class="analytics-grid lower-grid">
           <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Ledger operacional</p><h2>Resultados recentes</h2></div><span class="live-tag"><i></i> near real-time</span></div><div class="activity-list" id="activity-list"></div></article>

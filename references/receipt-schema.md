@@ -48,6 +48,13 @@ foreign receipts remain visible as unaccounted in the dashboard. Observation
 coverage uses task starts from `007 begin` as its denominator; work that never
 calls `begin` remains explicitly outside the dependency-free observer.
 
+Capture cost at the last execution boundary: the host or provider adapter reads
+the terminal response, records the actually served route, and writes the
+normalized receipt. Prefer provider-reported USD; otherwise use an explicit
+rate-card, subscription-allocation, or local-compute source. Headroom, RTK, and
+provider CLIs are replaceable adapters, not framework dependencies. An optional
+activity estimate never substitutes for the terminal receipt.
+
 Use `unmeasured`, `pending`, or `N/D` explicitly for telemetry the host cannot
 expose. Never infer model, effort, token usage, cost, or human rework from a
 conversation summary. Persist a receipt atomically with:
@@ -55,3 +62,14 @@ conversation summary. Persist a receipt atomically with:
 ```bash
 007 record --repo . --file task.receipt.json
 ```
+
+Or wrap an arbitrary provider CLI without coupling the core to that provider:
+
+```bash
+007 run --repo . --task-id task-123 --receipt task.receipt.json -- <command>
+```
+
+The command reads `FRAMEWORK_007_TASK_ID`, `FRAMEWORK_007_RECEIPT_PATH`, and
+`FRAMEWORK_007_REPO`, then writes the normalized receipt. `007 run` preserves
+the command's non-zero exit status and leaves a start open when no valid,
+task-matched terminal receipt exists. Raw transcripts are not retained.

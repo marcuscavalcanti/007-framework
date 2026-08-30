@@ -287,6 +287,7 @@ button { color: inherit; }
 .runtime-activity-grid article { padding: 14px 15px; border: 1px solid var(--line); border-radius: 11px; background: rgba(4,13,25,.52); }
 .runtime-activity-grid span { display: block; color: var(--muted); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
 .runtime-activity-grid strong { display: block; margin-top: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 20px; font-weight: 620; }
+.runtime-activity-grid small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 .measurement-note { margin: 13px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
 
 .funnel-panel { padding: 22px; }

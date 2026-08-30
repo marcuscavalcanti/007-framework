@@ -547,6 +547,7 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
         "activity_errors": activity.get("errors", []),
         "measurement_boundary": {
             "cost_denominator": "observed-terminal-receipts",
+            "cost_authority": "terminal-receipt",
             "label": "A cobertura operacional começa em 007 begin e termina em 007 record. Execuções anteriores ou externas a esse ciclo permanecem fora do denominador.",
         },
         "causal_evidence": {

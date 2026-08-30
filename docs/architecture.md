@@ -29,8 +29,8 @@ scope and route ──► isolated execution ──► repository-native gates
   persist task starts and terminal receipts, and launch the local dashboard.
 - `scripts/dashboard.py` and `dashboard/`: aggregate registered projects and
   serve a loopback-only, dependency-free control room.
-- `scripts/local_activity.py`: read sanitized Codex/Claude metadata and token
-  deltas, reconcile Git worktrees, and cache unchanged logs.
+- `scripts/local_activity.py`: normalize sanitized Codex, Claude, Kimi, and
+  Gemini metadata/token deltas, reconcile Git worktrees, and cache unchanged logs.
 - `scripts/headroom_pricing.py`: optional local worker using Headroom's LiteLLM
   model resolution and per-token pricing; it receives no transcript content.
 - `tests/`: protects package identity, public boundaries, and script behavior.
@@ -70,12 +70,17 @@ tokens, and wall time.
 6. **Cost boundary:** every new terminal receipt needs numeric cost, accounting
    source, and final/provisional state. Prices are supplied by the host or a
    provider adapter; the core contains no provider-specific price table.
-   Separately, observed runtime activity may show a Headroom/LiteLLM estimate or
-   lower bound. That estimate is not copied into an outcome receipt.
+   The host captures cost at the terminal execution boundary and normalizes it
+   into the receipt. Headroom, RTK, provider CLIs, rate cards, subscriptions,
+   and local compute are replaceable sources. Observed runtime activity may show
+   a diagnostic estimate, but it never substitutes for the terminal receipt.
 7. **Observation boundary:** local logs establish activity only. `007 begin`
    establishes the outcome denominator and
    `007 record` closes it. Work that bypasses `begin` remains explicitly outside
    what the dependency-free core can observe.
+8. **Execution boundary:** `007 run` may automate the lifecycle around any CLI,
+   but the adapter at the last execution boundary remains responsible for the
+   normalized receipt. Exit code alone never proves quality or accounting.
 
 ## Extension points
 
