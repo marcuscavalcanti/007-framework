@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Build safe multi-project snapshots for the 007 Framework dashboard."""
+"""Build and serve safe multi-project snapshots for 007 Framework."""
 
+import json
 import math
+import threading
+import time
 from collections import Counter
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import framework_cli
 import harness_report
@@ -11,6 +17,7 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/D", "unknown", None}
+VERSION = "1.1.0"
 RAW_METRICS = (
     "tasks", "accepted", "blocked", "no_op",
     "first_pass_yes", "first_pass_known",
@@ -303,3 +310,131 @@ def aggregate_projects(projects):
     result["invalid_receipts"] = invalid
     result["evidence"] = evidence_state(result, touch, invalid)
     return result
+
+
+class TouchCache:
+    def __init__(self, sensor=touch_rate.calculate, ttl=60, clock=time.monotonic):
+        self.sensor = sensor
+        self.ttl = ttl
+        self.clock = clock
+        self.values = {}
+        self.lock = threading.Lock()
+
+    def __call__(self, repo, days):
+        key = (str(Path(repo).resolve()), days)
+        with self.lock:
+            cached = self.values.get(key)
+            now = self.clock()
+            if cached and now - cached[0] < self.ttl:
+                return cached[1]
+            value = self.sensor(repo, days)
+            self.values[key] = (now, value)
+            return value
+
+
+def registry_entries(path):
+    path = Path(path).expanduser()
+    if not path.exists():
+        return [], []
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return [], [{"location": str(path), "error": f"invalid registry: {exc}"}]
+    if not isinstance(value, dict) or value.get("schema") != framework_cli.REGISTRY_SCHEMA or not isinstance(value.get("projects"), list):
+        return [], [{"location": str(path), "error": "invalid registry schema"}]
+    required = ("project_id", "name", "path", "registered_at")
+    entries, errors = [], []
+    for index, item in enumerate(value["projects"]):
+        if not isinstance(item, dict) or not all(isinstance(item.get(key), str) and item[key] for key in required):
+            errors.append({"location": f"projects[{index}]", "error": "invalid registry entry"})
+            continue
+        entries.append({key: item[key] for key in required})
+    return entries, errors
+
+
+def build_snapshot(registry, touch_provider=touch_rate.calculate):
+    entries, registry_errors = registry_entries(registry)
+    projects = [project_snapshot(entry, touch_provider) for entry in entries]
+    return {
+        "schema": "007-framework/dashboard-snapshot/v1",
+        "framework_version": VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "aggregate": aggregate_projects(projects),
+        "projects": projects,
+        "registry_errors": registry_errors,
+        "causal_evidence": {
+            "status": "narrow-positive",
+            "claim": "One frozen mechanism test observed OLD 0/3 versus NEW 3/3.",
+            "boundary": "Operational project metrics are observational and do not prove causality.",
+        },
+    }
+
+
+def handler_class(registry, static_dir, touch_provider):
+    static_dir = Path(static_dir)
+    assets = {
+        "/": (static_dir / "index.html", "text/html; charset=utf-8"),
+        "/styles.css": (static_dir / "styles.css", "text/css; charset=utf-8"),
+        "/app.js": (static_dir / "app.js", "text/javascript; charset=utf-8"),
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "007Dashboard/1.1"
+
+        def send_common_headers(self, content_type, length, cache="no-store"):
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(length))
+            self.send_header("Cache-Control", cache)
+            self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+
+        def json_response(self, status, value):
+            payload = json.dumps(value, separators=(",", ":")).encode()
+            self.send_response(status)
+            self.send_common_headers("application/json; charset=utf-8", len(payload))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            request = urlsplit(self.path)
+            if request.query or request.fragment:
+                self.json_response(400, {"error": "query parameters are not supported"})
+                return
+            if request.path == "/api/health":
+                self.json_response(200, {"status": "ok", "version": VERSION})
+                return
+            if request.path == "/api/snapshot":
+                try:
+                    self.json_response(200, build_snapshot(registry, touch_provider))
+                except Exception:
+                    self.json_response(500, {"error": "snapshot unavailable"})
+                return
+            asset = assets.get(request.path)
+            if not asset:
+                self.json_response(404, {"error": "not found"})
+                return
+            try:
+                payload = asset[0].read_bytes()
+            except OSError:
+                self.json_response(404, {"error": "asset not found"})
+                return
+            self.send_response(200)
+            self.send_common_headers(asset[1], len(payload), "public, max-age=60")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, _format, *_args):
+            pass
+
+    return Handler
+
+
+def create_server(host, port, registry, static_dir):
+    cache = TouchCache()
+    server = ThreadingHTTPServer(
+        (host, port), handler_class(Path(registry), Path(static_dir), cache)
+    )
+    server.daemon_threads = True
+    return server

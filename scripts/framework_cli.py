@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -126,7 +127,30 @@ def parser():
     init = commands.add_parser("init", help="register a Git project for 007 telemetry")
     init.add_argument("--repo", default=".")
     init.add_argument("--registry", type=Path, default=default_registry_path())
+    dashboard = commands.add_parser("dashboard", help="start the local multi-project dashboard")
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=7007)
+    dashboard.add_argument("--registry", type=Path, default=default_registry_path())
+    dashboard.add_argument("--no-open", action="store_true")
     return result
+
+
+def run_dashboard(host, port, registry, open_browser=True):
+    import dashboard
+
+    static_dir = Path(__file__).resolve().parents[1] / "dashboard"
+    server = dashboard.create_server(host, port, registry, static_dir)
+    url = f"http://{host}:{server.server_port}"
+    print(f"007 dashboard: {url}")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 def main(argv=None):
@@ -137,6 +161,8 @@ def main(argv=None):
             print(f"registered {entry['name']} ({entry['path']})")
             print(f"receipts: {Path(entry['path']) / '.007' / 'receipts'}")
             return 0
+        if args.command == "dashboard":
+            return run_dashboard(args.host, args.port, args.registry, not args.no_open)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

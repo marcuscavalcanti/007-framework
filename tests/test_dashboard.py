@@ -4,8 +4,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -231,6 +234,97 @@ class DashboardTests(unittest.TestCase):
             self.assertIsNone(result["rate"])
             self.assertEqual(result["agent_commits"], 0)
             self.assertEqual(result["reason"], "no attributable agent commits")
+
+    def test_snapshot_keeps_unavailable_projects_visible(self):
+        dashboard = self.module("dashboard")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "available")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            registered = self.run_cli(
+                "init", "--repo", str(repo), "--registry", str(registry)
+            )
+            self.assertEqual(registered.returncode, 0, registered.stderr)
+            (repo / ".007/receipts/one.receipt.json").write_text(json.dumps({
+                "schema": "007-framework/receipt/v1",
+                "task_id": "one", "status": "accepted", "first_pass": "yes",
+                "repair_rounds": 0, "escape_7d": "pending",
+                "model": "unmeasured", "effort": "unmeasured",
+                "tokens": "unmeasured", "wall_s": "unmeasured",
+                "delta": {"files": 1, "added": 2, "deleted": 0},
+            }))
+            value = json.loads(registry.read_text())
+            value["projects"].append({
+                "project_id": "missing", "name": "Missing",
+                "path": str(Path(tmp, "gone")),
+                "registered_at": "2026-08-30T00:00:00Z",
+            })
+            registry.write_text(json.dumps(value))
+            no_touch = lambda _repo, days: {
+                "window_days": days, "agent_commits": 0, "human_commits": 0,
+                "agent_lines_added": 0, "surviving_lines": 0,
+                "rate": None, "reason": "no attribution",
+            }
+
+            snapshot = dashboard.build_snapshot(registry, touch_provider=no_touch)
+
+            self.assertEqual(snapshot["aggregate"]["projects_total"], 2)
+            self.assertEqual(snapshot["aggregate"]["projects_available"], 1)
+            self.assertEqual(snapshot["aggregate"]["tasks"], 1)
+            missing = next(item for item in snapshot["projects"] if item["project_id"] == "missing")
+            self.assertFalse(missing["available"])
+
+    def test_touch_cache_reuses_sensor_until_ttl_expires(self):
+        dashboard = self.module("dashboard")
+        calls = []
+        clock = [100.0]
+
+        def sensor(repo, days):
+            calls.append((str(repo), days))
+            return {"window_days": days, "rate": 1.0}
+
+        cache = dashboard.TouchCache(sensor, ttl=60, clock=lambda: clock[0])
+        first = cache(Path("/repo"), 30)
+        clock[0] = 159.0
+        second = cache(Path("/repo"), 30)
+        clock[0] = 161.0
+        third = cache(Path("/repo"), 30)
+
+        self.assertIs(first, second)
+        self.assertIsNot(second, third)
+        self.assertEqual(len(calls), 2)
+
+    def test_server_exposes_only_allowlisted_routes(self):
+        dashboard = self.module("dashboard")
+        with tempfile.TemporaryDirectory() as tmp:
+            static = Path(tmp, "static")
+            static.mkdir()
+            (static / "index.html").write_text("<!doctype html><title>007</title>")
+            (static / "styles.css").write_text("body{}")
+            (static / "app.js").write_text("'use strict';")
+            registry = Path(tmp, "projects.json")
+            server = dashboard.create_server("127.0.0.1", 0, registry, static)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f"http://127.0.0.1:{server.server_port}"
+                with urlopen(base + "/api/health") as response:
+                    self.assertEqual(json.load(response)["status"], "ok")
+                with urlopen(base + "/api/snapshot") as response:
+                    self.assertEqual(json.load(response)["aggregate"]["projects_total"], 0)
+                with self.assertRaises(HTTPError) as denied:
+                    urlopen(base + "/api/snapshot?path=/etc")
+                self.assertEqual(denied.exception.code, 400)
+                denied.exception.close()
+                with self.assertRaises(HTTPError) as missing:
+                    urlopen(base + "/../SKILL.md")
+                self.assertEqual(missing.exception.code, 404)
+                missing.exception.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
 
 if __name__ == "__main__":
