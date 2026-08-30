@@ -140,7 +140,11 @@ def metrics_from_receipts(receipts):
             escape_known += 1
         elif escape in (False, "no"):
             escape_known += 1
-        for served, legacy in (("served_model", "model"), ("served_effort", "effort")):
+        for served, legacy in (
+            ("served_provider", "provider"),
+            ("served_model", "model"),
+            ("served_effort", "effort"),
+        ):
             if is_known_label(item.get(served) or item.get(legacy)):
                 telemetry_known += 1
         telemetry_known += int(is_number(item.get("tokens")))
@@ -179,7 +183,7 @@ def metrics_from_receipts(receipts):
         "escape_7d_yes": escape_yes,
         "escape_7d_known": escape_known,
         "telemetry_known": telemetry_known,
-        "telemetry_possible": tasks * 4,
+        "telemetry_possible": tasks * 5,
         "delta_files": delta_totals["files"],
         "delta_added": delta_totals["added"],
         "delta_deleted": delta_totals["deleted"],
@@ -210,7 +214,7 @@ def metrics_from_receipts(receipts):
         ),
         "escape_7d_rate": ratio(escape_yes, escape_known),
         "escape_7d_pending_tasks": tasks - escape_known,
-        "telemetry_completeness": ratio(telemetry_known, tasks * 4),
+        "telemetry_completeness": ratio(telemetry_known, tasks * 5),
     })
     return result
 
@@ -227,10 +231,17 @@ def unknown_touch(days, reason):
     }
 
 
-def evidence_state(metrics, touch, invalid_receipts=0):
-    reasons = []
+def evidence_state(metrics, touch, invalid_receipts=0, unavailable_projects=0, registry_errors=0):
+    data_failures = []
     if invalid_receipts:
-        return {"status": "needs-attention", "reasons": [f"{invalid_receipts} invalid receipt(s)"]}
+        data_failures.append(f"{invalid_receipts} invalid receipt(s)")
+    if unavailable_projects:
+        data_failures.append(f"{unavailable_projects} unavailable project(s)")
+    if registry_errors:
+        data_failures.append(f"{registry_errors} registry error(s)")
+    if data_failures:
+        return {"status": "needs-attention", "reasons": data_failures}
+    reasons = []
     if metrics["accepted"] < 5:
         reasons.append("fewer than 5 accepted tasks")
     required = {
@@ -317,24 +328,32 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
 def aggregate_touch(projects, days):
     rows = [
         project.get("touch", {}).get(str(days), {})
-        for project in projects if project.get("available")
+        for project in projects
     ]
-    known = [row for row in rows if row.get("rate") is not None]
+    known = [
+        row for project, row in zip(projects, rows)
+        if project.get("available") and row.get("rate") is not None
+    ]
     added = sum(row.get("agent_lines_added", 0) for row in known)
     surviving = sum(row.get("surviving_lines", 0) for row in known)
-    rate = (100 * (1 - surviving / added)) if added else (0.0 if known else None)
+    missing = len(rows) - len(known)
+    rate = None if missing else ((100 * (1 - surviving / added)) if added else (0.0 if known else None))
     return {
         "window_days": days,
         "agent_lines_added": added,
         "surviving_lines": surviving,
         "rate": rate,
         "known_projects": len(known),
-        "missing_projects": len(rows) - len(known),
-        "reason": None if known else "no project has attributable agent commits",
+        "missing_projects": missing,
+        "reason": (
+            f"touch unavailable for {missing} of {len(rows)} projects" if missing
+            else None if known
+            else "no registered projects"
+        ),
     }
 
 
-def aggregate_projects(projects):
+def aggregate_projects(projects, registry_error_count=0):
     available = [project for project in projects if project.get("available")]
     result = {key: 0 for key in RAW_METRICS}
     for project in available:
@@ -389,7 +408,9 @@ def aggregate_projects(projects):
     result["touch"] = touch
     invalid = sum(len(project.get("invalid_receipts", [])) for project in available)
     result["invalid_receipts"] = invalid
-    result["evidence"] = evidence_state(result, touch, invalid)
+    result["evidence"] = evidence_state(
+        result, touch, invalid, result["projects_unavailable"], registry_error_count
+    )
     return result
 
 
@@ -440,9 +461,13 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate):
         "schema": "007-framework/dashboard-snapshot/v1",
         "framework_version": VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "aggregate": aggregate_projects(projects),
+        "aggregate": aggregate_projects(projects, len(registry_errors)),
         "projects": projects,
         "registry_errors": registry_errors,
+        "measurement_boundary": {
+            "cost_denominator": "recorded-receipts",
+            "label": "Cobertura calculada apenas sobre receipts observados; execuções omitidas pelo host não são detectáveis.",
+        },
         "causal_evidence": {
             "status": "narrow-positive",
             "claim": "One frozen mechanism test observed OLD 0/3 versus NEW 3/3.",

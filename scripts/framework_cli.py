@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -175,9 +176,18 @@ def validate_receipt(value):
     if value.get("status") not in ("accepted", "blocked", "no-op"):
         raise ValueError("status must be accepted, blocked, or no-op")
     cost = value.get("cost_usd")
-    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+    if (
+        isinstance(cost, bool)
+        or not isinstance(cost, (int, float))
+        or not math.isfinite(cost)
+        or cost < 0
+    ):
         raise ValueError("cost_usd must be a non-negative measured number")
-    if not isinstance(value.get("cost_source"), str) or not value["cost_source"].strip():
+    if (
+        not isinstance(value.get("cost_source"), str)
+        or not value["cost_source"].strip()
+        or value["cost_source"].strip().lower() in {"unaccounted", "unmeasured", "unknown", "n/d"}
+    ):
         raise ValueError("cost_source must identify the accounting source")
     if value.get("cost_status") not in ("final", "provisional"):
         raise ValueError("cost_status must be final or provisional")

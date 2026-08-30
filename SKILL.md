@@ -91,9 +91,11 @@ uncertainty: <remaining evidence gap or none>
 
 Missing telemetry stays `unmeasured` or `N/D`; never reconstruct it. Cost is a
 hard KPI: use the exact served route and an explicit accounting source. Never
-record missing cost as zero. In an initialized project, persist every terminal
-outcome with `007 record`; the command rejects unaccounted cost and duplicate
-task IDs. Schema:
+record missing cost as zero. In an initialized project, the operating contract
+requires every terminal outcome to call `007 record`; the command rejects
+unaccounted cost and duplicate task IDs. The dependency-free core cannot detect
+a host that omits the command, so dashboard coverage is explicitly limited to
+observed receipts. Schema:
 [`references/receipt-schema.md`](references/receipt-schema.md).
 
 ## Learn without Goodharting

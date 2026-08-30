@@ -35,13 +35,16 @@ rework state, requested and served route, telemetry state, cost, and uncertainty
 Provider, model, and effort are open strings: the framework does not maintain a
 provider allowlist.
 
-`cost_usd` is mandatory and numeric for every terminal outcome. `cost_source`
+`cost_usd` is mandatory, finite, and numeric for every recorded terminal
+outcome. `cost_source`
 names how it was obtained, for example `provider-reported`,
 `rate-card-estimate`, `subscription-allocated`, or `local-compute`.
 `cost_status` is `final` or `provisional`. A provider adapter may calculate cost
 from token classes and the exact served model, but the core never guesses a
 price table. Missing cost is not zero: `007 record` rejects it, and legacy or
-foreign receipts remain visible as unaccounted in the dashboard.
+foreign receipts remain visible as unaccounted in the dashboard. Coverage uses
+recorded receipts as its denominator; a host that never calls `007 record` is
+not detectable by the dependency-free core.
 
 Use `unmeasured`, `pending`, or `N/D` explicitly for telemetry the host cannot
 expose. Never infer model, effort, token usage, cost, or human rework from a

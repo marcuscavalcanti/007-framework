@@ -89,15 +89,16 @@ cost: usd=0.42; source=provider-reported; status=final
 uncertainty: runtime not exercised
 ```
 
-For initialized projects, every terminal task is persisted through the
-fail-closed receipt command. Start from
+For initialized projects, the operating contract requires the agent host to
+persist every terminal task through the fail-closed receipt command. Start from
 [`examples/task.receipt.example.json`](examples/task.receipt.example.json):
 
 ```bash
 007 record --repo . --file task.receipt.json
 ```
 
-The command rejects missing cost, malformed task IDs, and duplicate receipts.
+The command rejects missing, non-finite, or explicitly unaccounted cost,
+malformed task IDs, and duplicate receipts.
 Provider/model/effort are open values, with requested and actually served routes
 kept separately. Cost may be provider-reported, estimated by an external rate
 card, allocated from a subscription, or derived from local compute; its source
@@ -113,6 +114,12 @@ The loopback dashboard opens at `http://127.0.0.1:7007`, discovers all projects
 registered by `007 init`, updates every two seconds, and keeps aggregate totals
 mathematically reconcilable with the project views. It has no login because it
 binds locally; do not expose it on a public interface.
+
+Cost coverage is the percentage of **recorded receipts** with valid accounting.
+The dependency-free core cannot observe a model run whose host never invoked
+`007 record`; the dashboard exposes this boundary instead of claiming total
+execution coverage. Host adapters can close that gap by invoking the command on
+every terminal outcome.
 
 ## Measure
 

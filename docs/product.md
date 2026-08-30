@@ -53,8 +53,9 @@ verification, and learning as one measured loop:
 ## Adoption path
 
 Install the skill and `007` command, run `007 init` once in each Git project,
-then use the framework on scoped work. Every terminal task is recorded in the
-project-local `.007/receipts` directory with mandatory cost accounting. The
+then use the framework on scoped work. The operating contract requires every
+terminal task to be recorded in the project-local `.007/receipts` directory
+with mandatory cost accounting. The
 global local registry lets `007 dashboard` reconcile all projects with the
 aggregate view. Adopt causal replay only for a concrete mechanism whose failure
 matters.
@@ -63,3 +64,8 @@ The dashboard is observational: it measures accepted outcomes, repair pressure,
 touch-rate, escapes, telemetry, and cost. It does not turn those operational
 signals into causal proof. Release-level causal evidence remains a separate,
 frozen OLD×NEW experiment.
+
+Receipt completeness is a host responsibility in V1.1: `007 record` validates
+what it receives, but the core cannot detect an execution that was never
+reported. Consequently, dashboard cost coverage always means coverage among
+recorded receipts.

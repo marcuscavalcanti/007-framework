@@ -52,6 +52,7 @@ function renderHeader(metrics, project) {
     ? "Resultados observados neste projeto com as mesmas definições do agregado."
     : "O framework está produzindo mudanças aceitas que sobrevivem sem reparo?");
   setText("scope-sample", `${metrics.tasks || 0} tarefas · ${metrics.accepted || 0} aceitas`);
+  setText("scope-boundary", state.snapshot.measurement_boundary.label);
 
   const verdict = metrics.evidence || { status: "collecting", reasons: ["sem evidência"] };
   const card = byId("verdict-card");
@@ -312,6 +313,7 @@ function diagnostics(metrics, project) {
   if (metrics.cost_provisional_tasks) values.push(`${metrics.cost_provisional_tasks} custo(s) provisório(s) aguardando reconciliação`);
   if (metrics.tokens_missing_tasks) values.push(`${metrics.tokens_missing_tasks} tarefa(s) sem tokens medidos`);
   if (metrics.first_pass_unknown_tasks) values.push(`${metrics.first_pass_unknown_tasks} tarefa(s) sem first-pass conhecido`);
+  values.push(state.snapshot.measurement_boundary.label);
   const touch = metrics.touch && metrics.touch["30"];
   if (touch && touch.rate == null && touch.reason) values.push(`Touch 30d: ${touch.reason}`);
   return [...new Set(values)];

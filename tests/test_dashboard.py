@@ -170,6 +170,14 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("cost_usd", result.stderr)
             self.assertFalse((repo / ".007/receipts/task-no-cost.receipt.json").exists())
 
+    def test_record_rejects_non_finite_or_unaccounted_cost(self):
+        cli = self.module("framework_cli")
+        base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        with self.assertRaisesRegex(ValueError, "cost_usd"):
+            cli.validate_receipt({**base, "cost_usd": float("nan")})
+        with self.assertRaisesRegex(ValueError, "cost_source"):
+            cli.validate_receipt({**base, "cost_source": "unaccounted"})
+
     def test_bin_entrypoint_exposes_help(self):
         result = subprocess.run(
             [str(BIN), "--help"], capture_output=True, text=True, timeout=30,
@@ -222,6 +230,40 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["escape_7d_rate"], 1 / 3)
         self.assertEqual(result["touch"]["30"]["rate"], 40.0)
         self.assertEqual(result["delta_added"], 30)
+
+    def test_aggregate_touch_is_unknown_when_any_project_is_missing(self):
+        dashboard = self.module("dashboard")
+        projects = [
+            {"available": True, "touch": {"30": {
+                "agent_lines_added": 10, "surviving_lines": 9, "rate": 10.0,
+            }}},
+            {"available": True, "touch": {"30": {
+                "agent_lines_added": 0, "surviving_lines": 0, "rate": None,
+                "reason": "no attributable agent commits",
+            }}},
+        ]
+
+        result = dashboard.aggregate_touch(projects, 30)
+
+        self.assertIsNone(result["rate"])
+        self.assertEqual(result["known_projects"], 1)
+        self.assertEqual(result["missing_projects"], 1)
+        self.assertIn("1 of 2", result["reason"])
+
+    def test_unavailable_project_and_registry_error_block_aggregate_state(self):
+        dashboard = self.module("dashboard")
+        available = {"available": True, "metrics": dashboard.metrics_from_receipts([]),
+                     "touch": {"7": {"rate": None}, "30": {"rate": None}},
+                     "invalid_receipts": []}
+        unavailable = {"available": False, "metrics": dashboard.metrics_from_receipts([]),
+                       "touch": {"7": {"rate": None}, "30": {"rate": None}},
+                       "invalid_receipts": []}
+
+        result = dashboard.aggregate_projects([available, unavailable], registry_error_count=1)
+
+        self.assertEqual(result["evidence"]["status"], "needs-attention")
+        self.assertIn("1 unavailable project(s)", result["evidence"]["reasons"])
+        self.assertIn("1 registry error(s)", result["evidence"]["reasons"])
 
     def test_cost_per_accepted_excludes_blocked_task_telemetry(self):
         dashboard = self.module("dashboard")
@@ -293,6 +335,11 @@ class DashboardTests(unittest.TestCase):
         }])
 
         self.assertEqual(metrics["telemetry_completeness"], 1.0)
+        without_provider = dashboard.metrics_from_receipts([{
+            "status": "accepted", "served_model": "claude-opus-5",
+            "served_effort": "xhigh", "tokens": 100, "wall_s": 2,
+        }])
+        self.assertEqual(without_provider["telemetry_completeness"], 0.8)
 
     def test_project_snapshot_sanitizes_receipts_and_preserves_unknowns(self):
         dashboard = self.module("dashboard")
@@ -344,7 +391,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(result["metrics"]["first_pass_rate"], 1.0)
             self.assertIsNone(result["metrics"]["tokens_per_accepted"])
             self.assertEqual(result["metrics"]["tokens_missing_tasks"], 1)
-            self.assertEqual(result["metrics"]["telemetry_completeness"], 0.5)
+            self.assertEqual(result["metrics"]["telemetry_completeness"], 0.4)
             self.assertEqual(result["recent_tasks"][0]["task_id"], "task-1")
             self.assertNotIn("checks", result["recent_tasks"][0])
             self.assertNotIn("private_prompt", result["recent_tasks"][0])
@@ -446,6 +493,7 @@ class DashboardTests(unittest.TestCase):
                 base = f"http://127.0.0.1:{server.server_port}"
                 with urlopen(base + "/api/health") as response:
                     self.assertEqual(json.load(response)["status"], "ok")
+                    self.assertIn("default-src 'self'", response.headers["Content-Security-Policy"])
                 with urlopen(base + "/api/snapshot") as response:
                     self.assertEqual(json.load(response)["aggregate"]["projects_total"], 0)
                 with self.assertRaises(HTTPError) as denied:
@@ -460,6 +508,33 @@ class DashboardTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_clean_project_e2e_records_cost_and_enters_snapshot(self):
+        dashboard = self.module("dashboard")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "project")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            init = self.run_cli("init", "--repo", str(repo), "--registry", str(registry))
+            self.assertEqual(init.returncode, 0, init.stderr)
+            receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+            receipt["task_id"] = "e2e-task"
+            source = Path(tmp, "receipt.json")
+            source.write_text(json.dumps(receipt))
+            recorded = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+
+            snapshot = dashboard.build_snapshot(registry, touch_provider=lambda _repo, days: {
+                "window_days": days, "agent_lines_added": 0, "surviving_lines": 0,
+                "rate": None, "reason": "no attribution",
+            })
+
+            self.assertEqual(snapshot["aggregate"]["tasks"], 1)
+            self.assertEqual(snapshot["aggregate"]["cost_coverage"], 1.0)
+            self.assertEqual(snapshot["aggregate"]["cost_usd_per_accepted"], 0.84)
+            self.assertEqual(snapshot["aggregate"]["routes"][0]["binding"], "served")
+            self.assertEqual(snapshot["measurement_boundary"]["cost_denominator"], "recorded-receipts")
 
     def test_dashboard_shell_is_semantic_and_self_contained(self):
         class ShellParser(HTMLParser):

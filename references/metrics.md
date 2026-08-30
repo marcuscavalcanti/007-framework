@@ -18,8 +18,9 @@ Rules:
 3. Report medians and distributions; tiny samples are not trends.
 4. Tokens and wall time are costs, not quality proxies.
 5. Similarity to a prior patch is not correctness.
-6. Cost coverage is a hard gate: below 100%, the operational state cannot be
-   `on-target`. Missing cost is unaccounted, never zero.
+6. Cost coverage is a hard gate among recorded receipts: below 100%, the
+   operational state cannot be `on-target`. Missing cost is unaccounted, never
+   zero. An omitted receipt remains outside the V1.1 core's observability.
 7. Group cost by the served provider/model/effort when measured; otherwise keep
    the requested route explicitly marked as unverified.
 

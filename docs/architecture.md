@@ -62,6 +62,9 @@ the standard-library scan insufficient.
 6. **Cost boundary:** every new terminal receipt needs numeric cost, accounting
    source, and final/provisional state. Prices are supplied by the host or a
    provider adapter; the core contains no provider-specific price table.
+7. **Observation boundary:** receipt and cost coverage use recorded receipts as
+   the denominator. A host adapter that omits `007 record` is outside what the
+   dependency-free core can observe.
 
 ## Extension points
 
