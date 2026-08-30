@@ -85,7 +85,7 @@ delta: <files, +lines/-lines, dependencies>
 first_pass: yes | no | unmeasured; repair_rounds=<n|unmeasured>
 rework: corrective_lines=<n|pending|unmeasured>; escape_7d=<yes|no|pending>
 telemetry: model=<served|unmeasured>; effort=<served|unmeasured>; tokens=<n|unmeasured>; wall_s=<n|unmeasured>
-cost: usd=<measured>; source=<provider-reported|rate-card-estimate|subscription-allocated|local-compute|other>; status=<final|provisional>
+cost: usd=<measured>; source=<provider-reported|rate-card-estimate|subscription-allocated|local-compute|custom:name>; status=<final|provisional>
 uncertainty: <remaining evidence gap or none>
 ```
 

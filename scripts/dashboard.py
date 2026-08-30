@@ -18,6 +18,7 @@ import touch_rate
 
 MISSING = {"", "unmeasured", "pending", "N/D", "unknown", None}
 VERSION = "1.1.0"
+TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
     "tasks", "accepted", "blocked", "no_op",
     "first_pass_yes", "first_pass_known",
@@ -183,7 +184,7 @@ def metrics_from_receipts(receipts):
         "escape_7d_yes": escape_yes,
         "escape_7d_known": escape_known,
         "telemetry_known": telemetry_known,
-        "telemetry_possible": tasks * 5,
+        "telemetry_possible": tasks * len(TELEMETRY_FIELDS),
         "delta_files": delta_totals["files"],
         "delta_added": delta_totals["added"],
         "delta_deleted": delta_totals["deleted"],
@@ -214,7 +215,7 @@ def metrics_from_receipts(receipts):
         ),
         "escape_7d_rate": ratio(escape_yes, escape_known),
         "escape_7d_pending_tasks": tasks - escape_known,
-        "telemetry_completeness": ratio(telemetry_known, tasks * 5),
+        "telemetry_completeness": ratio(telemetry_known, tasks * len(TELEMETRY_FIELDS)),
     })
     return result
 
@@ -326,14 +327,12 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
 
 
 def aggregate_touch(projects, days):
+    available = [project for project in projects if project.get("available")]
     rows = [
         project.get("touch", {}).get(str(days), {})
-        for project in projects
+        for project in available
     ]
-    known = [
-        row for project, row in zip(projects, rows)
-        if project.get("available") and row.get("rate") is not None
-    ]
+    known = [row for row in rows if row.get("rate") is not None]
     added = sum(row.get("agent_lines_added", 0) for row in known)
     surviving = sum(row.get("surviving_lines", 0) for row in known)
     missing = len(rows) - len(known)
@@ -348,7 +347,7 @@ def aggregate_touch(projects, days):
         "reason": (
             f"touch unavailable for {missing} of {len(rows)} projects" if missing
             else None if known
-            else "no registered projects"
+            else "no available projects"
         ),
     }
 
@@ -460,6 +459,7 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate):
     return {
         "schema": "007-framework/dashboard-snapshot/v1",
         "framework_version": VERSION,
+        "telemetry_fields": list(TELEMETRY_FIELDS),
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "aggregate": aggregate_projects(projects, len(registry_errors)),
         "projects": projects,

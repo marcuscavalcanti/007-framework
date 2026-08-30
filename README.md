@@ -9,7 +9,7 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Status:** v1.1.0 is ready to test. A controlled mechanism test observed an
+> **Status:** v1.1.0 is ready to test. A frozen mechanism test observed an
 > OLD 0/3 vs NEW 3/3 contrast on one decision; the complete framework is not
 > claimed to be universally superior or production-proven. See
 > [Evidence](docs/evidence.md).
@@ -61,6 +61,12 @@ registry automatically:
 ```bash
 cd /path/to/project
 007 init
+```
+
+Remove a stale or retired path without deleting any project files:
+
+```bash
+007 unregister --project /old/path/to/project
 ```
 
 Ask your agent to use `007-framework` for a coding task. A normal run follows:
@@ -174,7 +180,7 @@ Read [Architecture](docs/architecture.md) for data flow and trust boundaries.
 
 ## Evidence and limits
 
-The strongest V1 controlled result is a narrow OLD×NEW decision test: OLD accepted
+The strongest V1 observed result is a narrow OLD×NEW decision test: OLD accepted
 the intended behavior in 0/3 runs; NEW accepted it in 3/3 under frozen
 conditions. A separate compatibility run passed 3/3 in both arms and showed a
 smaller median patch for NEW, but it does not isolate causality.

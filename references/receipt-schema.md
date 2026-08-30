@@ -39,6 +39,8 @@ provider allowlist.
 outcome. `cost_source`
 names how it was obtained, for example `provider-reported`,
 `rate-card-estimate`, `subscription-allocated`, or `local-compute`.
+Custom adapters use the explicit `custom:<name>` namespace; other free-form
+labels are rejected so spelling mistakes do not silently split the KPI.
 `cost_status` is `final` or `provisional`. A provider adapter may calculate cost
 from token classes and the exact served model, but the core never guesses a
 price table. Missing cost is not zero: `007 record` rejects it, and legacy or

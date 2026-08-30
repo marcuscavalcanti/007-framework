@@ -19,6 +19,10 @@ PROJECT_SCHEMA = "007-framework/project/v1"
 REGISTRY_SCHEMA = "007-framework/registry/v1"
 RECEIPT_SCHEMA = "007-framework/receipt/v1"
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+COST_SOURCES = {
+    "provider-reported", "rate-card-estimate", "subscription-allocated", "local-compute",
+}
+CUSTOM_COST_SOURCE = re.compile(r"^custom:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def default_registry_path():
@@ -167,6 +171,21 @@ def init_project(repo, registry_path, now=None):
     return entry
 
 
+def unregister_project(project, registry_path):
+    registry_path = Path(registry_path).expanduser().resolve()
+    registry = load_registry(registry_path)
+    target_path = str(Path(project).expanduser().resolve())
+    removed = [
+        item for item in registry["projects"]
+        if item["project_id"] == project or item["path"] == target_path
+    ]
+    if not removed:
+        raise ValueError(f"project is not registered: {project}")
+    registry["projects"] = [item for item in registry["projects"] if item not in removed]
+    write_json_atomic(registry_path, registry)
+    return removed[0]
+
+
 def validate_receipt(value):
     if not isinstance(value, dict) or value.get("schema") != RECEIPT_SCHEMA:
         raise ValueError(f"receipt schema must be {RECEIPT_SCHEMA}")
@@ -183,12 +202,11 @@ def validate_receipt(value):
         or cost < 0
     ):
         raise ValueError("cost_usd must be a non-negative measured number")
-    if (
-        not isinstance(value.get("cost_source"), str)
-        or not value["cost_source"].strip()
-        or value["cost_source"].strip().lower() in {"unaccounted", "unmeasured", "unknown", "n/d"}
+    source = value.get("cost_source")
+    if not isinstance(source, str) or (
+        source not in COST_SOURCES and not CUSTOM_COST_SOURCE.fullmatch(source)
     ):
-        raise ValueError("cost_source must identify the accounting source")
+        raise ValueError("cost_source must be documented or use custom:<name>")
     if value.get("cost_status") not in ("final", "provisional"):
         raise ValueError("cost_status must be final or provisional")
     required_strings = (
@@ -243,6 +261,9 @@ def parser():
     record = commands.add_parser("record", help="validate and persist one terminal task receipt")
     record.add_argument("--repo", default=".")
     record.add_argument("--file", required=True, help="receipt JSON path, or - for stdin")
+    unregister = commands.add_parser("unregister", help="remove a stale project from the local registry")
+    unregister.add_argument("--project", required=True, help="registered project path or project ID")
+    unregister.add_argument("--registry", type=Path, default=default_registry_path())
     dashboard = commands.add_parser("dashboard", help="start the local multi-project dashboard")
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=7007)
@@ -280,6 +301,10 @@ def main(argv=None):
         if args.command == "record":
             destination = record_receipt(args.repo, args.file)
             print(f"recorded: {destination}")
+            return 0
+        if args.command == "unregister":
+            entry = unregister_project(args.project, args.registry)
+            print(f"unregistered: {entry['name']} ({entry['path']})")
             return 0
         if args.command == "dashboard":
             return run_dashboard(args.host, args.port, args.registry, not args.no_open)

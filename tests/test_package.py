@@ -51,6 +51,10 @@ class PackageContractTests(unittest.TestCase):
         self.assertNotIn("password field", skill)
         self.assertNotIn("new password", skill)
 
+    def test_current_narrow_result_is_not_called_controlled(self):
+        current_claims = (ROOT / "README.md").read_text() + (ROOT / "docs/evidence.md").read_text()
+        self.assertNotRegex(current_claims.lower(), r"controlled (mechanism|decision|result)")
+
     def test_replay_example_is_valid_json(self):
         import json
         example = json.loads((ROOT / "examples" / "replay-set.example.json").read_text())

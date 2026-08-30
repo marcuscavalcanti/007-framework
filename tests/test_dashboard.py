@@ -178,6 +178,37 @@ class DashboardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cost_source"):
             cli.validate_receipt({**base, "cost_source": "unaccounted"})
 
+    def test_record_accepts_documented_or_namespaced_cost_sources_only(self):
+        cli = self.module("framework_cli")
+        base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        for source in (
+            "provider-reported", "rate-card-estimate", "subscription-allocated",
+            "local-compute", "custom:team-chargeback",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(cli.validate_receipt({**base, "cost_source": source})["cost_source"], source)
+        with self.assertRaisesRegex(ValueError, "cost_source"):
+            cli.validate_receipt({**base, "cost_source": "provider_reported"})
+
+    def test_unregister_removes_only_the_registry_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+
+            result = self.run_cli(
+                "unregister", "--project", str(repo), "--registry", str(registry)
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(registry.read_text())["projects"], [])
+            self.assertTrue((repo / ".007/project.json").exists())
+
     def test_bin_entrypoint_exposes_help(self):
         result = subprocess.run(
             [str(BIN), "--help"], capture_output=True, text=True, timeout=30,
@@ -249,6 +280,21 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["known_projects"], 1)
         self.assertEqual(result["missing_projects"], 1)
         self.assertIn("1 of 2", result["reason"])
+
+    def test_unavailable_project_blocks_evidence_but_not_touch_denominator(self):
+        dashboard = self.module("dashboard")
+        projects = [
+            {"available": True, "touch": {"30": {
+                "agent_lines_added": 10, "surviving_lines": 9, "rate": 10.0,
+            }}},
+            {"available": False, "touch": {"30": {"rate": None}}},
+        ]
+
+        result = dashboard.aggregate_touch(projects, 30)
+
+        self.assertAlmostEqual(result["rate"], 10.0)
+        self.assertEqual(result["known_projects"], 1)
+        self.assertEqual(result["missing_projects"], 0)
 
     def test_unavailable_project_and_registry_error_block_aggregate_state(self):
         dashboard = self.module("dashboard")
@@ -532,9 +578,13 @@ class DashboardTests(unittest.TestCase):
 
             self.assertEqual(snapshot["aggregate"]["tasks"], 1)
             self.assertEqual(snapshot["aggregate"]["cost_coverage"], 1.0)
-            self.assertEqual(snapshot["aggregate"]["cost_usd_per_accepted"], 0.84)
+            self.assertEqual(snapshot["aggregate"]["cost_usd_per_accepted"], receipt["cost_usd"])
             self.assertEqual(snapshot["aggregate"]["routes"][0]["binding"], "served")
             self.assertEqual(snapshot["measurement_boundary"]["cost_denominator"], "recorded-receipts")
+            self.assertEqual(
+                snapshot["telemetry_fields"],
+                ["provider", "model", "effort", "tokens", "wall_s"],
+            )
 
     def test_dashboard_shell_is_semantic_and_self_contained(self):
         class ShellParser(HTMLParser):

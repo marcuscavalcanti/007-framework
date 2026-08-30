@@ -3,11 +3,11 @@
 ## Release claim
 
 V1 is a usable, dependency-free, ready-to-test orchestration skill with one
-controlled decision contrast and deterministic package checks.
+frozen decision contrast and deterministic package checks.
 
 It is not a claim that the complete bundle is generally superior.
 
-## Observed controlled result
+## Observed frozen result
 
 In a frozen OLD×NEW mechanism test, both arms received the same coding task,
 repository snapshot, executor class, effort, environment, and hidden acceptance

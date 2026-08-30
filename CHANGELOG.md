@@ -7,6 +7,7 @@ All notable changes are documented here.
 ### Added
 
 - automatic local registration for every Git project using the framework;
+- explicit unregister command for stale or retired local project paths;
 - atomic, no-replace terminal receipts with mandatory provider-neutral cost accounting;
 - localhost multi-project dashboard with aggregate/project reconciliation and near-real-time polling;
 - requested-versus-served provider/model/effort telemetry and cost coverage gates.

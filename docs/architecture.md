@@ -48,6 +48,10 @@ percentages are never averaged. JSON receipts remain the source of truth. A
 database is intentionally deferred until measured volume or query latency makes
 the standard-library scan insufficient.
 
+The snapshot publishes `telemetry_fields` alongside the completeness numerator
+and denominator so consumers can see that V1.1 measures provider, model, effort,
+tokens, and wall time.
+
 ## Trust boundaries
 
 1. **Host boundary:** authentication, model binding, permissions, and sandboxing
