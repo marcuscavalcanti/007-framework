@@ -200,3 +200,18 @@ desktop and mobile widths, and reviewed adversarially before release.
 
 Add these only when observed use demonstrates that localhost receipts plus Git
 are insufficient.
+
+### DuckDB adoption gate
+
+DuckDB is a conditional analytical accelerator, not part of v1.1.0. JSON
+receipts remain the source of truth. Consider a read-only derived DuckDB layer
+only after either condition is measured:
+
+- more than 10,000 receipts across registered projects;
+- `/api/snapshot` p95 exceeds 250 ms on the target machine;
+- a concrete cohort, window, or ad-hoc SQL analysis cannot remain simple in the
+  standard-library aggregator.
+
+If adopted, use in-memory or disposable derived storage over JSON/Parquet. Do
+not make a DuckDB file the receipt authority and do not require agents to write
+to it.
