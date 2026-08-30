@@ -1,7 +1,7 @@
 # 007 Framework Multi-Project Dashboard Design
 
-**Status:** approved by Marcus on 2026-08-30  
-**Target release:** v1.1.0  
+**Status:** approved by Marcus on 2026-08-30
+**Target release:** v1.1.0
 **Scope:** local, read-only observability plus explicit project registration
 
 ## Objective
