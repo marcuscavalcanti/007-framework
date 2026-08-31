@@ -4,23 +4,28 @@
     "example": "/absolute/path/to/source-repository"
   },
   "agent_command": [
-    "codex",
-    "exec",
-    "--cd",
+    "provider-adapter",
+    "--cwd",
     "{cwd}",
-    "-m",
+    "--prompt-file",
+    "{prompt_file}",
+    "--model",
     "{model}",
-    "-c",
-    "model_reasoning_effort={effort}",
-    "-"
+    "--effort",
+    "{effort}",
+    "--runner-receipt",
+    "{runner_receipt}"
   ],
+  "require_served_identity": true,
   "arms": {
     "OLD": {
+      "provider": "configured-provider",
       "model": "served-model-id",
       "effort": "medium",
       "doctrine": "Baseline instructions frozen before the experiment."
     },
     "NEW": {
+      "provider": "configured-provider",
       "model": "served-model-id",
       "effort": "medium",
       "doctrine": "The same baseline plus exactly one target mechanism."

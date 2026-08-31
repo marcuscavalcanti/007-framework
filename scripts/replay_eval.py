@@ -8,7 +8,9 @@ whether a cell passes.
 
 import argparse
 import difflib
+import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -23,6 +25,7 @@ from pathlib import Path
 
 
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def validate_task_id(value):
@@ -131,6 +134,43 @@ def grade_cell(agent_exit, checks_passed):
     return valid, valid and checks_passed
 
 
+def validate_served_identity(value, policy):
+    if value is None:
+        return None, "served-identity-missing"
+    if not isinstance(value, dict) or value.get("schema") != "007-framework/runner-receipt/v1":
+        return None, "runner-receipt-invalid"
+    if value.get("valid") is not True:
+        return None, "runner-invalid"
+    if value.get("requested") != {key: policy.get(key) for key in ("provider", "model", "effort")}:
+        return None, "requested-policy-mismatch"
+    served = value.get("served")
+    if not isinstance(served, dict):
+        return None, "served-identity-missing"
+    for key in ("provider", "model", "effort"):
+        if served.get(key) != policy.get(key):
+            return None, f"served-{key}-mismatch"
+    if not isinstance(value.get("identity_source"), str) or not value["identity_source"]:
+        return None, "identity-source-missing"
+    if not isinstance(value.get("source_sha256"), str) or not SHA256.fullmatch(value["source_sha256"]):
+        return None, "identity-source-hash-invalid"
+    cost = value.get("cost_usd")
+    if (
+        isinstance(cost, bool) or not isinstance(cost, (int, float))
+        or not math.isfinite(cost) or cost < 0
+    ):
+        return None, "cost-missing"
+    if not isinstance(value.get("cost_source"), str) or not value["cost_source"]:
+        return None, "cost-source-missing"
+    return {
+        **served,
+        "identity_source": value["identity_source"],
+        "source_sha256": value["source_sha256"],
+        "usage": value.get("usage"),
+        "cost_usd": cost,
+        "cost_source": value["cost_source"],
+    }, None
+
+
 def experiment_seed(config):
     seed = config.get("seed")
     if not isinstance(seed, int) or isinstance(seed, bool):
@@ -153,8 +193,19 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
         export_snapshot(source_repo, task["base"], workspace)
         prompt = workspace / ".007-prompt.txt"
         prompt.write_text(task["prompt"] + "\n\n" + policy["doctrine"])
-        argv = [part.format(cwd=workspace, prompt_file=prompt, model=policy["model"], effort=policy["effort"])
-                for part in config["agent_command"]]
+        runner_receipt = output_dir / f"{task['id']}-r{replicate:02d}-{arm}.runner.json"
+        if runner_receipt.exists():
+            raise RuntimeError(f"runner receipt already exists: {runner_receipt}")
+        replacements = {
+            "{cwd}": str(workspace), "{prompt_file}": str(prompt),
+            "{model}": policy["model"], "{effort}": policy["effort"],
+            "{runner_receipt}": str(runner_receipt),
+        }
+        argv = []
+        for part in config["agent_command"]:
+            for marker, value in replacements.items():
+                part = part.replace(marker, value)
+            argv.append(part)
         started = time.monotonic()
         try:
             agent = run(argv, cwd=workspace, timeout=timeout_s, input_text=prompt.read_text())
@@ -163,21 +214,48 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             exit_code, tail = -9, "TIMEOUT"
         prompt.unlink(missing_ok=True)
         checks, checks_passed = acceptance(task, workspace)
-        valid, accepted = grade_cell(exit_code, checks_passed)
+        try:
+            runner_value = json.loads(runner_receipt.read_text()) if runner_receipt.is_file() else None
+        except json.JSONDecodeError:
+            runner_value = {}
+        identity, identity_failure = (
+            validate_served_identity(runner_value, policy)
+            if config.get("require_served_identity") else (None, None)
+        )
+        agent_valid, _ = grade_cell(exit_code, checks_passed)
+        valid = agent_valid and identity_failure is None
+        accepted = valid and checks_passed
+        failure_class = (
+            "timeout" if exit_code == -9 else "agent-exit" if exit_code != 0
+            else identity_failure or "none"
+        )
+        usage = identity.get("usage") if identity else None
         record = {
             "schema": "007-framework/replay-cell/v1",
             "task": task["id"],
             "arm": arm,
             "replicate": replicate,
+            "requested_provider": policy.get("provider", "unmeasured"),
             "requested_model": policy["model"],
             "requested_effort": policy["effort"],
-            "served_model": "unmeasured",
-            "served_effort": "unmeasured",
-            "tokens": "unmeasured",
+            "served_provider": identity["provider"] if identity else "unmeasured",
+            "served_model": identity["model"] if identity else "unmeasured",
+            "served_effort": identity["effort"] if identity else "unmeasured",
+            "identity_source": identity["identity_source"] if identity else "unmeasured",
+            "identity_source_sha256": identity["source_sha256"] if identity else "unmeasured",
+            "runner_receipt_sha256": (
+                hashlib.sha256(runner_receipt.read_bytes()).hexdigest()
+                if runner_receipt.is_file() else "unmeasured"
+            ),
+            "usage": usage if usage is not None else "unmeasured",
+            "tokens": usage.get("total_tokens", "unmeasured") if isinstance(usage, dict) else "unmeasured",
+            "cost_usd": identity["cost_usd"] if identity else "unmeasured",
+            "cost_source": identity["cost_source"] if identity else "unmeasured",
             "agent_exit": exit_code,
             "wall_s": round(time.monotonic() - started, 2),
             "valid": valid,
             "accepted": accepted,
+            "failure_class": failure_class,
             "acceptance": checks,
             **diagnostics(task, workspace, source_repo),
             "agent_tail": tail,

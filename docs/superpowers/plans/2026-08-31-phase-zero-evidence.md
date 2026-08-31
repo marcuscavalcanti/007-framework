@@ -49,8 +49,8 @@
 - Consumes: a pre-registered identity binding appropriate to the chosen harness and an exact expected provider/model/effort per arm.
 - Produces: `served_provider`, `served_model`, and `served_effort` in every cell; required absent or mismatched identity yields `valid=false` and stops the run.
 
-- [ ] **Step 1: Write table-driven failing tests** for exact match, absent identity, and mismatch.
-- [ ] **Step 2: Run the focused tests** and confirm the current `unmeasured` behavior fails them.
-- [ ] **Step 3: Implement the smallest harness-neutral binding supported by the chosen CLI's structured output**; do not parse prose.
-- [ ] **Step 4: Run focused and full tests** and capture exact results.
+- [x] **Step 1: Write table-driven failing tests** for exact match, absent identity, and mismatch.
+- [x] **Step 2: Run the focused tests** and confirm the current `unmeasured` behavior fails them.
+- [x] **Step 3: Implement the smallest harness-neutral binding supported by the chosen CLI's structured output**; do not parse prose.
+- [x] **Step 4: Run focused and full tests** and capture exact results.
 - [ ] **Step 5: Freeze the experiment protocol only after both tasks pass**; zero model calls occur during these tasks.

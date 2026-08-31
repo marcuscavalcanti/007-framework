@@ -22,6 +22,31 @@ A mechanism flip supports only that behavior in those conditions. It does not
 prove general productivity, provider portability, production durability, or a
 full framework bundle.
 
+## Served identity
+
+When provider, model, or effort is a causal variable, set
+`require_served_identity: true`. The frozen adapter receives the
+`{runner_receipt}` placeholder and must write a no-retry structured receipt:
+
+```json
+{
+  "schema": "007-framework/runner-receipt/v1",
+  "valid": true,
+  "requested": {"provider": "openai", "model": "model-a", "effort": "medium"},
+  "served": {"provider": "openai", "model": "model-a", "effort": "medium"},
+  "identity_source": "provider-structured-response",
+  "source_sha256": "<sha256>",
+  "usage": {"input_tokens": 1, "output_tokens": 1},
+  "cost_usd": 0.01,
+  "cost_source": "rate-card-estimate"
+}
+```
+
+The adapter owns provider-specific parsing; the replay core only validates the
+provider-neutral receipt against the pre-registered policy. Missing identity,
+an adapter-invalid result, or requested/served mismatch invalidates the cell and
+stops the run. A requested CLI flag is not served-identity evidence.
+
 ## Controls
 
 Include a non-target control when over-correction is plausible. A pass should

@@ -78,6 +78,110 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    def test_replay_requires_exact_served_identity_when_policy_is_causal(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            policy = {
+                "provider": "openai", "model": "gpt-test", "effort": "medium",
+            }
+            exact = {
+                "schema": "007-framework/runner-receipt/v1",
+                "valid": True,
+                "requested": policy,
+                "served": policy,
+                "identity_source": "thread/start",
+                "source_sha256": "a" * 64,
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+                "cost_usd": 0.01,
+                "cost_source": "rate-card-estimate",
+            }
+
+            identity, failure = replay_eval.validate_served_identity(exact, policy)
+            self.assertIsNone(failure)
+            self.assertEqual(identity["model"], "gpt-test")
+            self.assertEqual(identity["effort"], "medium")
+
+            for value, expected in (
+                (None, "served-identity-missing"),
+                ({**exact, "served": {**policy, "model": "wrong"}}, "served-model-mismatch"),
+                ({**exact, "valid": False}, "runner-invalid"),
+                ({**exact, "cost_usd": float("nan")}, "cost-missing"),
+            ):
+                with self.subTest(expected=expected):
+                    identity, failure = replay_eval.validate_served_identity(value, policy)
+                    self.assertIsNone(identity)
+                    self.assertEqual(failure, expected)
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_cell_binds_standard_runner_identity_and_cost(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                env = {
+                    **os.environ,
+                    "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.test",
+                    "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.test",
+                }
+                (repo / "value.txt").write_text("base\n")
+                subprocess.run(["git", "add", "value.txt"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+                base = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+                (repo / "value.txt").write_text("accepted\n")
+                subprocess.run(["git", "commit", "-qam", "accepted"], cwd=repo, check=True, env=env)
+                accepted = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+                output = Path(tmp, "out")
+                output.mkdir()
+                identity_script = (
+                    "import json,sys; from pathlib import Path; "
+                    "Path(sys.argv[1]).write_text(json.dumps({"
+                    "'schema':'007-framework/runner-receipt/v1','valid':True,"
+                    "'requested':{'provider':'openai','model':sys.argv[2],'effort':sys.argv[3]},"
+                    "'served':{'provider':'openai','model':sys.argv[2],'effort':sys.argv[3]},"
+                    "'identity_source':'test-structured-output','source_sha256':'b'*64,"
+                    "'usage':{'input_tokens':10,'output_tokens':2},"
+                    "'cost_usd':0.01,'cost_source':'rate-card-estimate'}))"
+                )
+                config = {
+                    "repos": {"repo": str(repo)},
+                    "require_served_identity": True,
+                    "agent_command": [
+                        sys.executable, "-c", identity_script,
+                        "{runner_receipt}", "{model}", "{effort}",
+                    ],
+                    "arms": {"NEW": {
+                        "provider": "openai", "model": "gpt-test", "effort": "medium",
+                        "doctrine": "minimal",
+                    }},
+                }
+                task = {
+                    "id": "identity-cell", "repo": "repo", "base": base,
+                    "accepted": accepted, "prompt": "Keep the base valid.",
+                    "acceptance": [[sys.executable, "-c", "raise SystemExit(0)"]],
+                }
+
+                cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+
+                self.assertTrue(cell["valid"])
+                self.assertTrue(cell["accepted"])
+                self.assertEqual(cell["served_model"], "gpt-test")
+                self.assertEqual(cell["served_effort"], "medium")
+                self.assertEqual(cell["cost_usd"], 0.01)
+                self.assertRegex(cell["runner_receipt_sha256"], r"^[0-9a-f]{64}$")
+        finally:
+            sys.path.pop(0)
+
     def test_replay_archive_paths_are_unique(self):
         sys.path.insert(0, str(SCRIPTS))
         try:
