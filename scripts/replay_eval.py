@@ -116,9 +116,13 @@ def diagnostics(task, workspace, source_repo):
     produced_files, produced_lines = changed_lines(workspace)
     numstat = run(["git", "diff", "--numstat"], cwd=workspace, timeout=300)
     added = deleted = 0
+    binary = []
     complete = numstat.returncode == 0
     for line in numstat.stdout.splitlines():
         parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[0] == parts[1] == "-":
+            binary.append(parts[2])
+            continue
         if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
             complete = False
             continue
@@ -133,6 +137,7 @@ def diagnostics(task, workspace, source_repo):
         "changed_files": len(produced_files),
         "lines_added": added,
         "lines_deleted": deleted,
+        "binary_files_changed": sorted(binary),
         "dependency_manifests_changed": sorted(
             path for path in produced_files if Path(path).name in DEPENDENCY_MANIFESTS
         ),
@@ -278,8 +283,11 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
         prompt.unlink(missing_ok=True)
         hidden_failure = None
         try:
-            with hidden_acceptance(task, workspace):
-                checks, checks_passed = acceptance(task, workspace)
+            with tempfile.TemporaryDirectory(prefix=f"007-acceptance-{task['id']}-") as acceptance_tmp:
+                acceptance_workspace = Path(acceptance_tmp) / "workspace"
+                shutil.copytree(workspace, acceptance_workspace, symlinks=True)
+                with hidden_acceptance(task, acceptance_workspace):
+                    checks, checks_passed = acceptance(task, acceptance_workspace)
         except (OSError, ValueError, RuntimeError) as exc:
             checks, checks_passed = [], False
             hidden_failure = f"hidden-acceptance-{type(exc).__name__.lower()}"

@@ -168,7 +168,8 @@ class ScriptContractTests(unittest.TestCase):
                 task = {
                     "id": "identity-cell", "repo": "repo", "base": base,
                     "accepted": accepted, "prompt": "Keep the base valid.",
-                    "acceptance": [[sys.executable, "-c", "raise SystemExit(0)"]],
+                    "acceptance": [[sys.executable, "-c",
+                        "from pathlib import Path; Path('acceptance-side-effect.bin').write_bytes(b'\\0'); raise SystemExit(0)"]],
                 }
 
                 cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
@@ -182,7 +183,38 @@ class ScriptContractTests(unittest.TestCase):
                 self.assertEqual(cell["lines_added"], 0)
                 self.assertEqual(cell["lines_deleted"], 0)
                 self.assertEqual(cell["dependency_manifests_changed"], [])
+                self.assertEqual(cell["binary_files_changed"], [])
                 self.assertRegex(cell["runner_receipt_sha256"], r"^[0-9a-f]{64}$")
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_d0_records_agent_binary_without_marking_it_incomplete(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                (repo / "base.txt").write_text("base\n")
+                subprocess.run(["git", "add", "base.txt"], cwd=repo, check=True)
+                env = {
+                    **os.environ,
+                    "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.test",
+                    "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.test",
+                }
+                subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+                base = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+                (repo / "artifact.bin").write_bytes(b"\0binary")
+
+                result = replay_eval.diagnostics({"base": base, "accepted": base}, repo, repo)
+
+                self.assertTrue(result["d0_complete"])
+                self.assertEqual(result["binary_files_changed"], ["artifact.bin"])
+                self.assertEqual(result["lines_added"], 0)
+                self.assertEqual(result["lines_deleted"], 0)
         finally:
             sys.path.pop(0)
 
