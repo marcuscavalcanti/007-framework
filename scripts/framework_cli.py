@@ -432,6 +432,10 @@ def record_receipt(repo, source, now=None, controller_event=None):
     task = validate_task_start(read_json(task_path))
     if task["task_id"] != receipt["task_id"]:
         raise ValueError("task start task_id does not match receipt")
+    if controller_event is not None:
+        event_path = marker_path.parent / "events" / f"{receipt['task_id']}.event.json"
+        if not event_path.exists() or read_json(event_path) != controller_event:
+            raise ValueError("controlled provenance requires the persisted controller event")
     receipt = bind_authority(receipt, task, controller_event)
     if "completed_at" not in receipt:
         instant = now or datetime.now(timezone.utc)

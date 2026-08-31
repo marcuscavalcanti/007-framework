@@ -22,7 +22,15 @@ function selectedProject() {
 
 function viewMetrics() {
   const project = selectedProject();
-  return project ? { ...project.metrics, touch: project.touch, evidence: project.evidence, activity: project.activity } : state.snapshot.aggregate;
+  return project ? {
+    ...project.metrics,
+    touch: project.touch,
+    evidence: project.evidence,
+    objective: project.objective,
+    authority_confidence: project.authority_confidence,
+    trend_30d: project.trend_30d,
+    activity: project.activity,
+  } : state.snapshot.aggregate;
 }
 
 function setText(id, value) {
@@ -42,6 +50,8 @@ function statusLabel(status) {
     "instrumentation-inactive": "Instrumentação inativa",
     "collecting": "Coletando evidência",
     "on-target": "Dentro do alvo",
+    "off-target": "Fora do alvo",
+    "not-measurable": "Ainda não mensurável",
     "needs-attention": "Requer atenção",
     "unavailable": "Indisponível",
   })[status] || "Estado desconhecido";
@@ -70,11 +80,12 @@ function renderHeader(metrics, project) {
   setText("scope-sample", `${metrics.started_tasks || 0} iniciadas · ${metrics.tasks || 0} concluídas · ${metrics.accepted || 0} aceitas`);
   setText("scope-boundary", "Uso real é evidência operacional; causalidade exige OLD×NEW.");
 
-  const verdict = metrics.evidence || { status: "collecting", reasons: [] };
+  const verdict = metrics.objective || { status: "not-measurable", headline: "NOT YET MEASURABLE", primary_action: "Ative a instrumentação." };
   const card = byId("verdict-card");
   card.className = `verdict-card ${verdict.status}`;
-  setText("verdict-label", statusLabel(verdict.status));
-  setText("verdict-reason", reasonLabel(verdict.reasons?.[0]));
+  setText("verdict-label", verdict.headline);
+  setText("verdict-reason", statusLabel(verdict.status));
+  setText("primary-action", verdict.primary_action);
 }
 
 function renderInstrumentation(metrics) {
@@ -121,7 +132,91 @@ function renderMetrics(metrics) {
   setTrack("track-cost", metrics.cost_coverage);
 }
 
-function renderAuthority(metrics) {
+function gateActual(gate) {
+  if (gate.actual == null) return "N/D";
+  if (gate.key === "mature") return integer(gate.actual);
+  if (gate.key === "repairs") return decimal(gate.actual);
+  if (gate.key === "touch") return `${decimal(gate.actual)}%`;
+  return percent(gate.actual);
+}
+
+function renderGates(objective = {}) {
+  const body = byId("gate-matrix-body");
+  body.replaceChildren();
+  (objective.gates || []).forEach((gate) => {
+    const row = document.createElement("tr");
+    [
+      gate.label,
+      gateActual(gate),
+      gate.target,
+      `n=${integer(gate.denominator)}`,
+      ({ pass: "PASS", fail: "FAIL", wait: "AGUARDA" })[gate.status] || "N/D",
+    ].forEach((value, index) => {
+      const cell = document.createElement("td");
+      if (index === 4) cell.append(element("span", `gate-status ${gate.status}`, value));
+      else cell.textContent = value;
+      row.append(cell);
+    });
+    body.append(row);
+  });
+}
+
+function svgNode(tag, attributes = {}) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, value));
+  return node;
+}
+
+function renderTrend(rows = []) {
+  const host = byId("outcome-trend");
+  host.replaceChildren();
+  const total = rows.reduce((sum, row) => sum + row.reliable + row.accepted_other + row.not_accepted, 0);
+  if (!total) {
+    host.append(element("p", "empty-copy", "Ainda não há outcomes concluídos nos últimos 30 dias."));
+    return;
+  }
+  const svg = svgNode("svg", { viewBox: "0 0 900 240", role: "img", "aria-label": "Proporção diária de resultados confiáveis, aceitos e não aceitos" });
+  const left = 34, top = 20, height = 170, width = 840;
+  const step = width / rows.length;
+  const lineY = top + height * .3;
+  svg.append(svgNode("line", { x1: left, y1: lineY, x2: left + width, y2: lineY, class: "trend-target" }));
+  const target = svgNode("text", { x: left + 4, y: lineY - 6, class: "trend-label" });
+  target.textContent = "alvo 70% confiável";
+  svg.append(target);
+  rows.forEach((row, index) => {
+    const daily = row.reliable + row.accepted_other + row.not_accepted;
+    if (!daily) return;
+    const x = left + index * step + 2;
+    const barWidth = Math.max(step - 4, 2);
+    let y = top + height;
+    [
+      ["not_accepted", "trend-not-accepted"],
+      ["accepted_other", "trend-repaired"],
+      ["reliable", "trend-reliable"],
+    ].forEach(([key, className]) => {
+      const segment = height * row[key] / daily;
+      y -= segment;
+      const rect = svgNode("rect", { x, y, width: barWidth, height: segment, rx: 2, class: className });
+      const title = svgNode("title");
+      title.textContent = `${row.date}: ${row.reliable} confiável, ${row.accepted_other} aceito/outro, ${row.not_accepted} não aceito`;
+      rect.append(title);
+      svg.append(rect);
+    });
+  });
+  const first = svgNode("text", { x: left, y: 218, class: "trend-label" });
+  first.textContent = rows[0]?.date.slice(5) || "";
+  const last = svgNode("text", { x: left + width, y: 218, class: "trend-label", "text-anchor": "end" });
+  last.textContent = rows.at(-1)?.date.slice(5) || "";
+  svg.append(first, last);
+  host.append(svg);
+}
+
+function renderAuthority(metrics, confidence = {}) {
+  setText("authority-confidence-label", confidence.label || "não observado");
+  setText("authority-controlled", confidence.controlled || 0);
+  setText("authority-controlled-detail", `${percent(confidence.controlled_coverage)} dos outcomes vinculados`);
+  setText("authority-declared", confidence.declared || 0);
+  setText("authority-unobserved", confidence.unobserved || 0);
   setText("authority-coverage", percent(metrics.authority_coverage));
   setText("authority-coverage-detail", `${metrics.authority_bound_tasks || 0}/${metrics.tasks || 0} outcomes vinculados`);
   setText("authority-protected", metrics.protected_blocks || 0);
@@ -150,7 +245,7 @@ function renderNavigation() {
     const button = element("button", `project-button${project.project_id === state.selectedProject ? " is-active" : ""}`);
     button.type = "button";
     button.setAttribute("aria-label", `Abrir projeto ${project.name}`);
-    const status = project.available ? project.evidence.status : "unavailable";
+    const status = project.available ? project.objective.status : "unavailable";
     button.append(element("span", `project-dot ${status}`), element("span", "project-name", project.name), element("span", "project-tasks", `${project.activity?.sessions || 0} sessões`));
     button.addEventListener("click", () => { state.selectedProject = project.project_id; render(); });
     list.append(button);
@@ -158,7 +253,7 @@ function renderNavigation() {
 }
 
 function projectStatus(project) {
-  return project.available ? project.evidence.status : "unavailable";
+  return project.available ? project.objective.status : "unavailable";
 }
 
 function renderProjects() {
@@ -241,13 +336,14 @@ function renderRoutes(metrics) {
 
 function diagnostics(metrics, project) {
   const values = [];
+  if (metrics.objective?.status !== "on-target" && metrics.objective?.primary_action) values.push(metrics.objective.primary_action);
   if (!metrics.started_tasks) values.push("Instrumentação inativa: nenhuma tarefa começou com 007 begin.");
   if (metrics.active_tasks) values.push(`${metrics.active_tasks} tarefa(s) iniciada(s) ainda sem receipt terminal.`);
   if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} receipt(s) histórico(s) não têm start correspondente; novos records são rejeitados.`);
   if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo ${percent(metrics.cost_coverage)}; o KPI exige 100% dos receipts.`);
   if (metrics.activity?.sessions && metrics.activity.reported_cost_coverage !== 1) values.push(`Custo terminal cobre ${percent(metrics.activity.reported_cost_coverage)} das sessões locais; estimativas externas não fecham esse gate.`);
   if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) aguardam maturação de sete dias.`);
-  if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Envelope presente em ${percent(metrics.authority_coverage)} dos outcomes; presença não mede rigor e eventos são autorrelatados.`);
+  if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Envelope presente em ${percent(metrics.authority_coverage)} dos outcomes; ausência permanece não observada.`);
   if (metrics.friction_blocks) values.push(`${metrics.friction_blocks} ação(ões) permitida(s) foram bloqueadas: atrito de fence a investigar.`);
   if (metrics.unclassified_blocks) values.push(`${metrics.unclassified_blocks} bloqueio(s) ficaram fora do envelope declarado.`);
   const touch = metrics.touch?.["30"];
@@ -286,7 +382,9 @@ function render() {
   renderInstrumentation(metrics);
   renderRuntimeActivity(metrics.activity);
   renderMetrics(metrics);
-  renderAuthority(metrics);
+  renderGates(metrics.objective);
+  renderTrend(metrics.trend_30d);
+  renderAuthority(metrics, metrics.authority_confidence);
   renderFunnel(metrics);
   renderProjects();
   renderActivity(recentTasks());

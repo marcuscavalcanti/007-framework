@@ -1,6 +1,6 @@
 # Evidence Confidence and Decision Dashboard Design
 
-**Status:** approved in chat on 2026-08-31; implementation not started
+**Status:** implemented, locally verified, and externally approved on 2026-08-31
 
 **Target:** 007 Framework v1.3.0 candidate
 
@@ -22,7 +22,8 @@ The primary question is:
 The dashboard answers exactly one of:
 
 - **YES — on target:** every decision gate is measured and passes.
-- **NO — off target:** every decision gate is measurable and at least one fails.
+- **NO — off target:** at least one measured performance gate fails; incomplete
+  measurement remains visible and is still prioritized as the next action.
 - **NOT YET MEASURABLE:** sample maturity, coverage, or data quality is
   insufficient.
 

@@ -7,7 +7,7 @@ models and tools; the repository remains the source of truth.
 task + repo rules
        │
        ▼
-scope and route ──► isolated execution ──► repository-native gates
+scope and route ──► controlled execution ──► repository-native gates
        │                                         │
        └──────── declared proof ─────────────────┘
                                                  ▼
@@ -26,7 +26,8 @@ scope and route ──► isolated execution ──► repository-native gates
 - `scripts/replay_eval.py`: runs frozen OLD×NEW policies against reconstructed
   historical source and task-specific acceptance commands.
 - `bin/007` and `scripts/framework_cli.py`: initialize projects, atomically
-  persist task starts and terminal receipts, and launch the local dashboard.
+  persist task starts, controller-observed action events, and terminal receipts,
+  and launch the local dashboard.
 - `scripts/dashboard.py` and `dashboard/`: aggregate registered projects and
   serve a loopback-only, dependency-free control room.
 - `scripts/local_activity.py`: normalize sanitized Codex, Claude, Kimi, and
@@ -38,19 +39,30 @@ scope and route ──► isolated execution ──► repository-native gates
 ## State model
 
 The framework owns only local measurement state: a project marker, task starts,
-and receipts under `.007/`, plus the user-level project registry at
+controller events, and receipts under `.007/`, plus the user-level project registry at
 `~/.007-framework/projects.json`. `007 init` excludes `.007/` through the local
 Git exclude file, so telemetry does not dirty or alter repository history.
 Durable engineering authority remains in Git, repository instructions, tests,
 and task handoffs. Conversations and raw transcripts are temporary context, not
 operational authority.
 
-The browser polls a read-only aggregate snapshot every two seconds. The HTTP
+The browser polls a read-only aggregate snapshot every two seconds. The snapshot
+derives one three-state objective verdict, seven literal gates, evidence
+provenance, and a 30-day raw-count trend from the same project totals. The HTTP
 server binds to `127.0.0.1` by default and exposes only allowlisted static and
 JSON routes. Aggregate metrics are recomputed from raw project totals; project
 percentages are never averaged. JSON receipts remain the source of truth. A
 database is intentionally deferred until measured volume or query latency makes
 the standard-library scan insufficient.
+
+Known gate failures take precedence in the verdict even while a measurement
+gate is incomplete; the primary action still prioritizes closing that data gap.
+An invalid or unavailable source keeps the overall verdict not measurable
+because the missing record can change the denominator; any failure among valid
+records remains visible in its individual gate.
+Controller blocks that prevent execution are authority events, not software
+outcomes, and are excluded from the quality trend and model-telemetry
+denominator.
 
 The snapshot publishes `telemetry_fields` alongside the completeness numerator
 and denominator so consumers can see that V1.1 measures provider, model, effort,
@@ -78,9 +90,12 @@ tokens, and wall time.
    establishes the outcome denominator and
    `007 record` closes it. Work that bypasses `begin` remains explicitly outside
    what the dependency-free core can observe.
-8. **Execution boundary:** `007 run` may automate the lifecycle around any CLI,
-   but the adapter at the last execution boundary remains responsible for the
-   normalized receipt. Exit code alone never proves quality or accounting.
+8. **Execution boundary:** `007 run --action` validates the bound authority
+   before starting a CLI and is the only supported writer of `controlled`
+   provenance. The adapter at the last execution boundary remains responsible
+   for the normalized outcome and cost receipt. Exit code alone never proves
+   quality or accounting. Local records are not a security boundary against a
+   process with the same OS identity.
 
 ## Extension points
 

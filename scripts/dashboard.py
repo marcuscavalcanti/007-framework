@@ -59,6 +59,13 @@ def has_accounted_cost(receipt):
     )
 
 
+def is_preventive_controller_block(receipt):
+    return (
+        receipt.get("status") == "blocked"
+        and receipt.get("proof_reached") == "controller-blocked-before-execution"
+    )
+
+
 def ratio(numerator, denominator):
     return numerator / denominator if denominator else None
 
@@ -163,15 +170,16 @@ def metrics_from_receipts(receipts):
             ):
                 if is_number(authority.get(key)):
                     authority_totals[key] += authority[key]
-        for served, legacy in (
-            ("served_provider", "provider"),
-            ("served_model", "model"),
-            ("served_effort", "effort"),
-        ):
-            if is_known_label(item.get(served) or item.get(legacy)):
-                telemetry_known += 1
-        telemetry_known += int(is_number(item.get("tokens")))
-        telemetry_known += int(is_number(item.get("wall_s")))
+        if not is_preventive_controller_block(item):
+            for served, legacy in (
+                ("served_provider", "provider"),
+                ("served_model", "model"),
+                ("served_effort", "effort"),
+            ):
+                if is_known_label(item.get(served) or item.get(legacy)):
+                    telemetry_known += 1
+            telemetry_known += int(is_number(item.get("tokens")))
+            telemetry_known += int(is_number(item.get("wall_s")))
         delta = item.get("delta")
         if isinstance(delta, dict):
             for key in delta_totals:
@@ -214,7 +222,9 @@ def metrics_from_receipts(receipts):
         "friction_blocks": authority_totals["friction_blocks"],
         "unclassified_blocks": authority_totals["unclassified_blocks"],
         "telemetry_known": telemetry_known,
-        "telemetry_possible": tasks * len(TELEMETRY_FIELDS),
+        "telemetry_possible": sum(
+            not is_preventive_controller_block(item) for item in receipts
+        ) * len(TELEMETRY_FIELDS),
         "delta_files": delta_totals["files"],
         "delta_added": delta_totals["added"],
         "delta_deleted": delta_totals["deleted"],
@@ -250,7 +260,7 @@ def metrics_from_receipts(receipts):
             authority_totals["friction_blocks"],
             authority_totals["allowed_executions"] + authority_totals["friction_blocks"],
         ),
-        "telemetry_completeness": ratio(telemetry_known, tasks * len(TELEMETRY_FIELDS)),
+        "telemetry_completeness": ratio(telemetry_known, result["telemetry_possible"]),
     })
     return result
 
@@ -351,6 +361,8 @@ def outcome_trend(receipts, now=None, days=30):
         for offset in range(days)
     }
     for receipt in receipts:
+        if is_preventive_controller_block(receipt):
+            continue
         completed = receipt.get("completed_at")
         if not isinstance(completed, str):
             continue
@@ -416,6 +428,9 @@ def objective_state(
         primary = f"Fix {data_failures} invalid or unavailable data source(s)."
     elif metrics.get("started_tasks", 0) == 0:
         primary = "Start measured work with 007 begin or 007 run."
+    elif metrics.get("tasks", 0) == 0 and metrics.get("active_tasks", 0):
+        active = metrics["active_tasks"]
+        primary = f"Complete {active} active task{'s' if active != 1 else ''} with 007 record."
     elif metrics.get("cost_coverage") is None or metrics.get("cost_coverage", 0) < 1:
         missing = max(metrics.get("tasks", 0) - metrics.get("cost_usd_known_tasks", 0), 0)
         primary = f"Record terminal cost for {missing} outcome{'s' if missing != 1 else ''}."
@@ -430,12 +445,14 @@ def objective_state(
             f"Improve {failed['label']} to {failed['target']}."
             if failed else "Keep collecting controlled outcomes."
         )
-    waiting = data_failures or metrics.get("started_tasks", 0) == 0 or any(
-        gate["status"] == "wait" for gate in gates
-    )
-    status = "not-measurable" if waiting else "off-target" if any(
-        gate["status"] == "fail" for gate in gates
-    ) else "on-target"
+    failures = any(gate["status"] == "fail" for gate in gates)
+    waiting = any(gate["status"] == "wait" for gate in gates)
+    if data_failures or metrics.get("started_tasks", 0) == 0:
+        status = "not-measurable"
+    elif failures:
+        status = "off-target"
+    else:
+        status = "not-measurable" if waiting else "on-target"
     return {
         "status": status,
         "headline": {
@@ -731,7 +748,7 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
         },
         "causal_evidence": {
             "status": "narrow-positive",
-            "claim": "Um teste mecanístico congelado observou OLD 0/3 versus NEW 3/3.",
+            "claim": "Dois mecanismos congelados passaram: doutrina OLD 0/3 vs NEW 3/3 e autoridade 18/18 células.",
             "boundary": "As métricas dos projetos são observacionais; somente experimentos OLD×NEW congelados sustentam alegações causais.",
         },
     }

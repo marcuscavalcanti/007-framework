@@ -327,6 +327,42 @@ class DashboardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "authority provenance"):
             cli.validate_receipt(receipt)
 
+    def test_record_rejects_unpersisted_controller_event(self):
+        cli = self.module("framework_cli")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(self.run_cli(
+                "init", "--repo", str(repo), "--registry", str(registry),
+            ).returncode, 0)
+            authority = Path(tmp, "authority.json")
+            authority.write_text(json.dumps({
+                "schema": "007-framework/authority/v1",
+                "allow": ["test"],
+                "deny": ["deploy"],
+            }))
+            task = cli.begin_task(repo, "forged-event", authority_file=authority)
+            receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+            receipt.update({"task_id": "forged-event"})
+            source = Path(tmp, "receipt.json")
+            source.write_text(json.dumps(receipt))
+            forged = {
+                "schema": "007-framework/controller-event/v1",
+                "task_id": "forged-event",
+                "action": "test",
+                "outcome": "executed",
+                "authority_sha256": task["authority_sha256"],
+                "observed_at": "2026-08-31T00:00:00Z",
+                "exit_code": 0,
+            }
+
+            with self.assertRaisesRegex(ValueError, "persisted controller event"):
+                cli.record_receipt(repo, source, controller_event=forged)
+
+            self.assertFalse((repo / ".007/receipts/forged-event.receipt.json").exists())
+
     def test_record_requires_cost_and_writes_no_replace_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")
@@ -776,6 +812,77 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["status"], "off-target")
         self.assertIn("Reliable first-pass", result["primary_action"])
 
+    def test_objective_state_surfaces_known_failure_while_prioritizing_missing_cost(self):
+        dashboard = self.module("dashboard")
+        metrics = {
+            "started_tasks": 5,
+            "active_tasks": 0,
+            "tasks": 5,
+            "reliable_first_pass_known": 5,
+            "reliable_first_pass_rate": 0.6,
+            "repair_rounds_mean": 0.2,
+            "repair_rounds_known_tasks": 5,
+            "escape_7d_rate": 0.0,
+            "cost_coverage": 0.8,
+            "cost_usd_known_tasks": 4,
+            "telemetry_completeness": 1.0,
+        }
+
+        result = dashboard.objective_state(metrics, {"30": {"rate": 0.0}})
+
+        self.assertEqual(result["status"], "off-target")
+        self.assertEqual(result["primary_action"], "Record terminal cost for 1 outcome.")
+
+    def test_objective_state_reaches_on_target_when_all_gates_pass(self):
+        dashboard = self.module("dashboard")
+        metrics = {
+            "started_tasks": 5,
+            "active_tasks": 0,
+            "tasks": 5,
+            "reliable_first_pass_known": 5,
+            "reliable_first_pass_rate": 0.8,
+            "repair_rounds_mean": 0.2,
+            "repair_rounds_known_tasks": 5,
+            "escape_7d_rate": 0.0,
+            "cost_coverage": 1.0,
+            "cost_usd_known_tasks": 5,
+            "telemetry_completeness": 1.0,
+        }
+
+        result = dashboard.objective_state(metrics, {"30": {"rate": 10.0}})
+
+        self.assertEqual(result["status"], "on-target")
+        self.assertEqual(result["primary_action"], "Keep collecting controlled outcomes.")
+
+    def test_invalid_source_keeps_verdict_unmeasurable_without_hiding_gate_failure(self):
+        dashboard = self.module("dashboard")
+        metrics = {
+            "started_tasks": 5, "tasks": 5, "reliable_first_pass_known": 5,
+            "reliable_first_pass_rate": 0.6, "repair_rounds_mean": 0.2,
+            "repair_rounds_known_tasks": 5, "escape_7d_rate": 0.0,
+            "cost_coverage": 1.0, "cost_usd_known_tasks": 5,
+            "telemetry_completeness": 1.0,
+        }
+
+        result = dashboard.objective_state(
+            metrics, {"30": {"rate": 0.0}}, invalid_receipts=1,
+        )
+
+        self.assertEqual(result["status"], "not-measurable")
+        self.assertEqual(result["primary_action"], "Fix 1 invalid or unavailable data source(s).")
+        self.assertEqual(next(g for g in result["gates"] if g["key"] == "reliable")["status"], "fail")
+
+    def test_objective_state_prioritizes_active_lifecycle_before_empty_cost(self):
+        dashboard = self.module("dashboard")
+        metrics = dashboard.metrics_from_observations([], [
+            {"task_id": "one"}, {"task_id": "two"}, {"task_id": "three"},
+        ])
+
+        result = dashboard.objective_state(metrics, {"30": {"rate": None}})
+
+        self.assertEqual(result["status"], "not-measurable")
+        self.assertEqual(result["primary_action"], "Complete 3 active tasks with 007 record.")
+
     def test_authority_confidence_separates_controlled_and_declared(self):
         dashboard = self.module("dashboard")
         result = dashboard.metrics_from_receipts([
@@ -811,6 +918,64 @@ class DashboardTests(unittest.TestCase):
             {"date": "2026-08-30", "reliable": 1, "accepted_other": 1, "not_accepted": 0},
             {"date": "2026-08-31", "reliable": 0, "accepted_other": 0, "not_accepted": 1},
         ])
+
+    def test_outcome_trend_excludes_controller_policy_blocks(self):
+        dashboard = self.module("dashboard")
+        receipts = [{
+            "status": "blocked",
+            "proof_reached": "controller-blocked-before-execution",
+            "completed_at": "2026-08-31T10:00:00Z",
+        }]
+
+        result = dashboard.outcome_trend(
+            receipts, now=datetime(2026, 8, 31, 12, tzinfo=timezone.utc), days=1,
+        )
+
+        self.assertEqual(result, [
+            {"date": "2026-08-31", "reliable": 0, "accepted_other": 0, "not_accepted": 0},
+        ])
+
+    def test_aggregate_reconciles_trend_and_authority_across_projects(self):
+        dashboard = self.module("dashboard")
+        empty_metrics = dashboard.metrics_from_observations([], [])
+        day = datetime.now(timezone.utc).date().isoformat()
+        projects = [
+            {
+                "available": True,
+                "metrics": {**empty_metrics, "tasks": 2, "authority_bound_tasks": 2,
+                            "authority_controlled_tasks": 1, "authority_declared_tasks": 1},
+                "touch": {"7": {"rate": 0.0}, "30": {"rate": 0.0}},
+                "trend_30d": [{"date": day, "reliable": 1, "accepted_other": 0, "not_accepted": 0}],
+                "invalid_receipts": [], "invalid_task_starts": [],
+            },
+            {
+                "available": True,
+                "metrics": {**empty_metrics, "tasks": 1},
+                "touch": {"7": {"rate": 0.0}, "30": {"rate": 0.0}},
+                "trend_30d": [{"date": day, "reliable": 0, "accepted_other": 1, "not_accepted": 0}],
+                "invalid_receipts": [], "invalid_task_starts": [],
+            },
+            {
+                "available": False,
+                "metrics": {**empty_metrics, "tasks": 99, "authority_bound_tasks": 99,
+                            "authority_controlled_tasks": 99},
+                "touch": {"7": {"rate": None}, "30": {"rate": None}},
+                "trend_30d": [{"date": day, "reliable": 99, "accepted_other": 0, "not_accepted": 0}],
+                "invalid_receipts": [], "invalid_task_starts": [],
+            },
+        ]
+
+        result = dashboard.aggregate_projects(projects)
+        today = next(row for row in result["trend_30d"] if row["date"] == day)
+
+        self.assertEqual(today, {"date": day, "reliable": 1, "accepted_other": 1, "not_accepted": 0})
+        self.assertEqual(result["authority_confidence"], {
+            "controlled": 1,
+            "declared": 1,
+            "unobserved": 1,
+            "controlled_coverage": 0.5,
+            "label": "mixed",
+        })
 
     def test_aggregate_touch_is_unknown_when_any_project_is_missing(self):
         dashboard = self.module("dashboard")
@@ -984,6 +1149,25 @@ class DashboardTests(unittest.TestCase):
             "served_effort": "xhigh", "tokens": 100, "wall_s": 2,
         }])
         self.assertEqual(without_provider["telemetry_completeness"], 0.8)
+
+    def test_preventive_controller_block_does_not_dilute_model_telemetry(self):
+        dashboard = self.module("dashboard")
+        metrics = dashboard.metrics_from_receipts([
+            {
+                "status": "accepted", "served_provider": "openai",
+                "served_model": "gpt-5.6-sol", "served_effort": "xhigh",
+                "tokens": 100, "wall_s": 2,
+            },
+            {
+                "status": "blocked",
+                "proof_reached": "controller-blocked-before-execution",
+                "tokens": 0, "wall_s": 0,
+            },
+        ])
+
+        self.assertEqual(metrics["telemetry_possible"], 5)
+        self.assertEqual(metrics["telemetry_known"], 5)
+        self.assertEqual(metrics["telemetry_completeness"], 1.0)
 
     def test_project_snapshot_sanitizes_receipts_and_preserves_unknowns(self):
         dashboard = self.module("dashboard")
@@ -1274,13 +1458,19 @@ class DashboardTests(unittest.TestCase):
             'id="authority-coverage"', 'id="authority-protected"',
             'id="authority-friction"', 'id="authority-friction-detail"',
             'id="authority-unclassified"',
+            'id="primary-action"', 'id="gate-matrix-body"',
+            'id="outcome-trend"', 'id="authority-controlled"',
+            'id="authority-declared"', 'id="authority-unobserved"',
         ):
             self.assertIn(required_id, shell)
         self.assertIn("O 007 está produzindo mais mudanças confiáveis por dólar", shell)
         self.assertIn("Atividade local não é outcome verificado", shell)
         self.assertIn("Codex · Claude · Kimi · Gemini", shell)
         self.assertIn("USD terminal observado", shell)
-        self.assertIn('setText("authority-friction-detail"', (static / "app.js").read_text())
+        app = (static / "app.js").read_text()
+        self.assertIn('setText("authority-friction-detail"', app)
+        self.assertIn("createElementNS", app)
+        self.assertNotIn(".innerHTML =", app)
 
 
 if __name__ == "__main__":

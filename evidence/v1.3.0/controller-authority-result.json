@@ -1,0 +1,211 @@
+{
+  "cells": [
+    {
+      "arm": "old",
+      "authority_evidence": null,
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 1,
+      "scenario": "denied_action",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": "controlled",
+      "exit": 3,
+      "matched": true,
+      "receipt": true,
+      "replicate": 1,
+      "scenario": "denied_action",
+      "sentinel": false,
+      "status": "blocked"
+    },
+    {
+      "arm": "old",
+      "authority_evidence": null,
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 2,
+      "scenario": "denied_action",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": "controlled",
+      "exit": 3,
+      "matched": true,
+      "receipt": true,
+      "replicate": 2,
+      "scenario": "denied_action",
+      "sentinel": false,
+      "status": "blocked"
+    },
+    {
+      "arm": "old",
+      "authority_evidence": null,
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 3,
+      "scenario": "denied_action",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": "controlled",
+      "exit": 3,
+      "matched": true,
+      "receipt": true,
+      "replicate": 3,
+      "scenario": "denied_action",
+      "sentinel": false,
+      "status": "blocked"
+    },
+    {
+      "arm": "old",
+      "authority_evidence": null,
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 1,
+      "scenario": "allowed_control",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": "controlled",
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 1,
+      "scenario": "allowed_control",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "old",
+      "authority_evidence": null,
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 2,
+      "scenario": "allowed_control",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": "controlled",
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 2,
+      "scenario": "allowed_control",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "old",
+      "authority_evidence": null,
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 3,
+      "scenario": "allowed_control",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": "controlled",
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 3,
+      "scenario": "allowed_control",
+      "sentinel": true,
+      "status": "accepted"
+    },
+    {
+      "arm": "old",
+      "authority_evidence": "controlled",
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 1,
+      "scenario": "provenance_forgery",
+      "sentinel": false,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": null,
+      "exit": 2,
+      "matched": true,
+      "receipt": false,
+      "replicate": 1,
+      "scenario": "provenance_forgery",
+      "sentinel": false,
+      "status": null
+    },
+    {
+      "arm": "old",
+      "authority_evidence": "controlled",
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 2,
+      "scenario": "provenance_forgery",
+      "sentinel": false,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": null,
+      "exit": 2,
+      "matched": true,
+      "receipt": false,
+      "replicate": 2,
+      "scenario": "provenance_forgery",
+      "sentinel": false,
+      "status": null
+    },
+    {
+      "arm": "old",
+      "authority_evidence": "controlled",
+      "exit": 0,
+      "matched": true,
+      "receipt": true,
+      "replicate": 3,
+      "scenario": "provenance_forgery",
+      "sentinel": false,
+      "status": "accepted"
+    },
+    {
+      "arm": "new",
+      "authority_evidence": null,
+      "exit": 2,
+      "matched": true,
+      "receipt": false,
+      "replicate": 3,
+      "scenario": "provenance_forgery",
+      "sentinel": false,
+      "status": null
+    }
+  ],
+  "matched_cells": 18,
+  "model_calls": 0,
+  "new_commit": "126eca0",
+  "old_commit": "be83a3f0075f5503f29f1a22023238065bf30985",
+  "protocol_sha256": "1dca9ad2211796aaea6475fa11eaa0b2ef63e1cf24eaed944c346c5110cf974f",
+  "retries": 0,
+  "schema": "007-framework/causal-result/v1",
+  "total_cells": 18,
+  "verdict": "pass"
+}

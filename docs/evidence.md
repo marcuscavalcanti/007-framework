@@ -69,6 +69,29 @@ A second frozen OLD×NEW test observed all eight distinct arm-scenario outcomes
 as preregistered, each reproduced three times; see `evidence/v1.2.0/`. No v1.2.0 tag exists, so
 these corrections amend the candidate rather than a released compatibility contract.
 
+## Controller-observed authority mechanism
+
+The v1.3.0 candidate replaces self-asserted controller provenance with a
+supported `007 run --action` path. A preregistered deterministic OLD×NEW test
+used three scenarios, two arms, and three clean-repository replicates: denied
+action, allowed control, and caller provenance forgery. All 18/18 cells matched
+their frozen expectation with zero retry and zero model calls.
+
+- protocol SHA-256: `1dca9ad2211796aaea6475fa11eaa0b2ef63e1cf24eaed944c346c5110cf974f`;
+- result SHA-256: `ab4fe0002ecb0a6b02bc745307ba6a0b86514cad6307bfc6b0471aedf5ec657a`;
+- OLD: `be83a3f0075f5503f29f1a22023238065bf30985`;
+- NEW treatment: `126eca0`.
+
+An external Opus 5/xhigh review rejected two intermediate revisions and approved
+the final correction delta with highest severity low. The review ledger,
+including all context and source-result hashes, is stored at
+`evidence/v1.3.0/adversarial-review.json`.
+
+The flip proves that the supported NEW controller stops a denied subprocess,
+preserves an allowed control, and rejects caller-supplied controlled provenance.
+It does not prove resistance to same-user file tampering or that the complete
+framework improves longitudinal productivity.
+
 ## Not proved
 
 - provider/model portability;

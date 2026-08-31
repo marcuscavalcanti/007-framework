@@ -6,6 +6,14 @@ All notable changes are documented here.
 
 ### Fixed
 
+- prevent a receipt author from promoting declared boundary events to
+  controller-observed evidence;
+- block denied and unclassified `007 run --action` commands before subprocess
+  creation while preserving allowed controls;
+- keep known performance failures visible while measurement gaps remain and
+  exclude preventive controller blocks from the outcome-quality trend;
+- require controlled provenance to match its persisted no-replace event and
+  exclude pre-execution blocks from model-telemetry completeness;
 - reject terminal receipts without a matching task-start record, closing a
   bypass that could silently remove authority binding;
 - measure reported authority friction against allowed attempts instead of all
@@ -17,6 +25,11 @@ All notable changes are documented here.
 
 ### Added
 
+- a three-state objective verdict, seven-gate decision matrix, primary next
+  action, 30-day outcome trend, and aggregate/project provenance reconciliation;
+- controller-observed, agent-declared, and unobserved authority tiers;
+- an 18-cell deterministic OLD×NEW controller-authority flip-test with zero
+  model calls and zero retries;
 - optional SHA-256-bound authority envelopes with fail-closed terminal
   validation of reported boundary actions;
 - aggregate and per-project fence telemetry for authority coverage, protective

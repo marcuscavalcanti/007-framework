@@ -1,0 +1,30 @@
+{
+  "schema": "007-framework/adversarial-review/v1",
+  "reviewer": "anthropic/claude-opus-5",
+  "effort": "xhigh",
+  "tools": false,
+  "final": {
+    "context_sha256": "26c7ddc04f77b56c9ddeab44ee68f710635e9f1836fddb5f2153da27b34f4791",
+    "source_result_sha256": "a5a8c7323fafe05dc01a1f99fb04679e14ba7d63a10202ee984b4810534a5e93",
+    "verdict": "approve",
+    "highest_severity": "low"
+  },
+  "history": [
+    {
+      "context_sha256": "47682df4e98f62ed75fda450a2c79fa6319b117dba83e2bc7bab4f1cb39b039c",
+      "source_result_sha256": "338098fe11b0f5a9118ac7c0768b6f05acd346b5ec969c204445eca9b51a9985",
+      "verdict": "reject",
+      "highest_severity": "medium"
+    },
+    {
+      "context_sha256": "2a55fd6bf9251514b173fedc8b076ac58da05bfafae3c0d60bf91c2299b4e650",
+      "source_result_sha256": "357ea0a63f613573d6b2cfa8d842abd9d9e386f97cceab8d6286a9dd3ebf8d08",
+      "verdict": "reject",
+      "highest_severity": "medium"
+    }
+  ],
+  "deferred_low_findings": [
+    "share one UTC instant across project trend windows if a midnight-boundary discrepancy is observed",
+    "split the action-name validator if its namespace diverges from task identifiers"
+  ]
+}

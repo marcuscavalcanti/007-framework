@@ -43,7 +43,7 @@
             <p id="view-subtitle">Corretas, aceitas na primeira passagem e intactas após sete dias — sem esconder regressões ou retrabalho.</p>
             <div class="scope-line"><span id="scope-sample">Aguardando dados</span><span aria-hidden="true">•</span><span id="scope-boundary">Uso real é evidência operacional; causalidade exige OLD×NEW.</span></div>
           </div>
-          <div class="verdict-card" id="verdict-card"><div class="verdict-topline"><span class="status-orbit" aria-hidden="true"><i></i></span><span>Resposta agora</span></div><strong id="verdict-label">Sem dados</strong><p id="verdict-reason">A instrumentação ainda não observou uma tarefa.</p></div>
+          <div class="verdict-card" id="verdict-card"><div class="verdict-topline"><span class="status-orbit" aria-hidden="true"><i></i></span><span>Resposta agora</span></div><strong id="verdict-label">Sem dados</strong><p id="verdict-reason">A instrumentação ainda não observou uma tarefa.</p><div class="primary-action"><span>Próxima ação</span><b id="primary-action">Inicie uma tarefa medida.</b></div></div>
         </section>
 
         <section class="instrumentation-panel" id="instrumentation-panel" aria-labelledby="instrumentation-title">
@@ -70,9 +70,19 @@
           <article class="metric-card"><div class="metric-heading"><span>Custo / resultado confiável</span><i class="metric-signal signal-violet"></i></div><strong id="metric-reliable-cost">N/D</strong><p id="metric-reliable-cost-detail">Inclui tentativas bloqueadas e falhas</p><div class="micro-track"><span id="track-cost"></span></div></article>
         </section>
 
+        <section class="analytics-grid decision-grid">
+          <article class="panel gate-panel"><div class="panel-heading"><div><p class="panel-kicker">Sem nota composta</p><h2>Por que essa é a resposta?</h2></div><span class="sample-pill">7 gates independentes</span></div><div class="table-scroll"><table class="gate-table"><thead><tr><th>Gate</th><th>Atual</th><th>Alvo</th><th>Evidência</th><th>Estado</th></tr></thead><tbody id="gate-matrix-body"></tbody></table></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><div><p class="panel-kicker">Últimos 30 dias</p><h2>Qualidade dos resultados ao longo do tempo</h2></div><div class="legend" aria-label="Legenda"><span><i class="legend-reliable"></i>Confiável</span><span><i class="legend-repaired"></i>Aceito/outro</span><span><i class="legend-not-accepted"></i>Não aceito</span></div></div><div class="trend-chart" id="outcome-trend" role="img" aria-label="Tendência diária de resultados"></div></article>
+        </section>
+
         <section class="panel" aria-labelledby="authority-title">
-          <div class="panel-heading"><div><p class="panel-kicker">Autonomia delimitada</p><h2 id="authority-title">Fronteiras de execução</h2></div><span class="sample-pill">fences + sandbox</span></div>
-          <p class="panel-intro">Eventos autorrelatados mostram onde o envelope ajudou ou gerou atrito; não substituem isolamento técnico.</p>
+          <div class="panel-heading"><div><p class="panel-kicker">Confiança da evidência</p><h2 id="authority-title">Quem observou a fronteira?</h2></div><span class="sample-pill" id="authority-confidence-label">não observado</span></div>
+          <p class="panel-intro">“Controlado” significa observado por <code>007 run</code>; não significa proteção contra o dono da máquina ou outro processo com o mesmo usuário.</p>
+          <div class="provenance-grid">
+            <article class="metric-card metric-card-primary"><div class="metric-heading"><span>Controller-observed</span><i class="metric-signal signal-green"></i></div><strong id="authority-controlled">0</strong><p id="authority-controlled-detail">0% dos outcomes vinculados</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Agent-declared</span><i class="metric-signal signal-amber"></i></div><strong id="authority-declared">0</strong><p>Receipt manual; válido, mas autorrelatado</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Não observado</span><i class="metric-signal signal-red"></i></div><strong id="authority-unobserved">0</strong><p>Outcome sem envelope de autoridade</p></article>
+          </div>
           <div class="metric-grid decision-metrics">
             <article class="metric-card"><div class="metric-heading"><span>Envelope presente</span><i class="metric-signal signal-cyan"></i></div><strong id="authority-coverage">N/D</strong><p id="authority-coverage-detail">Presença, não rigor da política</p></article>
             <article class="metric-card"><div class="metric-heading"><span>Bloqueios reportados</span><i class="metric-signal signal-violet"></i></div><strong id="authority-protected">0</strong><p>Ação negada reportada como bloqueada</p></article>

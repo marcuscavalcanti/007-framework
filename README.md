@@ -9,8 +9,8 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Status:** v1.2.0 is an unreleased candidate ready to test. Frozen mechanism tests include an
-> OLD 0/3 vs NEW 3/3 contrast on one decision; the complete framework is not
+> **Status:** v1.3.0 is an unreleased candidate ready to test. Frozen mechanism tests include an
+> OLD 0/3 vs NEW 3/3 doctrine contrast and an 18/18 controller-authority flip-test; the complete framework is not
 > claimed to be universally superior or production-proven. See
 > [Evidence](docs/evidence.md).
 
@@ -137,17 +137,24 @@ Bind explicit task authority when the work has meaningful boundaries:
 ```bash
 007 run --repo . --task-id pagination-regression \
   --authority-file examples/authority.example.json \
-  --receipt task.receipt.json -- your-agent-command
+  --action test --receipt task.receipt.json -- your-agent-command
 ```
 
-The adapter receives `FRAMEWORK_007_AUTHORITY_SHA256` and reports executed or
-blocked boundary events in the receipt. Every receipt requires its matching
-task start; reported execution outside the bound `allow` list is rejected.
-Dashboard events are self-reported, and envelope presence does not measure
-policy strictness. Task-start files are also unauthenticated local records: the
-gate prevents accidental omission, not tampering by the same filesystem user.
+An allowed action runs once; a denied or unclassified action is blocked before
+the subprocess starts. `007 run` writes a no-replace controller event and marks
+the receipt as `controlled`. Manual `007 begin` + `007 record` remains valid but
+is marked `declared`, and caller-supplied controlled provenance is rejected.
+Every receipt still requires its matching task start.
+
+Controller events and task starts are unauthenticated local records. This
+protects the supported lifecycle against agent omission; it does not protect
+against tampering by a process using the same filesystem account.
 This does not replace technical isolation for secrets, network, production, or
 destructive actions.
+
+Task starts are intentionally no-replace. If a command fails before producing a
+valid terminal receipt, keep that start as evidence and retry with a new
+`task-id`; do not delete or reuse the interrupted identity.
 
 Start the all-project control room:
 
@@ -159,6 +166,14 @@ The loopback dashboard opens at `http://127.0.0.1:7007`, discovers all projects
 registered by `007 init`, updates every two seconds, and keeps aggregate totals
 mathematically reconcilable with the project views. It has no login because it
 binds locally; do not expose it on a public interface.
+
+The first viewport answers **on target**, **off target**, or **not yet
+measurable**. Seven independent gates show the actual value, target, evidence
+denominator, and next action. A 30-day trend and controlled/declared/unobserved
+provenance panel explain the verdict without hiding missing data in a score.
+Preventive controller blocks remain visible in the authority panel but are not
+classified as failed engineering outcomes in the 30-day quality trend or as
+model-telemetry opportunities when no model was invoked.
 
 The activity lane reads only sanitized session metadata and token counters from
 local Codex, Claude, Kimi Code, and Gemini CLI logs. It maps Git worktrees back

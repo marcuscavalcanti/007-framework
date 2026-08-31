@@ -98,6 +98,8 @@ the terminal receipt with `authority_evidence: "controlled"`. A caller cannot
 set that provenance through `007 record`. Manual `begin` + `record` remains
 supported, but its receipt is explicitly marked
 `authority_evidence: "declared"`.
+The controlled stamp is accepted only when the matching persisted controller
+event exists and equals the event being bound to the receipt.
 
 Every terminal receipt requires its matching task-start record. The start stores
 the envelope and its raw-file SHA-256. The terminal receipt
