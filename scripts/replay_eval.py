@@ -27,6 +27,11 @@ from pathlib import Path
 
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+DEPENDENCY_MANIFESTS = {
+    "Cargo.toml", "Gemfile", "Pipfile", "go.mod", "package.json",
+    "package-lock.json", "pnpm-lock.yaml", "poetry.lock", "pyproject.toml",
+    "requirements.txt", "uv.lock", "yarn.lock",
+}
 
 
 def validate_task_id(value):
@@ -109,11 +114,28 @@ def changed_lines(repo, revision_range=None):
 def diagnostics(task, workspace, source_repo):
     run(["git", "add", "-N", "--", "."], cwd=workspace, timeout=60)
     produced_files, produced_lines = changed_lines(workspace)
+    numstat = run(["git", "diff", "--numstat"], cwd=workspace, timeout=300)
+    added = deleted = 0
+    complete = numstat.returncode == 0
+    for line in numstat.stdout.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            complete = False
+            continue
+        added += int(parts[0])
+        deleted += int(parts[1])
     accepted_files, accepted_lines = changed_lines(
         source_repo, f"{task['base']}..{task['accepted']}"
     )
     union = produced_files | accepted_files
     return {
+        "d0_complete": complete,
+        "changed_files": len(produced_files),
+        "lines_added": added,
+        "lines_deleted": deleted,
+        "dependency_manifests_changed": sorted(
+            path for path in produced_files if Path(path).name in DEPENDENCY_MANIFESTS
+        ),
         "file_jaccard_diagnostic": round(len(produced_files & accepted_files) / len(union), 3) if union else 0.0,
         "line_similarity_diagnostic": round(
             difflib.SequenceMatcher(None, "\n".join(produced_lines), "\n".join(accepted_lines)).ratio(), 3
@@ -269,12 +291,14 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             validate_served_identity(runner_value, policy)
             if config.get("require_served_identity") else (None, None)
         )
+        d0 = diagnostics(task, workspace, source_repo)
+        d0_failure = None if d0["d0_complete"] else "d0-incomplete"
         agent_valid, _ = grade_cell(exit_code, checks_passed)
-        valid = agent_valid and identity_failure is None and hidden_failure is None
+        valid = agent_valid and identity_failure is None and hidden_failure is None and d0["d0_complete"]
         accepted = valid and checks_passed
         failure_class = (
             "timeout" if exit_code == -9 else "agent-exit" if exit_code != 0
-            else hidden_failure or identity_failure or "none"
+            else hidden_failure or identity_failure or d0_failure or "none"
         )
         usage = identity.get("usage") if identity else None
         record = {
@@ -304,7 +328,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             "accepted": accepted,
             "failure_class": failure_class,
             "acceptance": checks,
-            **diagnostics(task, workspace, source_repo),
+            **d0,
             "agent_tail": tail,
         }
         (output_dir / f"{task['id']}-r{replicate:02d}-{arm}.json").write_text(json.dumps(record, indent=2))

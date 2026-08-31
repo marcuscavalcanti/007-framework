@@ -178,6 +178,10 @@ class ScriptContractTests(unittest.TestCase):
                 self.assertEqual(cell["served_model"], "gpt-test")
                 self.assertEqual(cell["served_effort"], "medium")
                 self.assertEqual(cell["cost_usd"], 0.01)
+                self.assertEqual(cell["changed_files"], 0)
+                self.assertEqual(cell["lines_added"], 0)
+                self.assertEqual(cell["lines_deleted"], 0)
+                self.assertEqual(cell["dependency_manifests_changed"], [])
                 self.assertRegex(cell["runner_receipt_sha256"], r"^[0-9a-f]{64}$")
         finally:
             sys.path.pop(0)
