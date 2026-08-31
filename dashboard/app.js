@@ -127,9 +127,17 @@ function renderMetrics(metrics) {
   setText("metric-repairs-detail", `${metrics.repair_rounds_known_tasks || 0} tarefas com medição`);
   setTrack("track-repairs", metrics.repair_rounds_mean, 2);
 
+  setText("metric-roi", metrics.reliable_outcomes_per_usd == null ? "N/D" : decimal(metrics.reliable_outcomes_per_usd, 2));
+  setText("metric-roi-detail", `${metrics.reliable_first_pass_yes || 0} confiáveis · cobertura de custo ${percent(metrics.cost_coverage)}`);
+  setTrack("track-roi", metrics.reliable_outcomes_per_usd, 2);
+
   setText("metric-reliable-cost", money(metrics.cost_usd_per_reliable));
   setText("metric-reliable-cost-detail", `Cobertura de custo ${percent(metrics.cost_coverage)} · inclui todas as tentativas`);
   setTrack("track-cost", metrics.cost_coverage);
+
+  setText("metric-reliable-time", metrics.wall_s_per_reliable == null ? "N/D" : `${decimal(metrics.wall_s_per_reliable, 0)}s`);
+  setText("metric-reliable-time-detail", `${metrics.wall_s_known_tasks || 0}/${metrics.tasks || 0} outcomes com tempo`);
+  setTrack("track-time", metrics.wall_s_per_reliable == null ? null : 1, 1);
 }
 
 function gateActual(gate) {
@@ -321,13 +329,13 @@ function renderRoutes(metrics) {
   routes.forEach((route) => {
     const row = element("div", "route-row");
     const main = element("div", "route-main");
-    main.append(element("strong", "", `${route.provider}/${route.model}`), element("span", "", route.binding || "atividade local observada"));
+    main.append(element("strong", "", `${route.provider}/${route.model}`), element("span", "", verified.length ? `${route.task_class || "unclassified"} · ${route.effort || "effort N/D"} · ${route.binding}` : "atividade local observada"));
     const values = element("div", "route-metrics");
     values.append(
-      element("strong", "", verified.length ? `${route.accepted}/${route.tasks}` : `${route.sessions}`),
-      element("strong", "", money(verified.length ? route.cost_usd_known_sum : route.cost_usd_estimate)),
-      element("span", "", verified.length ? "aceitas" : `${integer(route.tokens)} tokens`),
-      element("span", "", verified.length ? "custo terminal" : "API-equiv. opcional")
+      element("strong", "", verified.length ? `${route.reliable}/${route.reliable_known}` : `${route.sessions}`),
+      element("strong", "", money(verified.length ? route.cost_usd_per_reliable : route.cost_usd_estimate)),
+      element("span", "", verified.length ? "confiáveis 7d" : `${integer(route.tokens)} tokens`),
+      element("span", "", verified.length ? "custo / confiável" : "API-equiv. opcional")
     );
     row.append(main, values);
     list.append(row);
@@ -367,8 +375,12 @@ function renderDiagnostics(metrics, project) {
 
 function renderEvidence() {
   const evidence = state.snapshot.causal_evidence;
-  setText("causal-claim", evidence?.claim || "Nenhum experimento causal publicado.");
-  setText("causal-boundary", evidence?.boundary || "Uso operacional não prova causalidade.");
+  setText("causal-claim", evidence?.claim_pt_br || evidence?.claim || "Nenhum experimento causal publicado.");
+  setText("causal-boundary", evidence?.boundary_pt_br || evidence?.boundary || "Uso operacional não prova causalidade.");
+  setText("causal-old-cost", money(evidence?.old?.cost_usd_per_accepted));
+  setText("causal-new-cost", money(evidence?.new?.cost_usd_per_accepted));
+  setText("causal-cost-delta", evidence?.delta?.cost_pct == null ? "N/D" : `${decimal(evidence.delta.cost_pct, 1)}%`);
+  setText("causal-latency-delta", evidence?.delta?.median_wall_pct == null ? "N/D" : `${decimal(evidence.delta.median_wall_pct, 1)}%`);
 }
 
 function render() {

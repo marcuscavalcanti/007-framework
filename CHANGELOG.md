@@ -4,6 +4,25 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-31
+
+### Added
+
+- deterministic task-start routing across user-configured installed CLIs;
+- fail-closed eligibility based on mature reliability, escapes, repairs, cost,
+  and wall time before cost/latency optimization;
+- aggregate and per-route reliable outcomes per USD and wall time per reliable
+  outcome, counting failed attempts;
+- a separately frozen causal ROI card based on one real OLD×NEW coding task.
+
+### Evidence boundary
+
+- the frozen task passed hidden acceptance 3/3 in both arms; NEW used 24.9% less
+  estimated USD and 21.5% fewer median added lines, while median latency was
+  3.4% higher;
+- this is a narrow retrospective secondary cost endpoint, not proof of universal
+  route superiority, provider portability, or seven-day durability.
+
 ### Fixed
 
 - prevent a receipt author from promoting declared boundary events to

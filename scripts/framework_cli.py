@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,9 @@ RECEIPT_SCHEMA = "007-framework/receipt/v1"
 TASK_START_SCHEMA = "007-framework/task-start/v1"
 AUTHORITY_SCHEMA = "007-framework/authority/v1"
 CONTROLLER_EVENT_SCHEMA = "007-framework/controller-event/v1"
+ROUTE_CONFIG_SCHEMA = "007-framework/routes/v1"
+ROUTE_DECISION_SCHEMA = "007-framework/route-decision/v1"
+TASK_CLASSES = {"inspect", "implement", "deep", "design"}
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COST_SOURCES = {
@@ -32,6 +36,10 @@ CUSTOM_COST_SOURCE = re.compile(r"^custom:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 def default_registry_path():
     return Path.home() / ".007-framework" / "projects.json"
+
+
+def default_route_config_path():
+    return Path.home() / ".007-framework" / "routes.json"
 
 
 def git_root(path):
@@ -139,6 +147,148 @@ def validate_task_id(task_id):
     if not isinstance(task_id, str) or not TASK_ID.fullmatch(task_id):
         raise ValueError("task_id must use only letters, numbers, dot, dash, or underscore")
     return task_id
+
+
+def validate_route_config(value):
+    if not isinstance(value, dict) or value.get("schema") != ROUTE_CONFIG_SCHEMA:
+        raise ValueError(f"route config schema must be {ROUTE_CONFIG_SCHEMA}")
+    candidates = value.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError("route config requires candidates")
+    seen = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ValueError("route candidate must be an object")
+        candidate_id = validate_task_id(candidate.get("id"))
+        if candidate_id in seen:
+            raise ValueError(f"duplicate route candidate: {candidate_id}")
+        seen.add(candidate_id)
+        command = candidate.get("command")
+        classes = candidate.get("task_classes")
+        if not isinstance(command, list) or not command or any(not isinstance(part, str) or not part for part in command):
+            raise ValueError(f"route candidate {candidate_id} requires command argv")
+        if not isinstance(classes, list) or not classes or set(classes) - TASK_CLASSES:
+            raise ValueError(f"route candidate {candidate_id} has invalid task_classes")
+        for field in ("provider", "model", "effort"):
+            if not isinstance(candidate.get(field), str) or not candidate[field]:
+                raise ValueError(f"route candidate {candidate_id} requires {field}")
+        if "fallback" in candidate and not isinstance(candidate["fallback"], bool):
+            raise ValueError(f"route candidate {candidate_id} fallback must be boolean")
+    return value
+
+
+def route_performance(candidate, receipts, task_class):
+    matching = [
+        receipt for receipt in receipts
+        if receipt.get("task_class") == task_class
+        and (receipt.get("served_provider") or receipt.get("provider")) == candidate["provider"]
+        and (receipt.get("served_model") or receipt.get("model")) == candidate["model"]
+        and (receipt.get("served_effort") or receipt.get("effort")) == candidate["effort"]
+    ]
+    reliable = [
+        receipt for receipt in matching
+        if receipt.get("status") == "accepted"
+        and receipt.get("first_pass") == "yes"
+        and receipt.get("escape_7d") in (False, "no")
+    ]
+    mature = [
+        receipt for receipt in matching
+        if receipt.get("first_pass") in ("yes", "no")
+        and receipt.get("escape_7d") in (True, False, "yes", "no")
+    ]
+    repairs = [receipt.get("repair_rounds") for receipt in matching]
+    costs_known = all(
+        isinstance(receipt.get("cost_usd"), (int, float))
+        and not isinstance(receipt.get("cost_usd"), bool)
+        and math.isfinite(receipt["cost_usd"])
+        and isinstance(receipt.get("cost_source"), str)
+        and receipt.get("cost_status") in ("final", "provisional")
+        for receipt in matching
+    )
+    wall_known = all(
+        isinstance(receipt.get("wall_s"), (int, float))
+        and not isinstance(receipt.get("wall_s"), bool)
+        and math.isfinite(receipt["wall_s"])
+        for receipt in matching
+    )
+    reliable_rate = len(reliable) / len(mature) if mature else None
+    escape_rate = sum(receipt.get("escape_7d") in (True, "yes") for receipt in mature) / len(mature) if mature else None
+    repairs_mean = sum(repairs) / len(repairs) if matching and all(isinstance(value, int) and not isinstance(value, bool) for value in repairs) else None
+    return {
+        "tasks": len(matching),
+        "mature": len(mature),
+        "reliable": len(reliable),
+        "reliable_rate": reliable_rate,
+        "escape_rate": escape_rate,
+        "repair_rounds_mean": repairs_mean,
+        "cost_usd_per_reliable": (
+            round(sum(receipt["cost_usd"] for receipt in matching) / len(reliable), 6)
+            if matching and reliable and costs_known else None
+        ),
+        "wall_s_per_reliable": (
+            round(sum(receipt["wall_s"] for receipt in matching) / len(reliable), 3)
+            if matching and reliable and wall_known else None
+        ),
+    }
+
+
+def select_route(candidates, receipts, task_class, which=shutil.which):
+    if task_class not in TASK_CLASSES:
+        raise ValueError(f"task_class must be one of: {', '.join(sorted(TASK_CLASSES))}")
+    available = [
+        candidate for candidate in candidates
+        if task_class in candidate.get("task_classes", []) and which(candidate["command"][0])
+    ]
+    measured, rejected = [], {}
+    for candidate in available:
+        performance = route_performance(candidate, receipts, task_class)
+        reasons = []
+        if performance["mature"] < 5:
+            reasons.append("fewer than 5 mature outcomes")
+        if performance["reliable_rate"] is None or performance["reliable_rate"] < 0.7:
+            reasons.append("reliable first-pass below 70%")
+        if performance["escape_rate"] is None or performance["escape_rate"] > 0.05:
+            reasons.append("escape rate above 5%")
+        if performance["repair_rounds_mean"] is None or performance["repair_rounds_mean"] > 0.5:
+            reasons.append("repair rounds above 0.5")
+        if performance["cost_usd_per_reliable"] is None:
+            reasons.append("cost coverage incomplete")
+        if performance["wall_s_per_reliable"] is None:
+            reasons.append("latency coverage incomplete")
+        if reasons:
+            rejected[candidate["id"]] = reasons
+        else:
+            measured.append({**candidate, **performance})
+    measured.sort(key=lambda item: (item["cost_usd_per_reliable"], item["wall_s_per_reliable"], item["id"]))
+    selected = measured[0] if measured else next((item for item in available if item.get("fallback")), None)
+    return {
+        "schema": ROUTE_DECISION_SCHEMA,
+        "task_class": task_class,
+        "strategy": "measured" if measured else "policy-fallback" if selected else "blocked",
+        "selected": selected,
+        "available_candidates": len(available),
+        "eligible_candidates": len(measured),
+        "rejected": rejected,
+    }
+
+
+def load_route_receipts(registry_path):
+    registry_path = Path(registry_path).expanduser()
+    if not registry_path.exists():
+        return []
+    receipts = []
+    for entry in load_registry(registry_path)["projects"]:
+        root = Path(entry["path"])
+        marker_path = root / ".007" / "project.json"
+        if not marker_path.is_file():
+            continue
+        marker = validate_marker(read_json(marker_path))
+        for path in sorted((marker_path.parent / marker["receipt_dir"]).glob("*.receipt.json")):
+            value = read_json(path)
+            if not isinstance(value, dict):
+                raise ValueError(f"invalid route receipt: {path}")
+            receipts.append(value)
+    return receipts
 
 
 def validate_authority(value):
@@ -266,6 +416,8 @@ def validate_receipt(value):
     validate_task_id(value.get("task_id"))
     if value.get("status") not in ("accepted", "blocked", "no-op"):
         raise ValueError("status must be accepted, blocked, or no-op")
+    if value.get("task_class") is not None and value["task_class"] not in TASK_CLASSES:
+        raise ValueError(f"task_class must be one of: {', '.join(sorted(TASK_CLASSES))}")
     cost = value.get("cost_usd")
     if (
         isinstance(cost, bool)
@@ -513,6 +665,11 @@ def parser():
     run.add_argument("--authority-file", type=Path)
     run.add_argument("--action")
     run.add_argument("argv", nargs=argparse.REMAINDER, help="command after --")
+    route = commands.add_parser("route", help="select the cheapest measured eligible executor")
+    route.add_argument("--task-class", required=True, choices=sorted(TASK_CLASSES))
+    route.add_argument("--config", type=Path, default=default_route_config_path())
+    route.add_argument("--registry", type=Path, default=default_registry_path())
+    route.add_argument("--format", choices=("json", "text"), default="text")
     unregister = commands.add_parser("unregister", help="remove a stale project from the local registry")
     unregister.add_argument("--project", required=True, help="registered project path or project ID")
     unregister.add_argument("--registry", type=Path, default=default_registry_path())
@@ -566,6 +723,19 @@ def main(argv=None):
             if destination:
                 print(f"recorded: {destination}")
             return status
+        if args.command == "route":
+            config = validate_route_config(read_json(args.config.expanduser()))
+            decision = select_route(
+                config["candidates"], load_route_receipts(args.registry), args.task_class,
+            )
+            if args.format == "json":
+                print(json.dumps(decision, indent=2, sort_keys=True))
+            elif decision["selected"]:
+                selected = decision["selected"]
+                print(f"{selected['id']}: {selected['provider']}/{selected['model']}@{selected['effort']} ({decision['strategy']})")
+            else:
+                print("no available route", file=sys.stderr)
+            return 0 if decision["selected"] else 3
         if args.command == "unregister":
             entry = unregister_project(args.project, args.registry)
             print(f"unregistered: {entry['name']} ({entry['path']})")

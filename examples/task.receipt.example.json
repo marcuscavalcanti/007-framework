@@ -1,6 +1,7 @@
 {
   "schema": "007-framework/receipt/v1",
   "task_id": "pagination-fix-001",
+  "task_class": "implement",
   "status": "accepted",
   "proof_required": "integrated",
   "proof_reached": "integrated",

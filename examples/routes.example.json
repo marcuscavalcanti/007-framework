@@ -1,0 +1,22 @@
+{
+  "schema": "007-framework/routes/v1",
+  "candidates": [
+    {
+      "id": "safe-default",
+      "command": ["your-agent-cli"],
+      "provider": "your-provider",
+      "model": "your-served-model",
+      "effort": "medium",
+      "task_classes": ["inspect", "implement"],
+      "fallback": true
+    },
+    {
+      "id": "deep-route",
+      "command": ["your-deep-agent-cli"],
+      "provider": "your-provider",
+      "model": "your-deep-model",
+      "effort": "high",
+      "task_classes": ["deep"]
+    }
+  ]
+}

@@ -143,6 +143,16 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("task_id", unsafe.stderr)
             self.assertFalse((repo / ".007/escape.task.json").exists())
 
+    def test_receipt_task_class_is_open_only_to_supported_routing_classes(self):
+        framework_cli = self.module("framework_cli")
+        receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        receipt["task_class"] = "implement"
+
+        self.assertIs(framework_cli.validate_receipt(receipt), receipt)
+        receipt["task_class"] = "cheap-model-please"
+        with self.assertRaisesRegex(ValueError, "task_class"):
+            framework_cli.validate_receipt(receipt)
+
     def test_bound_authority_accepts_safe_events_and_summarizes_fences(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")
@@ -723,6 +733,53 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["reliable_first_pass_rate"], 0.5)
         self.assertEqual(result["cost_usd_per_reliable"], 1.0)
 
+    def test_roi_uses_all_attempt_cost_and_time_per_reliable_outcome(self):
+        dashboard = self.module("dashboard")
+        starts = [{"task_id": task_id} for task_id in ("stable-a", "stable-b", "failed")]
+        receipts = [
+            {
+                "task_id": "stable-a", "status": "accepted", "first_pass": "yes",
+                "escape_7d": "no", "cost_usd": 0.2,
+                "cost_source": "provider-reported", "cost_status": "final", "wall_s": 10,
+            },
+            {
+                "task_id": "stable-b", "status": "accepted", "first_pass": "yes",
+                "escape_7d": "no", "cost_usd": 0.3,
+                "cost_source": "provider-reported", "cost_status": "final", "wall_s": 20,
+            },
+            {
+                "task_id": "failed", "status": "blocked", "first_pass": "no",
+                "escape_7d": "no", "cost_usd": 0.5,
+                "cost_source": "provider-reported", "cost_status": "final", "wall_s": 30,
+            },
+        ]
+
+        result = dashboard.metrics_from_observations(receipts, starts)
+
+        self.assertEqual(result["cost_usd_per_reliable"], 0.5)
+        self.assertEqual(result["reliable_outcomes_per_usd"], 2.0)
+        self.assertEqual(result["wall_s_per_reliable"], 30.0)
+
+    def test_roi_stays_unknown_when_cost_or_time_is_incomplete(self):
+        dashboard = self.module("dashboard")
+        starts = [{"task_id": "stable"}, {"task_id": "missing"}]
+        receipts = [
+            {
+                "task_id": "stable", "status": "accepted", "first_pass": "yes",
+                "escape_7d": "no", "cost_usd": 0.2,
+                "cost_source": "provider-reported", "cost_status": "final", "wall_s": 10,
+            },
+            {
+                "task_id": "missing", "status": "blocked", "first_pass": "no",
+                "escape_7d": "no", "wall_s": "unmeasured",
+            },
+        ]
+
+        result = dashboard.metrics_from_observations(receipts, starts)
+
+        self.assertIsNone(result["reliable_outcomes_per_usd"])
+        self.assertIsNone(result["wall_s_per_reliable"])
+
     def test_lifecycle_is_unknown_without_starts_or_matured_outcomes(self):
         dashboard = self.module("dashboard")
         receipts = [{
@@ -786,7 +843,7 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, touch)
 
         self.assertEqual(result["status"], "not-measurable")
-        self.assertEqual(result["primary_action"], "Record terminal cost for 2 outcomes.")
+        self.assertEqual(result["primary_action"], "Registre o custo terminal de 2 resultado(s).")
         self.assertEqual(
             [gate["status"] for gate in result["gates"]],
             ["pass", "pass", "pass", "pass", "pass", "wait", "pass"],
@@ -831,7 +888,7 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, {"30": {"rate": 0.0}})
 
         self.assertEqual(result["status"], "off-target")
-        self.assertEqual(result["primary_action"], "Record terminal cost for 1 outcome.")
+        self.assertEqual(result["primary_action"], "Registre o custo terminal de 1 resultado(s).")
 
     def test_objective_state_reaches_on_target_when_all_gates_pass(self):
         dashboard = self.module("dashboard")
@@ -852,7 +909,7 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, {"30": {"rate": 10.0}})
 
         self.assertEqual(result["status"], "on-target")
-        self.assertEqual(result["primary_action"], "Keep collecting controlled outcomes.")
+        self.assertEqual(result["primary_action"], "Continue coletando resultados controlados.")
 
     def test_invalid_source_keeps_verdict_unmeasurable_without_hiding_gate_failure(self):
         dashboard = self.module("dashboard")
@@ -869,7 +926,7 @@ class DashboardTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "not-measurable")
-        self.assertEqual(result["primary_action"], "Fix 1 invalid or unavailable data source(s).")
+        self.assertEqual(result["primary_action"], "Corrija 1 fonte(s) de dados inválida(s) ou indisponível(is).")
         self.assertEqual(next(g for g in result["gates"] if g["key"] == "reliable")["status"], "fail")
 
     def test_objective_state_prioritizes_active_lifecycle_before_empty_cost(self):
@@ -881,7 +938,7 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, {"30": {"rate": None}})
 
         self.assertEqual(result["status"], "not-measurable")
-        self.assertEqual(result["primary_action"], "Complete 3 active tasks with 007 record.")
+        self.assertEqual(result["primary_action"], "Conclua 3 tarefa(s) ativa(s) com 007 record.")
 
     def test_authority_confidence_separates_controlled_and_declared(self):
         dashboard = self.module("dashboard")
@@ -1044,6 +1101,31 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["wall_s_per_accepted"], 10)
         self.assertEqual(result["cost_usd_per_accepted"], 0.5)
 
+    def test_aggregate_roi_recomputes_from_raw_totals_not_project_averages(self):
+        dashboard = self.module("dashboard")
+        projects = []
+        for cost, wall in ((0.2, 10), (0.8, 30)):
+            metrics = dashboard.metrics_from_observations([{
+                "task_id": f"task-{cost}", "task_class": "implement",
+                "status": "accepted", "first_pass": "yes", "escape_7d": "no",
+                "repair_rounds": 0, "served_provider": "openai",
+                "served_model": "gpt-5.6-terra", "served_effort": "medium",
+                "cost_usd": cost, "cost_source": "rate-card-estimate",
+                "cost_status": "provisional", "wall_s": wall,
+            }], [{"task_id": f"task-{cost}"}])
+            projects.append({
+                "available": True, "metrics": metrics,
+                "touch": {"7": {"rate": 0.0}, "30": {"rate": 0.0}},
+                "invalid_receipts": [], "invalid_task_starts": [],
+            })
+
+        result = dashboard.aggregate_projects(projects)
+
+        self.assertEqual(result["reliable_outcomes_per_usd"], 2.0)
+        self.assertEqual(result["wall_s_per_reliable"], 20.0)
+        self.assertEqual(result["routes"][0]["reliable"], 2)
+        self.assertEqual(result["routes"][0]["cost_usd_per_reliable"], 0.5)
+
     def test_routes_prefer_served_model_and_cost_requires_source(self):
         dashboard = self.module("dashboard")
         receipts = [
@@ -1068,18 +1150,52 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(metrics["cost_final_tasks"], 1)
         self.assertEqual(metrics["cost_provisional_tasks"], 0)
         self.assertEqual(metrics["cost_usd_per_accepted"], None)
-        self.assertEqual(metrics["routes"], [
-            {
-                "key": "moonshot/kimi-k3", "provider": "moonshot", "model": "kimi-k3",
-                "binding": "requested-unverified", "tasks": 1, "accepted": 1,
-                "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0,
-            },
-            {
-                "key": "openai/gpt-served", "provider": "openai", "model": "gpt-served",
-                "binding": "served", "tasks": 1, "accepted": 1,
-                "cost_usd_known_sum": 0.4, "cost_usd_known_tasks": 1,
-            },
+        routes = metrics["routes"]
+        self.assertEqual([route["key"] for route in routes], [
+            "moonshot/kimi-k3@effort-unmeasured", "openai/gpt-served@effort-unmeasured",
         ])
+        self.assertEqual(routes[0]["task_class"], "unclassified")
+        self.assertEqual(routes[0]["binding"], "requested-unverified")
+        self.assertEqual(routes[0]["cost_usd_known_tasks"], 0)
+        self.assertEqual(routes[1]["binding"], "served")
+        self.assertEqual(routes[1]["cost_usd_known_sum"], 0.4)
+
+    def test_route_metrics_expose_reliable_roi_without_hiding_failed_attempts(self):
+        dashboard = self.module("dashboard")
+        common = {
+            "task_class": "implement", "served_provider": "openai",
+            "served_model": "gpt-5.6-terra", "served_effort": "medium",
+            "cost_source": "rate-card-estimate", "cost_status": "provisional",
+        }
+        metrics = dashboard.metrics_from_receipts([
+            {**common, "status": "accepted", "first_pass": "yes", "escape_7d": "no", "cost_usd": 0.2, "wall_s": 10},
+            {**common, "status": "blocked", "first_pass": "no", "escape_7d": "no", "cost_usd": 0.3, "wall_s": 20},
+        ])
+
+        route = metrics["routes"][0]
+        self.assertEqual(route["task_class"], "implement")
+        self.assertEqual(route["reliable"], 1)
+        self.assertEqual(route["reliable_known"], 2)
+        self.assertEqual(route["reliable_rate"], 0.5)
+        self.assertEqual(route["cost_usd_per_reliable"], 0.5)
+        self.assertEqual(route["wall_s_per_reliable"], 30.0)
+
+    def test_route_metrics_keep_effort_bindings_separate(self):
+        dashboard = self.module("dashboard")
+        base = {
+            "task_class": "implement", "served_provider": "openai",
+            "served_model": "gpt-5.6-sol", "status": "accepted",
+            "first_pass": "yes", "escape_7d": "no", "repair_rounds": 0,
+            "cost_source": "provider-reported", "cost_status": "final", "wall_s": 10,
+        }
+
+        routes = dashboard.route_metrics([
+            {**base, "served_effort": "medium", "cost_usd": 0.2},
+            {**base, "served_effort": "xhigh", "cost_usd": 0.8},
+        ])
+
+        self.assertEqual(len(routes), 2)
+        self.assertEqual({route["effort"] for route in routes}, {"medium", "xhigh"})
 
     def test_authority_metrics_separate_protection_from_friction(self):
         dashboard = self.module("dashboard")
@@ -1417,6 +1533,33 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot["activity_errors"], [])
         self.assertEqual(snapshot["measurement_boundary"]["cost_authority"], "terminal-receipt")
 
+    def test_causal_evidence_loader_preserves_release_claim_and_boundary(self):
+        dashboard = self.module("dashboard")
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp, "causal-roi.json")
+            source.write_text(json.dumps({
+                "schema": "007-framework/causal-roi/v1",
+                "status": "positive-secondary",
+                "claim": "NEW reduced estimated cost without quality loss.",
+                "boundary": "Durability remains unmeasured.",
+                "old": {"accepted": 3, "cost_usd_per_accepted": 0.38},
+                "new": {"accepted": 3, "cost_usd_per_accepted": 0.29},
+                "delta": {"cost_pct": -24.0},
+            }))
+
+            result = dashboard.load_causal_evidence(source)
+
+        self.assertEqual(result["status"], "positive-secondary")
+        self.assertEqual(result["delta"]["cost_pct"], -24.0)
+
+    def test_causal_evidence_loader_fails_closed_when_artifact_is_missing(self):
+        dashboard = self.module("dashboard")
+
+        result = dashboard.load_causal_evidence(Path("/missing/causal-roi.json"))
+
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIn("not available", result["boundary"])
+
     def test_dashboard_shell_is_semantic_and_self_contained(self):
         class ShellParser(HTMLParser):
             def __init__(self):
@@ -1461,6 +1604,9 @@ class DashboardTests(unittest.TestCase):
             'id="primary-action"', 'id="gate-matrix-body"',
             'id="outcome-trend"', 'id="authority-controlled"',
             'id="authority-declared"', 'id="authority-unobserved"',
+            'id="metric-roi"', 'id="metric-reliable-time"',
+            'id="causal-old-cost"', 'id="causal-new-cost"',
+            'id="causal-cost-delta"', 'id="causal-latency-delta"',
         ):
             self.assertIn(required_id, shell)
         self.assertIn("O 007 está produzindo mais mudanças confiáveis por dólar", shell)

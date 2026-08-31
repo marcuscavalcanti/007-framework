@@ -204,6 +204,179 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    def test_router_selects_lowest_cost_eligible_route_and_rejects_quality_loss(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import framework_cli
+            candidates = [
+                {
+                    "id": "terra", "command": [sys.executable], "provider": "openai",
+                    "model": "gpt-5.6-terra", "effort": "medium",
+                    "task_classes": ["implement"], "fallback": True,
+                },
+                {
+                    "id": "sol", "command": [sys.executable], "provider": "openai",
+                    "model": "gpt-5.6-sol", "effort": "high",
+                    "task_classes": ["implement"],
+                },
+            ]
+
+            def outcomes(model, cost, wall, escaped=False):
+                return [
+                    {
+                        "task_class": "implement", "status": "accepted",
+                        "first_pass": "yes", "repair_rounds": 0,
+                        "escape_7d": "yes" if escaped and index == 0 else "no",
+                        "served_provider": "openai", "served_model": model,
+                        "served_effort": "medium" if "terra" in model else "high",
+                        "cost_usd": cost, "cost_source": "rate-card-estimate",
+                        "cost_status": "provisional", "wall_s": wall,
+                    }
+                    for index in range(5)
+                ]
+
+            selected = framework_cli.select_route(
+                candidates,
+                outcomes("gpt-5.6-terra", 0.2, 10) + outcomes("gpt-5.6-sol", 0.8, 8),
+                "implement",
+            )
+            rejected = framework_cli.select_route(
+                candidates,
+                outcomes("gpt-5.6-terra", 0.2, 10, escaped=True) + outcomes("gpt-5.6-sol", 0.8, 8),
+                "implement",
+            )
+
+            self.assertEqual(selected["strategy"], "measured")
+            self.assertEqual(selected["selected"]["id"], "terra")
+            self.assertEqual(selected["selected"]["cost_usd_per_reliable"], 0.2)
+            self.assertEqual(rejected["selected"]["id"], "sol")
+            self.assertIn("terra", rejected["rejected"])
+            self.assertTrue(any("escape" in reason for reason in rejected["rejected"]["terra"]))
+        finally:
+            sys.path.pop(0)
+
+    def test_router_falls_back_only_to_an_available_configured_candidate(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import framework_cli
+            candidates = [
+                {
+                    "id": "missing", "command": ["definitely-not-installed-007"],
+                    "provider": "example", "model": "missing", "effort": "medium",
+                    "task_classes": ["implement"], "fallback": True,
+                },
+                {
+                    "id": "available", "command": [sys.executable],
+                    "provider": "local", "model": "configured-default", "effort": "medium",
+                    "task_classes": ["implement"], "fallback": True,
+                },
+            ]
+
+            decision = framework_cli.select_route(candidates, [], "implement")
+
+            self.assertEqual(decision["strategy"], "policy-fallback")
+            self.assertEqual(decision["selected"]["id"], "available")
+            self.assertEqual(decision["eligible_candidates"], 0)
+        finally:
+            sys.path.pop(0)
+
+    def test_router_blocks_when_no_measured_or_explicit_fallback_exists(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import framework_cli
+            candidates = [{
+                "id": "available-but-unproved", "command": [sys.executable],
+                "provider": "local", "model": "unproved", "effort": "medium",
+                "task_classes": ["implement"],
+            }]
+
+            decision = framework_cli.select_route(candidates, [], "implement")
+
+            self.assertEqual(decision["strategy"], "blocked")
+            self.assertIsNone(decision["selected"])
+        finally:
+            sys.path.pop(0)
+
+    def test_route_cli_reads_global_config_and_returns_machine_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp, "routes.json")
+            registry = Path(tmp, "projects.json")
+            config.write_text(json.dumps({
+                "schema": "007-framework/routes/v1",
+                "candidates": [{
+                    "id": "local-default", "command": [sys.executable],
+                    "provider": "local", "model": "configured-default",
+                    "effort": "medium", "task_classes": ["implement"],
+                    "fallback": True,
+                }],
+            }))
+            registry.write_text(json.dumps({
+                "schema": "007-framework/registry/v1", "projects": [],
+            }))
+
+            result = self.run_script(
+                "framework_cli.py", "route", "--task-class", "implement",
+                "--config", str(config), "--registry", str(registry), "--format", "json",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            decision = json.loads(result.stdout)
+            self.assertEqual(decision["schema"], "007-framework/route-decision/v1")
+            self.assertEqual(decision["strategy"], "policy-fallback")
+            self.assertEqual(decision["selected"]["id"], "local-default")
+
+    def test_route_selector_matches_frozen_old_new_mechanism_cells(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import framework_cli
+            protocol = json.loads((ROOT / "evidence/v1.4.0/route-selector-protocol.json").read_text())
+            expected = json.loads((ROOT / "evidence/v1.4.0/route-selector-result.json").read_text())
+            candidates = [
+                {
+                    "id": "cheap", "command": [sys.executable], "provider": "test",
+                    "model": "cheap", "effort": "medium", "task_classes": ["implement"],
+                    "fallback": True, "nominal_cost": 0.2,
+                },
+                {
+                    "id": "stable", "command": [sys.executable], "provider": "test",
+                    "model": "stable", "effort": "medium", "task_classes": ["implement"],
+                    "fallback": True, "nominal_cost": 0.8,
+                },
+            ]
+
+            def outcomes(model, cost, *, escaped=False, missing_cost=False):
+                return [{
+                    "task_class": "implement", "status": "accepted", "first_pass": "yes",
+                    "repair_rounds": 0, "escape_7d": "yes" if escaped and index == 0 else "no",
+                    "served_provider": "test", "served_model": model, "served_effort": "medium",
+                    "cost_usd": None if missing_cost else cost,
+                    "cost_source": "rate-card-estimate", "cost_status": "provisional", "wall_s": 10,
+                } for index in range(5)]
+
+            scenarios = {
+                "eligible_control": outcomes("cheap", 0.2) + outcomes("stable", 0.8),
+                "quality_regression": outcomes("cheap", 0.2, escaped=True) + outcomes("stable", 0.8),
+                "telemetry_gap": outcomes("cheap", 0.2, missing_cost=True) + outcomes("stable", 0.8),
+            }
+            cells = []
+            for scenario in protocol["scenarios"]:
+                for replicate in range(1, protocol["replicates"] + 1):
+                    old = min(candidates, key=lambda item: item["nominal_cost"])["id"]
+                    new = framework_cli.select_route(candidates, scenarios[scenario["id"]], "implement")["selected"]["id"]
+                    cells.extend([
+                        {"scenario": scenario["id"], "arm": "OLD", "replicate": replicate,
+                         "selected": old, "matched": old == scenario["expected_old"]},
+                        {"scenario": scenario["id"], "arm": "NEW", "replicate": replicate,
+                         "selected": new, "matched": new == scenario["expected_new"]},
+                    ])
+
+            self.assertEqual(len(cells), protocol["cells"])
+            self.assertTrue(all(cell["matched"] for cell in cells), cells)
+            self.assertEqual(expected["matched_cells"], len(cells))
+            self.assertEqual(expected["total_cells"], len(cells))
+        finally:
+            sys.path.pop(0)
+
 
 if __name__ == "__main__":
     unittest.main()

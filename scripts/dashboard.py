@@ -18,7 +18,7 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/D", "unknown", None}
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
@@ -66,6 +66,29 @@ def is_preventive_controller_block(receipt):
     )
 
 
+def load_causal_evidence(path=None):
+    source = Path(path) if path else Path(__file__).resolve().parents[1] / "evidence" / "v1.4.0" / "causal-roi-result.json"
+    try:
+        value = json.loads(source.read_text())
+        if (
+            not isinstance(value, dict)
+            or value.get("schema") != "007-framework/causal-roi/v1"
+            or not all(isinstance(value.get(key), expected) for key, expected in (
+                ("status", str), ("claim", str), ("boundary", str),
+                ("old", dict), ("new", dict), ("delta", dict),
+            ))
+        ):
+            raise ValueError("invalid causal ROI evidence")
+        return value
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {
+            "status": "unavailable",
+            "claim": "No causal ROI result is available.",
+            "boundary": "The frozen causal ROI artifact is not available; operational metrics remain observational.",
+            "old": {}, "new": {}, "delta": {},
+        }
+
+
 def ratio(numerator, denominator):
     return numerator / denominator if denominator else None
 
@@ -74,7 +97,7 @@ def safe_task(receipt):
     task = {
         key: receipt.get(key)
         for key in (
-            "task_id", "status", "proof_required", "proof_reached",
+            "task_id", "task_class", "status", "proof_required", "proof_reached",
             "first_pass", "repair_rounds", "corrective_lines", "escape_7d",
             "requested_provider", "requested_model", "requested_effort",
             "served_provider", "served_model", "served_effort",
@@ -97,36 +120,65 @@ def safe_task(receipt):
 def route_for(receipt):
     served_provider = receipt.get("served_provider") or receipt.get("provider")
     served_model = receipt.get("served_model") or receipt.get("model")
+    served_effort = receipt.get("served_effort") or receipt.get("effort")
     if is_known_label(served_model):
         provider = served_provider if is_known_label(served_provider) else "provider-unmeasured"
-        return provider, served_model, "served"
+        effort = served_effort if is_known_label(served_effort) else "effort-unmeasured"
+        return provider, served_model, effort, "served"
     requested_provider = receipt.get("requested_provider")
     requested_model = receipt.get("requested_model")
+    requested_effort = receipt.get("requested_effort")
     if is_known_label(requested_model):
         provider = requested_provider if is_known_label(requested_provider) else "provider-unmeasured"
-        return provider, requested_model, "requested-unverified"
-    return "provider-unmeasured", "model-unmeasured", "unmeasured"
+        effort = requested_effort if is_known_label(requested_effort) else "effort-unmeasured"
+        return provider, requested_model, effort, "requested-unverified"
+    return "provider-unmeasured", "model-unmeasured", "effort-unmeasured", "unmeasured"
 
 
 def route_metrics(receipts):
     routes = {}
     for receipt in receipts:
-        provider, model, binding = route_for(receipt)
-        key = f"{provider}/{model}"
+        provider, model, effort, binding = route_for(receipt)
+        task_class = receipt.get("task_class") if receipt.get("task_class") in framework_cli.TASK_CLASSES else "unclassified"
+        key = f"{provider}/{model}@{effort}" if task_class == "unclassified" else f"{task_class}:{provider}/{model}@{effort}"
         row = routes.setdefault(key, {
-            "key": key, "provider": provider, "model": model, "binding": binding,
+            "key": key, "task_class": task_class,
+            "provider": provider, "model": model, "effort": effort, "binding": binding,
             "tasks": 0, "accepted": 0,
+            "reliable": 0, "reliable_known": 0,
             "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0,
+            "wall_s_known_sum": 0, "wall_s_known_tasks": 0,
         })
         if row["binding"] != binding:
             row["binding"] = "mixed"
         row["tasks"] += 1
         row["accepted"] += int(receipt.get("status") == "accepted")
+        mature = receipt.get("first_pass") in ("yes", "no") and receipt.get("escape_7d") in (True, False, "yes", "no")
+        row["reliable_known"] += int(mature)
+        row["reliable"] += int(
+            receipt.get("status") == "accepted"
+            and receipt.get("first_pass") == "yes"
+            and receipt.get("escape_7d") in (False, "no")
+        )
         if has_accounted_cost(receipt):
             row["cost_usd_known_sum"] += receipt["cost_usd"]
             row["cost_usd_known_tasks"] += 1
+        if is_number(receipt.get("wall_s")):
+            row["wall_s_known_sum"] += receipt["wall_s"]
+            row["wall_s_known_tasks"] += 1
     for row in routes.values():
         row["cost_usd_known_sum"] = round(row["cost_usd_known_sum"], 6)
+        row.update({
+            "reliable_rate": ratio(row["reliable"], row["reliable_known"]),
+            "cost_usd_per_reliable": (
+                ratio(row["cost_usd_known_sum"], row["reliable"])
+                if row["reliable"] and row["cost_usd_known_tasks"] == row["tasks"] else None
+            ),
+            "wall_s_per_reliable": (
+                ratio(row["wall_s_known_sum"], row["reliable"])
+                if row["reliable"] and row["wall_s_known_tasks"] == row["tasks"] else None
+            ),
+        })
     return [routes[key] for key in sorted(routes)]
 
 
@@ -298,6 +350,15 @@ def metrics_from_observations(receipts, starts):
             ratio(result["cost_usd_known_sum"], len(reliable))
             if reliable and result["cost_usd_known_tasks"] == result["tasks"] else None
         ),
+        "reliable_outcomes_per_usd": (
+            ratio(len(reliable), result["cost_usd_known_sum"])
+            if reliable and result["cost_usd_known_tasks"] == result["tasks"]
+            and result["cost_usd_known_sum"] > 0 else None
+        ),
+        "wall_s_per_reliable": (
+            ratio(result["wall_s_known_sum"], len(reliable))
+            if reliable and result["wall_s_known_tasks"] == result["tasks"] else None
+        ),
     })
     return result
 
@@ -391,13 +452,13 @@ def objective_state(
 ):
     mature = metrics.get("reliable_first_pass_known", 0)
     definitions = (
-        ("mature", "Mature accepted results", mature, ">= 5", "pass" if mature >= 5 else "wait", mature),
-        ("reliable", "Reliable first-pass at 7 days", metrics.get("reliable_first_pass_rate"), ">= 70%", None, mature),
-        ("repairs", "Mean repair rounds", metrics.get("repair_rounds_mean"), "<= 0.5", None, metrics.get("repair_rounds_known_tasks", 0)),
-        ("escape", "Seven-day escape rate", metrics.get("escape_7d_rate"), "<= 5%", None, metrics.get("escape_7d_known", 0)),
-        ("touch", "Thirty-day corrective touch proxy", touch.get("30", {}).get("rate"), "<= 15%", None, touch.get("30", {}).get("agent_lines_added", 0)),
-        ("cost", "Terminal cost coverage", metrics.get("cost_coverage"), "100%", None, metrics.get("tasks", 0)),
-        ("telemetry", "Telemetry completeness", metrics.get("telemetry_completeness"), ">= 80%", None, metrics.get("telemetry_possible", 0)),
+        ("mature", "Resultados aceitos maduros", mature, ">= 5", "pass" if mature >= 5 else "wait", mature),
+        ("reliable", "Reliable first-pass em 7 dias", metrics.get("reliable_first_pass_rate"), ">= 70%", None, mature),
+        ("repairs", "Média de rodadas de reparo", metrics.get("repair_rounds_mean"), "<= 0.5", None, metrics.get("repair_rounds_known_tasks", 0)),
+        ("escape", "Taxa de escapes em 7 dias", metrics.get("escape_7d_rate"), "<= 5%", None, metrics.get("escape_7d_known", 0)),
+        ("touch", "Toque corretivo em 30 dias", touch.get("30", {}).get("rate"), "<= 15%", None, touch.get("30", {}).get("agent_lines_added", 0)),
+        ("cost", "Cobertura de custo terminal", metrics.get("cost_coverage"), "100%", None, metrics.get("tasks", 0)),
+        ("telemetry", "Completude da telemetria", metrics.get("telemetry_completeness"), ">= 80%", None, metrics.get("telemetry_possible", 0)),
     )
     gates = []
     for key, label, actual, target, preset, denominator in definitions:
@@ -425,25 +486,25 @@ def objective_state(
         invalid_receipts + unavailable_projects + registry_errors + invalid_starts
     )
     if data_failures:
-        primary = f"Fix {data_failures} invalid or unavailable data source(s)."
+        primary = f"Corrija {data_failures} fonte(s) de dados inválida(s) ou indisponível(is)."
     elif metrics.get("started_tasks", 0) == 0:
-        primary = "Start measured work with 007 begin or 007 run."
+        primary = "Inicie trabalho medido com 007 begin ou 007 run."
     elif metrics.get("tasks", 0) == 0 and metrics.get("active_tasks", 0):
         active = metrics["active_tasks"]
-        primary = f"Complete {active} active task{'s' if active != 1 else ''} with 007 record."
+        primary = f"Conclua {active} tarefa(s) ativa(s) com 007 record."
     elif metrics.get("cost_coverage") is None or metrics.get("cost_coverage", 0) < 1:
         missing = max(metrics.get("tasks", 0) - metrics.get("cost_usd_known_tasks", 0), 0)
-        primary = f"Record terminal cost for {missing} outcome{'s' if missing != 1 else ''}."
+        primary = f"Registre o custo terminal de {missing} resultado(s)."
     elif metrics.get("telemetry_completeness") is None or metrics.get("telemetry_completeness", 0) < 0.8:
         missing = max(metrics.get("telemetry_possible", 0) - metrics.get("telemetry_known", 0), 0)
-        primary = f"Capture {missing} missing telemetry field{'s' if missing != 1 else ''}."
+        primary = f"Capture {missing} campo(s) de telemetria ausente(s)."
     elif mature < 5:
-        primary = f"Mature {5 - mature} more accepted outcome{'s' if 5 - mature != 1 else ''} for 7 days."
+        primary = f"Mature mais {5 - mature} resultado(s) aceito(s) por 7 dias."
     else:
         failed = next((gate for gate in gates if gate["status"] == "fail"), None)
         primary = (
-            f"Improve {failed['label']} to {failed['target']}."
-            if failed else "Keep collecting controlled outcomes."
+            f"Melhore {failed['label']} até {failed['target']}."
+            if failed else "Continue coletando resultados controlados."
         )
     failures = any(gate["status"] == "fail" for gate in gates)
     waiting = any(gate["status"] == "wait" for gate in gates)
@@ -604,14 +665,33 @@ def aggregate_projects(projects, registry_error_count=0):
     for project in available:
         for route in project.get("metrics", {}).get("routes", []):
             row = combined_routes.setdefault(route["key"], {
-                key: route[key] for key in ("key", "provider", "model", "binding")
-            } | {"tasks": 0, "accepted": 0, "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0})
+                key: route[key] for key in ("key", "task_class", "provider", "model", "effort", "binding")
+            } | {
+                "tasks": 0, "accepted": 0, "reliable": 0, "reliable_known": 0,
+                "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0,
+                "wall_s_known_sum": 0, "wall_s_known_tasks": 0,
+            })
             if row["binding"] != route["binding"]:
                 row["binding"] = "mixed"
-            for key in ("tasks", "accepted", "cost_usd_known_sum", "cost_usd_known_tasks"):
+            for key in (
+                "tasks", "accepted", "reliable", "reliable_known",
+                "cost_usd_known_sum", "cost_usd_known_tasks",
+                "wall_s_known_sum", "wall_s_known_tasks",
+            ):
                 row[key] += route[key]
     for row in combined_routes.values():
         row["cost_usd_known_sum"] = round(row["cost_usd_known_sum"], 6)
+        row.update({
+            "reliable_rate": ratio(row["reliable"], row["reliable_known"]),
+            "cost_usd_per_reliable": (
+                ratio(row["cost_usd_known_sum"], row["reliable"])
+                if row["reliable"] and row["cost_usd_known_tasks"] == row["tasks"] else None
+            ),
+            "wall_s_per_reliable": (
+                ratio(row["wall_s_known_sum"], row["reliable"])
+                if row["reliable"] and row["wall_s_known_tasks"] == row["tasks"] else None
+            ),
+        })
     result.update({
         "projects_total": len(projects),
         "projects_available": len(available),
@@ -640,6 +720,17 @@ def aggregate_projects(projects, registry_error_count=0):
             ratio(result["cost_usd_known_sum"], result["reliable_first_pass_yes"])
             if result["reliable_first_pass_yes"]
             and result["cost_usd_known_tasks"] == result["tasks"] else None
+        ),
+        "reliable_outcomes_per_usd": (
+            ratio(result["reliable_first_pass_yes"], result["cost_usd_known_sum"])
+            if result["reliable_first_pass_yes"]
+            and result["cost_usd_known_tasks"] == result["tasks"]
+            and result["cost_usd_known_sum"] > 0 else None
+        ),
+        "wall_s_per_reliable": (
+            ratio(result["wall_s_known_sum"], result["reliable_first_pass_yes"])
+            if result["reliable_first_pass_yes"]
+            and result["wall_s_known_tasks"] == result["tasks"] else None
         ),
         "cost_coverage": ratio(result["cost_usd_known_tasks"], result["tasks"]),
         "cost_accounting_status": (
@@ -746,11 +837,7 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
             "cost_authority": "terminal-receipt",
             "label": "A cobertura operacional começa em 007 begin e termina em 007 record. Execuções anteriores ou externas a esse ciclo permanecem fora do denominador.",
         },
-        "causal_evidence": {
-            "status": "narrow-positive",
-            "claim": "Dois mecanismos congelados passaram: doutrina OLD 0/3 vs NEW 3/3 e autoridade 18/18 células.",
-            "boundary": "As métricas dos projetos são observacionais; somente experimentos OLD×NEW congelados sustentam alegações causais.",
-        },
+        "causal_evidence": load_causal_evidence(),
     }
 
 

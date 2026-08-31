@@ -268,7 +268,7 @@ button { color: inherit; }
 .micro-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--green)); transition: width .35s ease; }
 .micro-track.inverse span { background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
 
-.decision-metrics { grid-template-columns: repeat(4, minmax(170px, 1fr)); }
+.decision-metrics { grid-template-columns: repeat(6, minmax(145px, 1fr)); }
 .decision-grid { grid-template-columns: 1.08fr .92fr; }
 .gate-panel { padding: 21px 22px 10px; }
 .gate-table td { padding-top: 10px; padding-bottom: 10px; }
@@ -385,6 +385,10 @@ td:first-child { color: var(--text); font-weight: 560; }
 .evidence-icon { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid rgba(181,148,255,.25); border-radius: 13px; background: rgba(181,148,255,.09); color: var(--violet); font-size: 20px; }
 .evidence-panel > div:last-child > p:not(.panel-kicker) { margin: 9px 0 0; color: var(--muted-bright); font-size: 11px; }
 .evidence-boundary { margin-top: 14px; padding: 10px 12px; border-left: 2px solid var(--violet); background: rgba(181,148,255,.05); color: #8293aa; font-size: 10px; }
+.causal-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 14px; }
+.causal-grid span { padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: rgba(4,13,25,.42); }
+.causal-grid small { display: block; color: var(--muted); font-size: 8px; text-transform: uppercase; }
+.causal-grid strong { display: block; margin-top: 3px; color: var(--text); font-size: 12px; }
 .diagnostics-panel { padding: 21px 22px; }
 .diagnostic-count { display: grid; min-width: 28px; height: 28px; place-items: center; border-radius: 9px; background: var(--amber-soft); color: var(--amber); font-size: 11px; }
 .diagnostics-panel ul { display: grid; gap: 8px; margin: 15px 0 0; padding: 0; list-style: none; }
@@ -455,6 +459,7 @@ td:first-child { color: var(--text); font-weight: 560; }
   .funnel-grid { grid-template-columns: 1fr 1fr; overflow: visible; }
   .funnel-grid article::after { display: none; }
   .funnel-grid .funnel-final { grid-column: 1 / -1; }
+  .causal-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

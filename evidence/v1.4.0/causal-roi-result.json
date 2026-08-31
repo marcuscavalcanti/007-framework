@@ -1,0 +1,44 @@
+{
+  "schema": "007-framework/causal-roi/v1",
+  "status": "positive-secondary",
+  "claim": "In one frozen real coding task, OLD and NEW both passed 3/3 hidden acceptance runs; NEW used 24.9% less API-equivalent USD and 21.5% fewer median added lines.",
+  "claim_pt_br": "Em uma tarefa real congelada, OLD e NEW passaram 3/3 testes ocultos; NEW usou 24,9% menos USD equivalente de API e adicionou 21,5% menos linhas na mediana.",
+  "boundary": "Cost is a retrospective secondary endpoint priced from frozen token receipts with Headroom 0.36.5 and LiteLLM 1.98.0. Median wall time was 3.4% higher for NEW. Seven-day durability and routing superiority remain unproved.",
+  "boundary_pt_br": "Custo é um endpoint secundário retrospectivo calculado sobre tokens congelados com Headroom 0.36.5 e LiteLLM 1.98.0. A latência mediana foi 3,4% maior no NEW. Durabilidade em 7 dias e superioridade do roteamento continuam não provadas.",
+  "old": {
+    "accepted": 3,
+    "cells": 3,
+    "cost_usd_total": 1.15282,
+    "cost_usd_per_accepted": 0.384273,
+    "median_wall_s": 206.834,
+    "median_added_lines": 163
+  },
+  "new": {
+    "accepted": 3,
+    "cells": 3,
+    "cost_usd_total": 0.865294,
+    "cost_usd_per_accepted": 0.288431,
+    "median_wall_s": 213.915,
+    "median_added_lines": 128
+  },
+  "delta": {
+    "cost_pct": -24.9411,
+    "median_wall_pct": 3.4235,
+    "median_added_lines_pct": -21.4724
+  },
+  "pricing": {
+    "model": "gpt-5.6-sol",
+    "source": "headroom/litellm",
+    "version": "headroom=0.36.5;litellm=1.98.0",
+    "status": "provisional-rate-card-estimate"
+  },
+  "source_sha256": {
+    "summary": "8a006ec661d7dd25f6c2275a8c29c1d9a4ff3119bd67a43f1b9e8ff9d7a6fee3",
+    "new_r1": "f6478716755d42c42083c18f428b24a1eb49f5fefd0ee02d78cd4a2812ecd409",
+    "new_r2": "7d19ed4010b183033319c6340b9918735cbf6fddae5f030ad2103f38adf1131e",
+    "new_r3": "dbf65c89a349d5e8cd7a9dc0a36bf5252113fbea2175f54a2d0ae727e80234be",
+    "old_r1": "f544748fd6ddcf76fd6b550117964ed4689edba3ef8e8893d74c89a0992e1a45",
+    "old_r2": "f94e3b2e4e550ebd4d37e1f1b7270b9cc2519a82a407e86a836cf451f9b637b2",
+    "old_r3": "65a8dbeb87dfe26b4f1536137ac9361a7d555aed2a1491bb0d34359e0f1ec641"
+  }
+}

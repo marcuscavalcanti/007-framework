@@ -9,9 +9,10 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Status:** v1.3.0 is an unreleased candidate ready to test. Frozen mechanism tests include an
-> OLD 0/3 vs NEW 3/3 doctrine contrast and an 18/18 controller-authority flip-test; the complete framework is not
-> claimed to be universally superior or production-proven. See
+> **Status:** v1.4.0 is ready to test. In one frozen real coding task, OLD and
+> NEW both passed hidden acceptance 3/3; NEW used 24.9% less estimated USD and
+> 21.5% fewer median added lines, with 3.4% higher median latency. This narrow
+> result does not prove universal superiority or seven-day durability. See
 > [Evidence](docs/evidence.md).
 
 ## What it gives you
@@ -23,6 +24,7 @@ code that looks finished but must be rewritten, repaired, or explained again.
   cost accounting;
 - Git-based corrective touch-rate and receipt reporting;
 - a polished localhost dashboard that reconciles all registered projects;
+- a task-start selector that learns from mature receipts across registered projects;
 - an OLD×NEW replay runner for causal tests on real historical tasks.
 
 No database, API key, package manager, or model-runtime dependency is added.
@@ -119,6 +121,21 @@ kept separately. Cost may be provider-reported, estimated by an external rate
 card, allocated from a subscription, or derived from local compute; its source
 and provisional/final state must be explicit.
 
+Configure the CLIs you actually own once, using argv arrays rather than shell
+strings:
+
+```bash
+mkdir -p ~/.007-framework
+cp examples/routes.example.json ~/.007-framework/routes.json
+007 route --task-class implement --format json
+```
+
+The selector filters unavailable commands and routes that miss the reliability
+gates, then minimizes **all-attempt cost per reliable outcome** with latency as
+the tie-breaker. Until a route has five mature receipts, it uses only a
+configured fallback. The decision is made once per task; 007 does not run a
+gateway, silently change providers, or switch models mid-attempt.
+
 To make the lifecycle automatic for any agent CLI, wrap it with `007 run`:
 
 ```bash
@@ -168,7 +185,7 @@ mathematically reconcilable with the project views. It has no login because it
 binds locally; do not expose it on a public interface.
 
 The first viewport answers **on target**, **off target**, or **not yet
-measurable**. Seven independent gates show the actual value, target, evidence
+measurable**. Independent gates show the actual value, target, evidence
 denominator, and next action. A 30-day trend and controlled/declared/unobserved
 provenance panel explain the verdict without hiding missing data in a score.
 Preventive controller blocks remain visible in the authority panel but are not
@@ -183,6 +200,12 @@ Headroom/LiteLLM, RTK, or another rate card may supply a separate diagnostic
 estimate, but never closes the cost gate. Unknown cost is `N/D`, never free.
 This lane does not infer acceptance, first-pass success, or reliability from a
 completed session.
+
+The ROI cards use every measured attempt, including failures, in the numerator
+and only reliable first-pass outcomes in the denominator. They remain `N/D`
+unless terminal cost and wall-time coverage are complete. A separate frozen
+OLD×NEW card reports release-level causal evidence, so live observational data
+is never mislabeled as causation.
 
 Observation coverage is the percentage of starts created by `007 begin` with a
 matching terminal receipt. Cost coverage is the percentage of terminal receipts

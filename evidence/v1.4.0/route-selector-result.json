@@ -1,0 +1,14 @@
+{
+  "schema": "007-framework/causal-result/v1",
+  "protocol": "route-selector-v1.4.0",
+  "status": "pass",
+  "matched_cells": 18,
+  "total_cells": 18,
+  "retries": 0,
+  "outcomes": {
+    "eligible_control": {"old": "cheap", "new": "cheap"},
+    "quality_regression": {"old": "cheap", "new": "stable"},
+    "telemetry_gap": {"old": "cheap", "new": "stable"}
+  },
+  "claim_boundary": "Deterministic mechanism evidence only; no model-quality or general ROI claim."
+}

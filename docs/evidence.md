@@ -2,10 +2,32 @@
 
 ## Release claim
 
-V1 is a usable, dependency-free, ready-to-test orchestration skill with one
-frozen decision contrast and deterministic package checks.
+V1.4 is a usable, dependency-free orchestration skill with one real-task causal
+ROI contrast, one deterministic selector-mechanism contrast, and package checks.
 
 It is not a claim that the complete bundle is generally superior.
+
+## Causal ROI result for v1.4.0
+
+One frozen real coding task ran OLD and NEW three times each with the same task,
+code snapshot, model class, effort, hidden acceptance, and serial controller.
+Both arms passed 3/3. Using the frozen terminal token records and a retrospective
+Headroom/LiteLLM rate card, NEW cost 24.9% less per accepted result and changed
+21.5% fewer median lines; median wall time was 3.4% higher.
+
+This is a positive secondary endpoint on one task. Cost is provisional rather
+than provider-reported, and seven-day durability was not measured. It supports
+the narrow statement that this treatment produced a cheaper equally accepted
+outcome in this task; it does not prove universal ROI, routing superiority, or
+provider portability. Sanitized result: `evidence/v1.4.0/causal-roi-result.json`.
+The embedded SHA-256 values bind the private source summary and six terminal
+streams without publishing hidden tests.
+
+The new task-start selector also passes an 18/18 deterministic OLD×NEW mechanism
+test. It preserves a cheap eligible route and rejects that route when mature
+receipts show a quality regression or incomplete cost telemetry. This proves the
+selection branch only, with synthetic receipts and zero model calls; protocol and
+result are in `evidence/v1.4.0/`.
 
 ## Observed frozen result
 

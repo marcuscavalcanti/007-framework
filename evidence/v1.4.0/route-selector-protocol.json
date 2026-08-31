@@ -1,0 +1,22 @@
+{
+  "schema": "007-framework/causal-protocol/v1",
+  "id": "route-selector-v1.4.0",
+  "frozen_at": "2026-08-31T00:00:00Z",
+  "claim": "Quality-gated outcome routing rejects a nominally cheap route when mature receipts show regression or incomplete cost telemetry, while preserving it when eligible.",
+  "old_policy": "Choose the configured route with the lowest nominal per-call cost, without outcome-quality or complete-attempt denominators.",
+  "new_policy": "Filter by mature reliability, escapes, repairs, complete cost and wall time; then minimize all-attempt cost per reliable outcome.",
+  "replicates": 3,
+  "retries": 0,
+  "cells": 18,
+  "scenarios": [
+    {"id": "eligible_control", "expected_old": "cheap", "expected_new": "cheap"},
+    {"id": "quality_regression", "expected_old": "cheap", "expected_new": "stable"},
+    {"id": "telemetry_gap", "expected_old": "cheap", "expected_new": "stable"}
+  ],
+  "pass_rule": "All 18 deterministic arm-scenario cells match; any mismatch blocks the selector-mechanism claim.",
+  "limits": [
+    "This isolates selector logic with synthetic receipts and zero model calls.",
+    "It does not prove one provider or model is better.",
+    "Real ROI is reported only by the separate frozen real-task artifact and live terminal receipts."
+  ]
+}

@@ -6,6 +6,7 @@ A receipt records an outcome at gate time. It is not a transcript.
 {
   "schema": "007-framework/receipt/v1",
   "task_id": "example-123",
+  "task_class": "implement",
   "status": "accepted",
   "proof_required": "integrated",
   "proof_reached": "integrated",
@@ -34,6 +35,10 @@ Required semantic fields are status, proof, checks, delta, first-pass outcome,
 rework state, requested and served route, telemetry state, cost, and uncertainty.
 Provider, model, and effort are open strings: the framework does not maintain a
 provider allowlist.
+
+`task_class` is optional for backward compatibility and, when present, is one
+of `inspect`, `implement`, `deep`, or `design`. It lets the selector compare like
+with like; receipts without it stay visible but do not train route selection.
 
 `cost_usd` is mandatory, finite, and numeric for every recorded terminal
 outcome. `cost_source`

@@ -27,7 +27,7 @@ scope and route ──► controlled execution ──► repository-native gates
   historical source and task-specific acceptance commands.
 - `bin/007` and `scripts/framework_cli.py`: initialize projects, atomically
   persist task starts, controller-observed action events, and terminal receipts,
-  and launch the local dashboard.
+  select a task-start route, and launch the local dashboard.
 - `scripts/dashboard.py` and `dashboard/`: aggregate registered projects and
   serve a loopback-only, dependency-free control room.
 - `scripts/local_activity.py`: normalize sanitized Codex, Claude, Kimi, and
@@ -67,6 +67,11 @@ denominator.
 The snapshot publishes `telemetry_fields` alongside the completeness numerator
 and denominator so consumers can see that V1.1 measures provider, model, effort,
 tokens, and wall time.
+
+The route selector reads the same normalized receipts across registered
+projects. It filters by task class and exact served binding, rejects immature or
+low-quality routes, and makes one deterministic choice before execution. There
+is no daemon, gateway, database, background agent, or mid-attempt rerouting.
 
 ## Trust boundaries
 

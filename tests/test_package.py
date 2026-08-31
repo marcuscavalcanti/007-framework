@@ -10,7 +10,7 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.2\.0$")
+        self.assertRegex(skill, r"(?m)^  version: 1\.4\.0$")
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))
@@ -60,6 +60,20 @@ class PackageContractTests(unittest.TestCase):
         example = json.loads((ROOT / "examples" / "replay-set.example.json").read_text())
         self.assertEqual(set(example["arms"]), {"OLD", "NEW"})
         self.assertEqual(len(example["tasks"]), 1)
+
+    def test_route_example_is_valid_and_contains_no_shell_string(self):
+        import importlib
+        import json
+        import sys
+        scripts = ROOT / "scripts"
+        sys.path.insert(0, str(scripts))
+        try:
+            framework_cli = importlib.import_module("framework_cli")
+            example = json.loads((ROOT / "examples" / "routes.example.json").read_text())
+            framework_cli.validate_route_config(example)
+        finally:
+            sys.path.pop(0)
+        self.assertTrue(all(isinstance(item["command"], list) for item in example["candidates"]))
 
     def test_release_manifest_gate_targets_the_current_tag(self):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text()

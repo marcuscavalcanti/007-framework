@@ -6,7 +6,7 @@ description: >-
   code when minimal diffs, explicit proof, low rework, and auditable outcomes
   matter.
 metadata:
-  version: 1.2.0
+  version: 1.4.0
 ---
 
 # 007 Framework
@@ -54,6 +54,11 @@ Choose the cheapest verified executor likely to pass. Provider/model names are
 runtime configuration, not doctrine. Verify the actual binding and served model;
 record unavailable or unmeasured instead of guessing. See
 [`references/routing.md`](references/routing.md).
+
+At task start, `007 route --task-class <class>` may select among user-configured,
+installed CLIs. It admits a measured route only after enough mature outcomes
+meet the quality, escape, rework, cost, and latency gates; otherwise it uses an
+explicit configured fallback. Never switch models inside one attempt.
 
 ## Execute with one writer
 
@@ -127,6 +132,7 @@ harness was wrong.
 ```bash
 007 init --repo .
 007 begin --repo . --task-id <stable-id>
+007 route --task-class implement --format json
 007 record --repo . --file task.receipt.json
 007 run --repo . --task-id <stable-id> --receipt task.receipt.json -- <command>
 007 dashboard

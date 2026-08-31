@@ -43,6 +43,8 @@ verification, and learning as one measured loop:
 - cost per reliable outcome, including failed and blocked attempts;
 - observation coverage from task start to terminal receipt;
 - percentage of outcomes with complete, non-invented telemetry and cost.
+- reliable outcomes per USD and wall time per reliable outcome, counting every
+  failed attempt in the cost and time paid.
 
 ## Non-goals for V1
 
@@ -70,6 +72,10 @@ The dashboard is observational: it measures accepted outcomes, repair pressure,
 touch-rate, escapes, telemetry, and cost. It does not turn those operational
 signals into causal proof. Release-level causal evidence remains a separate,
 frozen OLD×NEW experiment.
+
+Routing is also deliberately small: a deterministic task-start decision over
+user-configured CLIs, using only mature receipts. 007 is not a model gateway and
+does not switch executors inside an attempt.
 
 Before receipts exist, a separate local-activity lane can already show Codex,
 Claude, Kimi, and Gemini sessions, served routes, and 24-hour token deltas.

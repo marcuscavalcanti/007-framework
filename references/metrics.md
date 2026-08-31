@@ -10,6 +10,10 @@ The north-star family measures whether agent output survives use:
 - **escape rate** — accepted changes that later produce a regression or incident;
 - **cost per reliable outcome** — all measured terminal cost, including failed
   and blocked attempts, divided by reliable first-pass outcomes;
+- **reliable outcomes per USD** — the reciprocal ROI view, available only when
+  every terminal outcome in the denominator has accounted cost;
+- **wall time per reliable outcome** — all measured attempt time, including
+  failed work, divided by reliable first-pass outcomes;
 - **observation coverage** — task starts with a matching terminal receipt;
 - **cost coverage** — terminal outcomes with numeric cost, source, and
   final/provisional accounting status.
@@ -28,9 +32,9 @@ Rules:
    the requested route explicitly marked as unverified.
 8. Operational dashboard metrics are observational. Causal claims require a
    separately frozen OLD×NEW experiment with identical tasks and acceptance.
-9. Local-session USD follows Headroom's LiteLLM pricing path. Full coverage may
-   be shown as an estimate; partial coverage is a lower bound plus coverage;
-   unresolved models remain `N/D`.
+9. Local-session USD may use Headroom/LiteLLM or another rate card as a
+   diagnostic estimate. Only normalized terminal receipts close the operational
+   cost gate; unresolved models remain `N/D`.
 
 `scripts/touch_rate.py` is an approximation based on attributable Git commits.
 Renames, deletion, formatting, and mixed-author commits can distort it; use the
