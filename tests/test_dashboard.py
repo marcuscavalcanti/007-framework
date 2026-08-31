@@ -581,6 +581,89 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(stored["task_id"], "wrapped-001")
             self.assertEqual(stored["uncertainty"], str(repo.resolve()))
 
+    def test_run_replaces_claimed_checks_with_controller_observed_acceptance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "value['checks'] = [{'command': 'agent-claimed-pass', 'exit': 0}]\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+            )
+            acceptance = Path(tmp, "acceptance.json")
+            acceptance.write_text(json.dumps({
+                "schema": "007-framework/acceptance/v1",
+                "commands": [[sys.executable, "-c", "print('gate-ok')"]],
+            }))
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "controlled-gate-pass",
+                "--receipt", "task.receipt.json", "--acceptance-file", str(acceptance),
+                "--", sys.executable, str(adapter),
+                str(ROOT / "examples/task.receipt.example.json"),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stored = json.loads((repo / ".007/receipts/controlled-gate-pass.receipt.json").read_text())
+            task = json.loads((repo / ".007/tasks/controlled-gate-pass.task.json").read_text())
+            self.assertEqual(stored["acceptance_evidence"], "controlled")
+            self.assertEqual(stored["acceptance_sha256"], hashlib.sha256(acceptance.read_bytes()).hexdigest())
+            self.assertEqual(stored["checks"][0]["command"], [sys.executable, "-c", "print('gate-ok')"])
+            self.assertEqual(stored["checks"][0]["exit"], 0)
+            self.assertRegex(stored["checks"][0]["stdout_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(stored["checks"][0]["stderr_sha256"], r"^[0-9a-f]{64}$")
+            self.assertGreaterEqual(stored["checks"][0]["duration_ms"], 0)
+            self.assertEqual(task["acceptance_sha256"], stored["acceptance_sha256"])
+            self.assertEqual(task["acceptance"]["commands"], [[sys.executable, "-c", "print('gate-ok')"]])
+
+    def test_run_persists_blocked_receipt_when_controller_acceptance_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+            )
+            acceptance = Path(tmp, "acceptance.json")
+            acceptance.write_text(json.dumps({
+                "schema": "007-framework/acceptance/v1",
+                "commands": [[sys.executable, "-c", "raise SystemExit(5)"]],
+            }))
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "controlled-gate-fail",
+                "--receipt", "task.receipt.json", "--acceptance-file", str(acceptance),
+                "--", sys.executable, str(adapter),
+                str(ROOT / "examples/task.receipt.example.json"),
+            )
+
+            self.assertEqual(result.returncode, 4, result.stderr)
+            stored = json.loads((repo / ".007/receipts/controlled-gate-fail.receipt.json").read_text())
+            self.assertEqual(stored["status"], "blocked")
+            self.assertEqual(stored["proof_reached"], "acceptance-failed")
+            self.assertEqual(stored["checks"][0]["exit"], 5)
+            self.assertEqual(stored["acceptance_summary"], {"passed": 0, "failed": 1})
+
     def test_run_leaves_start_open_when_command_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")

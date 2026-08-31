@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import webbrowser
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ AUTHORITY_SCHEMA = "007-framework/authority/v1"
 CONTROLLER_EVENT_SCHEMA = "007-framework/controller-event/v1"
 ROUTE_CONFIG_SCHEMA = "007-framework/routes/v1"
 ROUTE_DECISION_SCHEMA = "007-framework/route-decision/v1"
+ACCEPTANCE_SCHEMA = "007-framework/acceptance/v1"
 TASK_CLASSES = {"inspect", "implement", "deep", "design"}
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -323,7 +325,37 @@ def validate_task_start(value):
         validate_authority(authority)
         if not isinstance(authority_hash, str) or not SHA256.fullmatch(authority_hash):
             raise ValueError("authority_sha256 must be a lowercase SHA-256")
+    acceptance = value.get("acceptance")
+    acceptance_hash = value.get("acceptance_sha256")
+    if acceptance is not None or acceptance_hash is not None:
+        validate_acceptance(acceptance)
+        if not isinstance(acceptance_hash, str) or not SHA256.fullmatch(acceptance_hash):
+            raise ValueError("acceptance_sha256 must be a lowercase SHA-256")
     return value
+
+
+def validate_acceptance(value):
+    if not isinstance(value, dict) or value.get("schema") != ACCEPTANCE_SCHEMA:
+        raise ValueError(f"acceptance schema must be {ACCEPTANCE_SCHEMA}")
+    commands = value.get("commands")
+    if (
+        not isinstance(commands, list) or not commands
+        or any(
+            not isinstance(command, list) or not command
+            or any(not isinstance(part, str) or not part for part in command)
+            for command in commands
+        )
+    ):
+        raise ValueError("acceptance commands must be non-empty argv arrays")
+    timeout_s = value.get("timeout_s", 900)
+    if isinstance(timeout_s, bool) or not isinstance(timeout_s, int) or not 1 <= timeout_s <= 3600:
+        raise ValueError("acceptance timeout_s must be an integer from 1 to 3600")
+    return value
+
+
+def read_acceptance(path):
+    payload = Path(path).expanduser().read_bytes()
+    return validate_acceptance(json.loads(payload)), hashlib.sha256(payload).hexdigest()
 
 
 def init_project(repo, registry_path, now=None):
@@ -382,7 +414,7 @@ def unregister_project(project, registry_path):
     return removed[0]
 
 
-def begin_task(repo, task_id=None, now=None, authority_file=None):
+def begin_task(repo, task_id=None, now=None, authority_file=None, acceptance_file=None):
     root = git_root(repo)
     marker_path = root / ".007" / "project.json"
     if not marker_path.exists():
@@ -400,6 +432,8 @@ def begin_task(repo, task_id=None, now=None, authority_file=None):
     }
     if authority_file:
         task["authority"], task["authority_sha256"] = read_authority(authority_file)
+    if acceptance_file:
+        task["acceptance"], task["acceptance_sha256"] = read_acceptance(acceptance_file)
     validate_task_start(task)
     destination = marker_path.parent / "tasks" / f"{task_id}.task.json"
     write_json_no_replace(destination, task, "task start")
@@ -413,6 +447,8 @@ def validate_receipt(value):
         raise ValueError("authority_summary is computed by 007 record")
     if "authority_evidence" in value:
         raise ValueError("authority provenance is computed by 007")
+    if any(key in value for key in ("acceptance_evidence", "acceptance_sha256", "acceptance_summary")):
+        raise ValueError("acceptance provenance is computed by 007")
     validate_task_id(value.get("task_id"))
     if value.get("status") not in ("accepted", "blocked", "no-op"):
         raise ValueError("status must be accepted, blocked, or no-op")
@@ -567,7 +603,59 @@ def bind_authority(receipt, task, controller_event=None):
     return receipt
 
 
-def record_receipt(repo, source, now=None, controller_event=None):
+def run_acceptance(root, task):
+    contract = task["acceptance"]
+    timeout_s = contract.get("timeout_s", 900)
+    checks = []
+    for command in contract["commands"]:
+        started = time.monotonic()
+        timed_out = False
+        try:
+            completed = subprocess.run(
+                command, cwd=root, capture_output=True, text=True, timeout=timeout_s,
+            )
+            exit_code = completed.returncode
+            stdout, stderr = completed.stdout, completed.stderr
+        except subprocess.TimeoutExpired as exc:
+            exit_code, timed_out = 124, True
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+        checks.append({
+            "command": command,
+            "cwd": ".",
+            "exit": exit_code,
+            "duration_ms": round((time.monotonic() - started) * 1000),
+            "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
+            "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
+            "timed_out": timed_out,
+        })
+    return checks
+
+
+def bind_acceptance(receipt, task, checks=None):
+    if "acceptance" not in task:
+        if checks is not None:
+            raise ValueError("acceptance results require a bound task contract")
+        return receipt
+    if checks is None:
+        raise ValueError("acceptance-bound task requires controller-observed results")
+    failed = sum(check["exit"] != 0 for check in checks)
+    receipt["checks"] = checks
+    receipt["acceptance_sha256"] = task["acceptance_sha256"]
+    receipt["acceptance_evidence"] = "controlled"
+    receipt["acceptance_summary"] = {"passed": len(checks) - failed, "failed": failed}
+    if failed:
+        receipt["status"] = "blocked"
+        receipt["proof_reached"] = "acceptance-failed"
+        receipt["first_pass"] = "no"
+    return receipt
+
+
+def record_receipt(repo, source, now=None, controller_event=None, acceptance_results=None):
     root = git_root(repo)
     marker_path = root / ".007" / "project.json"
     if not marker_path.exists():
@@ -589,6 +677,7 @@ def record_receipt(repo, source, now=None, controller_event=None):
         if not event_path.exists() or read_json(event_path) != controller_event:
             raise ValueError("controlled provenance requires the persisted controller event")
     receipt = bind_authority(receipt, task, controller_event)
+    receipt = bind_acceptance(receipt, task, acceptance_results)
     if "completed_at" not in receipt:
         instant = now or datetime.now(timezone.utc)
         receipt["completed_at"] = instant.isoformat().replace("+00:00", "Z")
@@ -599,7 +688,7 @@ def record_receipt(repo, source, now=None, controller_event=None):
     return destination
 
 
-def run_task(repo, task_id, receipt, command, authority_file=None, action=None):
+def run_task(repo, task_id, receipt, command, authority_file=None, action=None, acceptance_file=None):
     root = git_root(repo)
     command = command[1:] if command[:1] == ["--"] else command
     if not command:
@@ -617,7 +706,9 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None):
     if receipt_path.exists():
         raise ValueError(f"terminal receipt already exists: {receipt_path}")
 
-    task = begin_task(root, task_id, authority_file=authority_file)
+    task = begin_task(
+        root, task_id, authority_file=authority_file, acceptance_file=acceptance_file,
+    )
     if action and action not in set(task["authority"]["allow"]):
         event = write_controller_event(root, task, action, "blocked")
         write_json_atomic(receipt_path, blocked_receipt(task, action))
@@ -642,7 +733,11 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None):
     receipt_value = validate_receipt(read_json(receipt_path))
     if receipt_value["task_id"] != task["task_id"]:
         raise ValueError("terminal receipt task_id does not match the observed task")
-    return 0, record_receipt(root, receipt_path, controller_event=event)
+    checks = run_acceptance(root, task) if acceptance_file else None
+    destination = record_receipt(
+        root, receipt_path, controller_event=event, acceptance_results=checks,
+    )
+    return (4 if checks and any(check["exit"] != 0 for check in checks) else 0), destination
 
 
 def parser():
@@ -664,6 +759,7 @@ def parser():
     run.add_argument("--receipt", required=True)
     run.add_argument("--authority-file", type=Path)
     run.add_argument("--action")
+    run.add_argument("--acceptance-file", type=Path)
     run.add_argument("argv", nargs=argparse.REMAINDER, help="command after --")
     route = commands.add_parser("route", help="select the cheapest measured eligible executor")
     route.add_argument("--task-class", required=True, choices=sorted(TASK_CLASSES))
@@ -718,7 +814,7 @@ def main(argv=None):
         if args.command == "run":
             status, destination = run_task(
                 args.repo, args.task_id, args.receipt, args.argv,
-                args.authority_file, args.action,
+                args.authority_file, args.action, args.acceptance_file,
             )
             if destination:
                 print(f"recorded: {destination}")

@@ -79,6 +79,31 @@ The command reads `FRAMEWORK_007_TASK_ID`, `FRAMEWORK_007_RECEIPT_PATH`, and
 the command's non-zero exit status and leaves a start open when no valid,
 task-matched terminal receipt exists. Raw transcripts are not retained.
 
+To make hard-gate evidence controller-observed, pass an argv-only acceptance
+contract:
+
+```json
+{
+  "schema": "007-framework/acceptance/v1",
+  "timeout_s": 900,
+  "commands": [["python3", "-m", "unittest", "discover", "-s", "tests"]]
+}
+```
+
+```bash
+007 run --repo . --task-id task-123 --receipt task.receipt.json \
+  --acceptance-file acceptance.json -- <command>
+```
+
+The task start stores the contract and its raw SHA-256 before the coding command
+runs. After that command exits successfully, the controller executes each argv
+without a shell and replaces agent-claimed `checks` with command, working
+directory, exit code, duration, timeout state, and stdout/stderr digests. Any
+non-zero hard gate forces a persisted `blocked` receipt and CLI exit `4`.
+`acceptance_evidence: "controlled"` is computed by 007 and cannot be supplied
+through manual `record`. This proves only the declared commands ran on that
+working tree; it does not prove that the command set is sufficient.
+
 ## Optional authority envelope
 
 For a task that crosses meaningful boundaries, bind a small action envelope at
