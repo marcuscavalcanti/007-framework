@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError
@@ -730,6 +731,87 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["status"], "needs-attention")
         self.assertIn("reliable first-pass rate below 70%", result["reasons"])
 
+    def test_objective_state_prioritizes_measurement_before_performance(self):
+        dashboard = self.module("dashboard")
+        metrics = {
+            "started_tasks": 6,
+            "active_tasks": 0,
+            "tasks": 6,
+            "reliable_first_pass_known": 5,
+            "reliable_first_pass_rate": 0.8,
+            "repair_rounds_mean": 0.2,
+            "escape_7d_rate": 0.0,
+            "cost_coverage": 4 / 6,
+            "cost_usd_known_tasks": 4,
+            "telemetry_completeness": 1.0,
+        }
+        touch = {"30": {"rate": 10.0}}
+
+        result = dashboard.objective_state(metrics, touch)
+
+        self.assertEqual(result["status"], "not-measurable")
+        self.assertEqual(result["primary_action"], "Record terminal cost for 2 outcomes.")
+        self.assertEqual(
+            [gate["status"] for gate in result["gates"]],
+            ["pass", "pass", "pass", "pass", "pass", "wait", "pass"],
+        )
+
+    def test_objective_state_reports_off_target_only_when_all_gates_are_known(self):
+        dashboard = self.module("dashboard")
+        metrics = {
+            "started_tasks": 5,
+            "active_tasks": 0,
+            "tasks": 5,
+            "reliable_first_pass_known": 5,
+            "reliable_first_pass_rate": 0.6,
+            "repair_rounds_mean": 0.2,
+            "escape_7d_rate": 0.0,
+            "cost_coverage": 1.0,
+            "cost_usd_known_tasks": 5,
+            "telemetry_completeness": 1.0,
+        }
+
+        result = dashboard.objective_state(metrics, {"30": {"rate": 0.0}})
+
+        self.assertEqual(result["status"], "off-target")
+        self.assertIn("Reliable first-pass", result["primary_action"])
+
+    def test_authority_confidence_separates_controlled_and_declared(self):
+        dashboard = self.module("dashboard")
+        result = dashboard.metrics_from_receipts([
+            {"status": "accepted", "authority_evidence": "controlled", "authority_summary": {"bound": True}},
+            {"status": "accepted", "authority_evidence": "declared", "authority_summary": {"bound": True}},
+            {"status": "accepted"},
+        ])
+
+        self.assertEqual(result["authority_controlled_tasks"], 1)
+        self.assertEqual(result["authority_declared_tasks"], 1)
+        self.assertEqual(dashboard.authority_confidence(result), {
+            "controlled": 1,
+            "declared": 1,
+            "unobserved": 1,
+            "controlled_coverage": 0.5,
+            "label": "mixed",
+        })
+
+    def test_outcome_trend_returns_daily_raw_counts(self):
+        dashboard = self.module("dashboard")
+        receipts = [
+            {"status": "accepted", "first_pass": "yes", "escape_7d": "no", "completed_at": "2026-08-30T08:00:00Z"},
+            {"status": "accepted", "first_pass": "no", "escape_7d": "no", "completed_at": "2026-08-30T09:00:00Z"},
+            {"status": "blocked", "completed_at": "2026-08-31T10:00:00Z"},
+        ]
+
+        result = dashboard.outcome_trend(
+            receipts, now=datetime(2026, 8, 31, 12, tzinfo=timezone.utc), days=3,
+        )
+
+        self.assertEqual(result, [
+            {"date": "2026-08-29", "reliable": 0, "accepted_other": 0, "not_accepted": 0},
+            {"date": "2026-08-30", "reliable": 1, "accepted_other": 1, "not_accepted": 0},
+            {"date": "2026-08-31", "reliable": 0, "accepted_other": 0, "not_accepted": 1},
+        ])
+
     def test_aggregate_touch_is_unknown_when_any_project_is_missing(self):
         dashboard = self.module("dashboard")
         projects = [
@@ -874,6 +956,13 @@ class DashboardTests(unittest.TestCase):
         aggregate = dashboard.aggregate_projects([project])
 
         self.assertEqual(aggregate["boundary_friction_rate"], 0.25)
+        self.assertEqual(aggregate["authority_confidence"], {
+            "controlled": 0,
+            "declared": 1,
+            "unobserved": 0,
+            "controlled_coverage": 0.0,
+            "label": "declared",
+        })
 
     def test_telemetry_completeness_uses_served_route(self):
         dashboard = self.module("dashboard")
@@ -952,6 +1041,9 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn("checks", result["recent_tasks"][0])
             self.assertNotIn("private_prompt", result["recent_tasks"][0])
             self.assertNotIn("authority_summary", result["recent_tasks"][0])
+            self.assertEqual(result["objective"]["status"], "not-measurable")
+            self.assertEqual(result["authority_confidence"]["unobserved"], 1)
+            self.assertEqual(len(result["trend_30d"]), 30)
 
     def test_touch_rate_exposes_structured_unknown_result(self):
         touch_rate = self.module("touch_rate")

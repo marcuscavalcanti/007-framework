@@ -6,7 +6,7 @@ import math
 import threading
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,7 +18,7 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/D", "unknown", None}
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
@@ -35,7 +35,8 @@ RAW_METRICS = (
     "accepted_cost_usd_known_sum", "accepted_cost_usd_known_tasks",
     "cost_final_tasks", "cost_provisional_tasks",
     "escape_7d_yes", "escape_7d_known",
-    "authority_bound_tasks", "boundary_events", "allowed_executions",
+    "authority_bound_tasks", "authority_controlled_tasks", "authority_declared_tasks",
+    "boundary_events", "allowed_executions",
     "protected_blocks", "friction_blocks", "unclassified_blocks",
     "telemetry_known", "telemetry_possible",
     "delta_files", "delta_added", "delta_deleted",
@@ -151,6 +152,11 @@ def metrics_from_receipts(receipts):
         authority = item.get("authority_summary")
         if isinstance(authority, dict) and authority.get("bound") is True:
             authority_totals["authority_bound_tasks"] += 1
+            authority_totals[
+                "authority_controlled_tasks"
+                if item.get("authority_evidence") == "controlled"
+                else "authority_declared_tasks"
+            ] += 1
             for key in (
                 "events", "allowed_executions", "protected_blocks",
                 "friction_blocks", "unclassified_blocks",
@@ -200,6 +206,8 @@ def metrics_from_receipts(receipts):
         "escape_7d_yes": escape_yes,
         "escape_7d_known": escape_known,
         "authority_bound_tasks": authority_totals["authority_bound_tasks"],
+        "authority_controlled_tasks": authority_totals["authority_controlled_tasks"],
+        "authority_declared_tasks": authority_totals["authority_declared_tasks"],
         "boundary_events": authority_totals["events"],
         "allowed_executions": authority_totals["allowed_executions"],
         "protected_blocks": authority_totals["protected_blocks"],
@@ -309,6 +317,137 @@ def unknown_touch(days, reason):
     }
 
 
+def authority_confidence(metrics):
+    controlled = metrics.get("authority_controlled_tasks", 0)
+    declared = metrics.get("authority_declared_tasks", 0)
+    bound = metrics.get("authority_bound_tasks", 0)
+    if not bound:
+        label = "not-observed"
+    elif controlled == bound:
+        label = "controller-observed"
+    elif not controlled:
+        label = "declared"
+    else:
+        label = "mixed"
+    return {
+        "controlled": controlled,
+        "declared": declared,
+        "unobserved": max(metrics.get("tasks", 0) - bound, 0),
+        "controlled_coverage": ratio(controlled, bound),
+        "label": label,
+    }
+
+
+def outcome_trend(receipts, now=None, days=30):
+    instant = now or datetime.now(timezone.utc)
+    end = instant.astimezone(timezone.utc).date()
+    rows = {
+        (end - timedelta(days=offset)).isoformat(): {
+            "date": (end - timedelta(days=offset)).isoformat(),
+            "reliable": 0,
+            "accepted_other": 0,
+            "not_accepted": 0,
+        }
+        for offset in range(days)
+    }
+    for receipt in receipts:
+        completed = receipt.get("completed_at")
+        if not isinstance(completed, str):
+            continue
+        try:
+            day = datetime.fromisoformat(completed.replace("Z", "+00:00")).astimezone(timezone.utc).date().isoformat()
+        except ValueError:
+            continue
+        if day not in rows:
+            continue
+        if (
+            receipt.get("status") == "accepted"
+            and receipt.get("first_pass") == "yes"
+            and receipt.get("escape_7d") in (False, "no")
+        ):
+            rows[day]["reliable"] += 1
+        elif receipt.get("status") == "accepted":
+            rows[day]["accepted_other"] += 1
+        else:
+            rows[day]["not_accepted"] += 1
+    return [rows[key] for key in sorted(rows)]
+
+
+def objective_state(
+    metrics, touch, invalid_receipts=0, unavailable_projects=0,
+    registry_errors=0, invalid_starts=0,
+):
+    mature = metrics.get("reliable_first_pass_known", 0)
+    definitions = (
+        ("mature", "Mature accepted results", mature, ">= 5", "pass" if mature >= 5 else "wait", mature),
+        ("reliable", "Reliable first-pass at 7 days", metrics.get("reliable_first_pass_rate"), ">= 70%", None, mature),
+        ("repairs", "Mean repair rounds", metrics.get("repair_rounds_mean"), "<= 0.5", None, metrics.get("repair_rounds_known_tasks", 0)),
+        ("escape", "Seven-day escape rate", metrics.get("escape_7d_rate"), "<= 5%", None, metrics.get("escape_7d_known", 0)),
+        ("touch", "Thirty-day corrective touch proxy", touch.get("30", {}).get("rate"), "<= 15%", None, touch.get("30", {}).get("agent_lines_added", 0)),
+        ("cost", "Terminal cost coverage", metrics.get("cost_coverage"), "100%", None, metrics.get("tasks", 0)),
+        ("telemetry", "Telemetry completeness", metrics.get("telemetry_completeness"), ">= 80%", None, metrics.get("telemetry_possible", 0)),
+    )
+    gates = []
+    for key, label, actual, target, preset, denominator in definitions:
+        if preset:
+            status = preset
+        elif actual is None or (key in ("reliable", "escape") and mature < 5):
+            status = "wait"
+        elif key in ("cost", "telemetry"):
+            threshold = 1 if key == "cost" else 0.8
+            status = "pass" if actual >= threshold else "wait"
+        elif key == "reliable":
+            status = "pass" if actual >= 0.7 else "fail"
+        elif key == "repairs":
+            status = "pass" if actual <= 0.5 else "fail"
+        elif key == "escape":
+            status = "pass" if actual <= 0.05 else "fail"
+        else:
+            status = "pass" if actual <= 15 else "fail"
+        gates.append({
+            "key": key, "label": label, "actual": actual, "target": target,
+            "status": status, "denominator": denominator,
+        })
+
+    data_failures = (
+        invalid_receipts + unavailable_projects + registry_errors + invalid_starts
+    )
+    if data_failures:
+        primary = f"Fix {data_failures} invalid or unavailable data source(s)."
+    elif metrics.get("started_tasks", 0) == 0:
+        primary = "Start measured work with 007 begin or 007 run."
+    elif metrics.get("cost_coverage") is None or metrics.get("cost_coverage", 0) < 1:
+        missing = max(metrics.get("tasks", 0) - metrics.get("cost_usd_known_tasks", 0), 0)
+        primary = f"Record terminal cost for {missing} outcome{'s' if missing != 1 else ''}."
+    elif metrics.get("telemetry_completeness") is None or metrics.get("telemetry_completeness", 0) < 0.8:
+        missing = max(metrics.get("telemetry_possible", 0) - metrics.get("telemetry_known", 0), 0)
+        primary = f"Capture {missing} missing telemetry field{'s' if missing != 1 else ''}."
+    elif mature < 5:
+        primary = f"Mature {5 - mature} more accepted outcome{'s' if 5 - mature != 1 else ''} for 7 days."
+    else:
+        failed = next((gate for gate in gates if gate["status"] == "fail"), None)
+        primary = (
+            f"Improve {failed['label']} to {failed['target']}."
+            if failed else "Keep collecting controlled outcomes."
+        )
+    waiting = data_failures or metrics.get("started_tasks", 0) == 0 or any(
+        gate["status"] == "wait" for gate in gates
+    )
+    status = "not-measurable" if waiting else "off-target" if any(
+        gate["status"] == "fail" for gate in gates
+    ) else "on-target"
+    return {
+        "status": status,
+        "headline": {
+            "on-target": "YES — on target",
+            "off-target": "NO — off target",
+            "not-measurable": "NOT YET MEASURABLE",
+        }[status],
+        "primary_action": primary,
+        "gates": gates,
+    }
+
+
 def evidence_state(metrics, touch, invalid_receipts=0, unavailable_projects=0, registry_errors=0, invalid_starts=0):
     data_failures = []
     if invalid_receipts:
@@ -319,40 +458,34 @@ def evidence_state(metrics, touch, invalid_receipts=0, unavailable_projects=0, r
         data_failures.append(f"{unavailable_projects} unavailable project(s)")
     if registry_errors:
         data_failures.append(f"{registry_errors} registry error(s)")
+    objective = objective_state(
+        metrics, touch, invalid_receipts, unavailable_projects, registry_errors, invalid_starts,
+    )
     if data_failures:
         return {"status": "needs-attention", "reasons": data_failures}
     if metrics.get("started_tasks", 0) == 0:
         return {"status": "instrumentation-inactive", "reasons": ["no observed task starts"]}
-    reasons = []
-    if metrics.get("reliable_first_pass_known", 0) < 5:
-        reasons.append("fewer than 5 matured accepted tasks")
-    required = {
-        "reliable first-pass rate": metrics.get("reliable_first_pass_rate"),
-        "mean repair rounds": metrics.get("repair_rounds_mean"),
-        "7-day escape rate": metrics.get("escape_7d_rate"),
-        "30-day touch proxy": touch.get("30", {}).get("rate"),
-        "telemetry completeness": metrics.get("telemetry_completeness"),
-        "cost coverage": metrics.get("cost_coverage"),
+    failed_reasons = {
+        "reliable": "reliable first-pass rate below 70%",
+        "repairs": "mean repair rounds above 0.5",
+        "escape": "7-day escape rate above 5%",
+        "touch": "30-day touch proxy above 15%",
     }
-    reasons.extend(f"{name} is N/D" for name, value in required.items() if value is None)
-    if reasons:
-        return {"status": "collecting", "reasons": reasons}
-    failures = []
-    if required["reliable first-pass rate"] < 0.70:
-        failures.append("reliable first-pass rate below 70%")
-    if required["mean repair rounds"] > 0.5:
-        failures.append("mean repair rounds above 0.5")
-    if required["7-day escape rate"] > 0.05:
-        failures.append("7-day escape rate above 5%")
-    if required["30-day touch proxy"] > 15:
-        failures.append("30-day touch proxy above 15%")
-    if required["telemetry completeness"] < 0.80:
-        failures.append("telemetry completeness below 80%")
-    if required["cost coverage"] < 1:
-        failures.append("cost coverage below 100%")
+    failures = [
+        failed_reasons[gate["key"]]
+        for gate in objective["gates"]
+        if gate["status"] == "fail" and gate["key"] in failed_reasons
+    ]
+    if failures:
+        return {"status": "needs-attention", "reasons": failures}
+    waiting = [gate for gate in objective["gates"] if gate["status"] == "wait"]
     return {
-        "status": "needs-attention" if failures else "on-target",
-        "reasons": failures,
+        "status": "collecting" if waiting else "on-target",
+        "reasons": [
+            "fewer than 5 matured accepted tasks"
+            if gate["key"] == "mature" else f"{gate['label'].lower()} is N/D or incomplete"
+            for gate in waiting
+        ],
     }
 
 
@@ -385,6 +518,9 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
             "invalid_receipts": [],
             "invalid_task_starts": [],
             "evidence": {"status": "collecting", "reasons": [str(exc)]},
+            "objective": objective_state(metrics, touch, unavailable_projects=1),
+            "authority_confidence": authority_confidence(metrics),
+            "trend_30d": outcome_trend([]),
         }
 
     touch = {}
@@ -407,6 +543,9 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
         "invalid_receipts": invalid,
         "invalid_task_starts": start_errors,
         "evidence": evidence_state(metrics, touch, len(invalid), invalid_starts=len(start_errors)),
+        "objective": objective_state(metrics, touch, len(invalid), invalid_starts=len(start_errors)),
+        "authority_confidence": authority_confidence(metrics),
+        "trend_30d": outcome_trend(receipts),
     }
 
 
@@ -511,6 +650,18 @@ def aggregate_projects(projects, registry_error_count=0):
         result, touch, invalid, result["projects_unavailable"], registry_error_count,
         invalid_starts,
     )
+    result["objective"] = objective_state(
+        result, touch, invalid, result["projects_unavailable"], registry_error_count,
+        invalid_starts,
+    )
+    result["authority_confidence"] = authority_confidence(result)
+    trend = {row["date"]: row for row in outcome_trend([])}
+    for project in available:
+        for row in project.get("trend_30d", []):
+            if row.get("date") in trend:
+                for key in ("reliable", "accepted_other", "not_accepted"):
+                    trend[row["date"]][key] += row.get(key, 0)
+    result["trend_30d"] = [trend[key] for key in sorted(trend)]
     return result
 
 
