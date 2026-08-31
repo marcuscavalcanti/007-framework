@@ -182,6 +182,59 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    def test_hidden_acceptance_is_hash_bound_and_restores_agent_bytes(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                workspace = root / "workspace"
+                workspace.mkdir()
+                target = workspace / "tests" / "test_hidden.py"
+                target.parent.mkdir()
+                target.write_text("agent-version\n")
+                hidden = root / "private-test.py"
+                hidden.write_text("controller-version\n")
+                digest = __import__("hashlib").sha256(hidden.read_bytes()).hexdigest()
+                task = {"hidden_acceptance": [{
+                    "source": str(hidden),
+                    "target": "tests/test_hidden.py",
+                    "sha256": digest,
+                }]}
+
+                with replay_eval.hidden_acceptance(task, workspace):
+                    self.assertEqual(target.read_text(), "controller-version\n")
+
+                self.assertEqual(target.read_text(), "agent-version\n")
+                task["hidden_acceptance"][0]["sha256"] = "0" * 64
+                with self.assertRaises(ValueError):
+                    with replay_eval.hidden_acceptance(task, workspace):
+                        pass
+                self.assertEqual(target.read_text(), "agent-version\n")
+        finally:
+            sys.path.pop(0)
+
+    def test_hidden_acceptance_rejects_workspace_escape(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                workspace = root / "workspace"
+                workspace.mkdir()
+                hidden = root / "private-test.py"
+                hidden.write_text("hidden\n")
+                digest = __import__("hashlib").sha256(hidden.read_bytes()).hexdigest()
+                task = {"hidden_acceptance": [{
+                    "source": str(hidden), "target": "../escape.py", "sha256": digest,
+                }]}
+                with self.assertRaises(ValueError):
+                    with replay_eval.hidden_acceptance(task, workspace):
+                        pass
+                self.assertFalse((root / "escape.py").exists())
+        finally:
+            sys.path.pop(0)
+
     def test_replay_archive_paths_are_unique(self):
         sys.path.insert(0, str(SCRIPTS))
         try:

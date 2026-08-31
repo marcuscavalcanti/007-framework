@@ -21,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -129,6 +130,46 @@ def acceptance(task, workspace):
     return results, bool(results) and all(item["exit"] == 0 for item in results)
 
 
+def hidden_target(workspace, value):
+    relative = Path(value)
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise ValueError(f"unsafe hidden acceptance target: {value!r}")
+    root = Path(workspace).resolve()
+    target = root / relative
+    current = root
+    for part in relative.parts[:-1]:
+        current /= part
+        if current.is_symlink() or (current.exists() and not current.is_dir()):
+            raise ValueError(f"unsafe hidden acceptance parent: {value!r}")
+        current.mkdir(exist_ok=True)
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise ValueError(f"unsafe hidden acceptance target: {value!r}")
+    return target
+
+
+@contextmanager
+def hidden_acceptance(task, workspace):
+    backups = []
+    try:
+        for entry in task.get("hidden_acceptance", []):
+            source = Path(entry["source"]).expanduser().resolve()
+            hidden_bytes = source.read_bytes()
+            digest = hashlib.sha256(hidden_bytes).hexdigest()
+            if not SHA256.fullmatch(entry.get("sha256", "")) or digest != entry["sha256"]:
+                raise ValueError(f"hidden acceptance hash mismatch: {source}")
+            target = hidden_target(workspace, entry["target"])
+            backups.append((entry["target"], target.read_bytes() if target.exists() else None))
+            target.write_bytes(hidden_bytes)
+        yield
+    finally:
+        for value, previous in reversed(backups):
+            target = hidden_target(workspace, value)
+            if previous is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.write_bytes(previous)
+
+
 def grade_cell(agent_exit, checks_passed):
     valid = agent_exit == 0
     return valid, valid and checks_passed
@@ -213,7 +254,13 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
         except subprocess.TimeoutExpired:
             exit_code, tail = -9, "TIMEOUT"
         prompt.unlink(missing_ok=True)
-        checks, checks_passed = acceptance(task, workspace)
+        hidden_failure = None
+        try:
+            with hidden_acceptance(task, workspace):
+                checks, checks_passed = acceptance(task, workspace)
+        except (OSError, ValueError, RuntimeError) as exc:
+            checks, checks_passed = [], False
+            hidden_failure = f"hidden-acceptance-{type(exc).__name__.lower()}"
         try:
             runner_value = json.loads(runner_receipt.read_text()) if runner_receipt.is_file() else None
         except json.JSONDecodeError:
@@ -223,11 +270,11 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             if config.get("require_served_identity") else (None, None)
         )
         agent_valid, _ = grade_cell(exit_code, checks_passed)
-        valid = agent_valid and identity_failure is None
+        valid = agent_valid and identity_failure is None and hidden_failure is None
         accepted = valid and checks_passed
         failure_class = (
             "timeout" if exit_code == -9 else "agent-exit" if exit_code != 0
-            else identity_failure or "none"
+            else hidden_failure or identity_failure or "none"
         )
         usage = identity.get("usage") if identity else None
         record = {
