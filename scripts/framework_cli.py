@@ -360,7 +360,11 @@ def record_receipt(repo, source, now=None):
         value = read_json(Path(source).expanduser())
     receipt = validate_receipt(value)
     task_path = marker_path.parent / "tasks" / f"{receipt['task_id']}.task.json"
-    task = validate_task_start(read_json(task_path)) if task_path.exists() else None
+    if not task_path.exists():
+        raise ValueError("receipt requires a matching task start")
+    task = validate_task_start(read_json(task_path))
+    if task["task_id"] != receipt["task_id"]:
+        raise ValueError("task start task_id does not match receipt")
     receipt = bind_authority(receipt, task)
     if "completed_at" not in receipt:
         instant = now or datetime.now(timezone.utc)

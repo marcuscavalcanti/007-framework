@@ -4,13 +4,25 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- reject terminal receipts without a matching task-start record, closing a
+  bypass that could silently remove authority binding;
+- measure reported authority friction against allowed attempts instead of all
+  blocked events;
+- label boundary telemetry as self-reported and distinguish envelope presence
+  from policy strictness;
+- report deterministic causal evidence as distinct arm-scenario outcomes, each
+  reproduced three times, rather than implying independent repeated cases.
+
 ### Added
 
 - optional SHA-256-bound authority envelopes with fail-closed terminal
   validation of reported boundary actions;
 - aggregate and per-project fence telemetry for authority coverage, protective
   blocks, avoidable friction, and unclassified blocks;
-- a preregistered 18-cell OLD×NEW mechanism test with two negative controls.
+- a preregistered OLD×NEW mechanism test with six distinct arm-scenario
+  outcomes, each reproduced three times, and two negative controls.
 
 - atomic, no-replace task-start records that expose missing terminal receipts;
 - an Evidence Cockpit focused on reliable first-pass outcomes, observation

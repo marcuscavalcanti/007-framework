@@ -1,0 +1,156 @@
+{
+  "ok": true,
+  "status": "completed",
+  "verdict": "approve",
+  "reason": "Claude completou e aprovou a mudanca.",
+  "timeoutMs": 340000,
+  "thinkingTimeoutMs": 340000,
+  "maxWallClockMs": 1200000,
+  "profile": "structural",
+  "profileDescription": "Opus 5 em effort xhigh para reasoning, arquitetura, release, deploy, CI/CD, IaC, seguranca, custo ou produto.",
+  "model": "claude-opus-5",
+  "effort": "xhigh",
+  "modelOverridden": false,
+  "effortOverridden": false,
+  "fallbackReason": null,
+  "degradedEffort": false,
+  "allowDegraded": false,
+  "validationStrength": "structural-opus-5-xhigh",
+  "contextSha256": "sha256:3b7842efa26d82bf48669ec1133b54f9e8187b4e231514003ee93777b1c70987",
+  "availability": {
+    "ok": true,
+    "found": true,
+    "versionShort": "2.1.247",
+    "versionLong": "2.1.247",
+    "timedOut": false,
+    "checks": {
+      "commandV": 0,
+      "dashV": 0,
+      "dashDashVersion": 0
+    }
+  },
+  "redaction": {
+    "timedOut": false
+  },
+  "verdictJson": {
+    "verdict": "approve",
+    "highestSeverity": "low",
+    "summary": "[REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED][REDACTED] [REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED][REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED] matrix[REDACTED] [REDACTED] [REDACTED] corrected [REDACTED] [REDACTED][REDACTED] [REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED][REDACTED] [REDACTED] listings confirm [REDACTED][REDACTED][REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED] [REDACTED][REDACTED] Five [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED][REDACTED]",
+    "findings": [
+      {
+        "severity": "low",
+        "title": "Cell[REDACTED]count wording [REDACTED] conflate [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]",
+        "recommendation": "In docs/evidence.md [REDACTED] [REDACTED][REDACTED] [REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED] matrices [REDACTED] [REDACTED] [REDACTED] identifiers [REDACTED] protocol [REDACTED][REDACTED][REDACTED] [REDACTED][REDACTED]"
+      },
+      {
+        "severity": "low",
+        "title": "Malformed [REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED] [REDACTED] pin [REDACTED] [REDACTED] message",
+        "recommendation": "Add assertIn [REDACTED] [REDACTED] specific [REDACTED][REDACTED][REDACTED] [REDACTED] string [REDACTED] [REDACTED] future refactor [REDACTED] [REDACTED] reroute [REDACTED] [REDACTED] [REDACTED] [REDACTED][REDACTED][REDACTED] branch[REDACTED]"
+      },
+      {
+        "severity": "low",
+        "title": "Malformed [REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] x [REDACTED] matrix",
+        "recommendation": "Add [REDACTED] target_malformed_start [REDACTED] [REDACTED] [REDACTED] [REDACTED] protocol [REDACTED] [REDACTED] next [REDACTED] freeze[REDACTED] [REDACTED] [REDACTED] explicitly [REDACTED] [REDACTED] handling [REDACTED] unit[REDACTED]tested [REDACTED][REDACTED]"
+      },
+      {
+        "severity": "low",
+        "title": "unclassified_blocks excluded [REDACTED] [REDACTED] published [REDACTED]",
+        "recommendation": "Document [REDACTED] [REDACTED][REDACTED][REDACTED][REDACTED][REDACTED][REDACTED][REDACTED] [REDACTED] [REDACTED] [REDACTED] move [REDACTED] [REDACTED] [REDACTED] [REDACTED] tracked [REDACTED] [REDACTED] [REDACTED] count [REDACTED][REDACTED] [REDACTED] operators watch [REDACTED] count directly[REDACTED]"
+      },
+      {
+        "severity": "low",
+        "title": "Aggregate parity [REDACTED] uses [REDACTED] hand[REDACTED]built [REDACTED] literal",
+        "recommendation": "Route [REDACTED] [REDACTED] parity assertion through [REDACTED] [REDACTED] [REDACTED][REDACTED]loading path [REDACTED] field[REDACTED][REDACTED] drift between load [REDACTED] [REDACTED] [REDACTED] caught[REDACTED]"
+      }
+    ]
+  },
+  "execution": {
+    "exitCode": 0,
+    "signal": null,
+    "timedOut": false,
+    "timeoutKind": null,
+    "timeoutReason": null,
+    "sawStreamingProgress": false,
+    "fallbackFromStreaming": false,
+    "attemptedArgs": [
+      [
+        "--print",
+        "--verbose",
+        "--permission-mode",
+        "plan",
+        "--no-session-persistence",
+        "--model",
+        "claude-opus-5",
+        "--effort",
+        "xhigh",
+        "--tools=",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages"
+      ]
+    ],
+    "attemptOutcomes": [
+      {
+        "exitCode": 0,
+        "signal": null,
+        "timedOut": false,
+        "timeoutKind": null,
+        "stdinDelivery": {
+          "writeCompleted": true,
+          "errorCode": null
+        },
+        "spawnError": null
+      }
+    ],
+    "spawnError": null,
+    "diagnosticEvents": [
+      {
+        "type": "result",
+        "subtype": "other",
+        "isError": false,
+        "hasResult": true,
+        "hasError": false,
+        "errorCount": 0
+      }
+    ],
+    "diagnosticCodes": [],
+    "diagnosticAttempts": [
+      {
+        "eventCount": 1,
+        "truncated": false,
+        "typeCounts": {
+          "result": 1,
+          "error": 0,
+          "other": 0
+        },
+        "subtypeCounts": {
+          "none": 0,
+          "error": 0,
+          "error_during_execution": 0,
+          "error_max_turns": 0,
+          "error_rate_limit": 0,
+          "other": 1
+        },
+        "codes": []
+      }
+    ],
+    "capture": {
+      "stdoutBytes": 69011,
+      "stderrBytes": 0,
+      "textBytes": 5989,
+      "oversizedLineCount": 0,
+      "unsupportedStreamingDetected": false,
+      "fallbackStderrOverflow": false,
+      "peakRetainedCharacters": 13023,
+      "retainedCharacterLimit": 139520
+    },
+    "verdictTracking": {
+      "attemptCount": 1,
+      "markerCount": 1,
+      "invalidMarkerCount": 0,
+      "uninspectableLineCount": 0,
+      "conflict": false,
+      "finalLineIsMarker": true
+    }
+  }
+}

@@ -1,0 +1,251 @@
+{
+  "cells": 24,
+  "claim_ceiling": "mechanism-level local task-start binding only",
+  "matched": 24,
+  "old_commit": "fabc8f4cdb8146ae8601da6be5721dc074fe0a8b",
+  "protocol_sha256": "c54d0bdac21aa89601dd6d66262c02fb57fecd5c48059b3bb8a5898ec0d39456",
+  "rows": [
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "target_missing_start",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "target_missing_start",
+      "stderr": "error: receipt requires a matching task start"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "target_mismatched_start_id",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "target_mismatched_start_id",
+      "stderr": "error: task start task_id does not match receipt"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_matching_unbound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_matching_unbound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_matching_bound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_matching_bound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "target_missing_start",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "target_missing_start",
+      "stderr": "error: receipt requires a matching task start"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "target_mismatched_start_id",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "target_mismatched_start_id",
+      "stderr": "error: task start task_id does not match receipt"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_matching_unbound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_matching_unbound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_matching_bound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_matching_bound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "target_missing_start",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "target_missing_start",
+      "stderr": "error: receipt requires a matching task start"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "target_mismatched_start_id",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "target_mismatched_start_id",
+      "stderr": "error: task start task_id does not match receipt"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_matching_unbound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_matching_unbound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_matching_bound_start",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_matching_bound_start",
+      "stderr": ""
+    }
+  ],
+  "schema": "007-framework/causal-result/v1",
+  "verdict": "PASS"
+}

@@ -55,14 +55,19 @@ release manifest under `evidence/v1.0.0/`.
 ## Authority-envelope mechanism
 
 A public deterministic OLD×NEW flip-test exercised one terminal fence with two
-negative controls. Across three repetitions per scenario and arm, all 18 cells
-matched the preregistered outcome: OLD accepted a reported denied execution,
+negative controls. All six distinct arm-scenario outcomes matched and each was
+reproduced three times: OLD accepted a reported denied execution,
 NEW rejected it, and both arms continued accepting an allowed execution and a
 denied action that was correctly blocked. Protocol and complete cell results are
 under `evidence/v1.2.0/`.
 
-This proves the reported-event gate, not complete event capture, real-world
-rework reduction, or security without a sandbox.
+This proves the reported-event gate, not complete or authentic event capture,
+real-world rework reduction, or security without a sandbox.
+
+The unreleased v1.2.0 follow-up closes missing and mismatched task-start bypasses.
+A second frozen OLD×NEW test observed all eight distinct arm-scenario outcomes
+as preregistered, each reproduced three times; see `evidence/v1.2.0/`. No v1.2.0 tag exists, so
+these corrections amend the candidate rather than a released compatibility contract.
 
 ## Not proved
 

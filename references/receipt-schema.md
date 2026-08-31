@@ -83,13 +83,19 @@ start time:
 007 begin --repo . --task-id task-123 --authority-file examples/authority.example.json
 ```
 
-The start stores the envelope and its raw-file SHA-256. The terminal receipt
+Every terminal receipt requires its matching task-start record. The start stores
+the envelope and its raw-file SHA-256. The terminal receipt
 must repeat `authority_sha256` and include `boundary_events`, whose entries are
 `{"action":"test","outcome":"executed"}` or
 `{"action":"deploy","outcome":"blocked"}`. `007 record` rejects a hash
 mismatch and any reported executed action not listed in `allow`. It summarizes
 protective, friction, and unclassified blocks for the dashboard.
 
-This is an auditable terminal fence, not a security sandbox: it cannot detect an
-event the host omits. Secrets, production, network egress, and destructive
-actions still require technical isolation and host-level approval.
+This is an auditable terminal fence, not a security sandbox: boundary events are
+self-reported and the gate cannot detect an event the host omits or relabels.
+Task-start files are local, unauthenticated records and can be forged by the same
+filesystem principal; requiring them closes accidental omission, not malicious
+local tampering.
+Envelope coverage measures presence, not policy strictness. Secrets, production,
+network egress, and destructive actions still require technical isolation and
+host-level approval.

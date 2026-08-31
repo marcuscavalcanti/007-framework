@@ -1,0 +1,39 @@
+{
+  "schema": "007-framework/causal-protocol/v1",
+  "name": "authority-task-start-binding-flip-v2",
+  "frozen_at": "2026-08-31T00:00:00-03:00",
+  "old_commit": "fabc8f4cdb8146ae8601da6be5721dc074fe0a8b",
+  "treatment": "Reject terminal receipts when the matching task-start file is absent or its embedded task_id differs from the receipt task_id.",
+  "invariants": [
+    "same Python runtime",
+    "same repository fixture",
+    "same receipts and task starts",
+    "same model-free deterministic execution",
+    "only framework implementation differs"
+  ],
+  "scenarios": [
+    {
+      "id": "target_missing_start",
+      "expected_old": "accept",
+      "expected_new": "reject"
+    },
+    {
+      "id": "target_mismatched_start_id",
+      "expected_old": "accept",
+      "expected_new": "reject"
+    },
+    {
+      "id": "control_matching_unbound_start",
+      "expected_old": "accept",
+      "expected_new": "accept"
+    },
+    {
+      "id": "control_matching_bound_start",
+      "expected_old": "accept",
+      "expected_new": "accept"
+    }
+  ],
+  "replications": 3,
+  "verdict": "PASS only if all eight distinct arm-scenario outcomes match and each reproduces 3/3 without retry.",
+  "claim_ceiling": "mechanism-level local task-start binding only; local records and boundary events remain forgeable by the same filesystem principal"
+}

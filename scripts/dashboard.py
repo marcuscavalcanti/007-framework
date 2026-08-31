@@ -240,7 +240,7 @@ def metrics_from_receipts(receipts):
         "authority_coverage": ratio(authority_totals["authority_bound_tasks"], tasks),
         "boundary_friction_rate": ratio(
             authority_totals["friction_blocks"],
-            authority_totals["protected_blocks"] + authority_totals["friction_blocks"] + authority_totals["unclassified_blocks"],
+            authority_totals["allowed_executions"] + authority_totals["friction_blocks"],
         ),
         "telemetry_completeness": ratio(telemetry_known, tasks * len(TELEMETRY_FIELDS)),
     })
@@ -496,7 +496,7 @@ def aggregate_projects(projects, registry_error_count=0):
         "authority_coverage": ratio(result["authority_bound_tasks"], result["tasks"]),
         "boundary_friction_rate": ratio(
             result["friction_blocks"],
-            result["protected_blocks"] + result["friction_blocks"] + result["unclassified_blocks"],
+            result["allowed_executions"] + result["friction_blocks"],
         ),
         "telemetry_completeness": ratio(result["telemetry_known"], result["telemetry_possible"]),
         "routes": [combined_routes[key] for key in sorted(combined_routes)],

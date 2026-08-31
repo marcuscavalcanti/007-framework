@@ -126,6 +126,7 @@ function renderAuthority(metrics) {
   setText("authority-coverage-detail", `${metrics.authority_bound_tasks || 0}/${metrics.tasks || 0} outcomes vinculados`);
   setText("authority-protected", metrics.protected_blocks || 0);
   setText("authority-friction", percent(metrics.boundary_friction_rate));
+  setText("authority-friction-detail", `${metrics.friction_blocks || 0}/${(metrics.allowed_executions || 0) + (metrics.friction_blocks || 0)} tentativas permitidas`);
   setText("authority-unclassified", metrics.unclassified_blocks || 0);
 }
 
@@ -242,11 +243,11 @@ function diagnostics(metrics, project) {
   const values = [];
   if (!metrics.started_tasks) values.push("Instrumentação inativa: nenhuma tarefa começou com 007 begin.");
   if (metrics.active_tasks) values.push(`${metrics.active_tasks} tarefa(s) iniciada(s) ainda sem receipt terminal.`);
-  if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} receipt(s) legado(s) não têm start correspondente.`);
+  if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} receipt(s) histórico(s) não têm start correspondente; novos records são rejeitados.`);
   if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo ${percent(metrics.cost_coverage)}; o KPI exige 100% dos receipts.`);
   if (metrics.activity?.sessions && metrics.activity.reported_cost_coverage !== 1) values.push(`Custo terminal cobre ${percent(metrics.activity.reported_cost_coverage)} das sessões locais; estimativas externas não fecham esse gate.`);
   if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) aguardam maturação de sete dias.`);
-  if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Autoridade vinculada cobre ${percent(metrics.authority_coverage)} dos outcomes; os demais preservam o contrato legado.`);
+  if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Envelope presente em ${percent(metrics.authority_coverage)} dos outcomes; presença não mede rigor e eventos são autorrelatados.`);
   if (metrics.friction_blocks) values.push(`${metrics.friction_blocks} ação(ões) permitida(s) foram bloqueadas: atrito de fence a investigar.`);
   if (metrics.unclassified_blocks) values.push(`${metrics.unclassified_blocks} bloqueio(s) ficaram fora do envelope declarado.`);
   const touch = metrics.touch?.["30"];

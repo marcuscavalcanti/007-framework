@@ -229,6 +229,10 @@ class DashboardTests(unittest.TestCase):
                 self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
                 0,
             )
+            self.assertEqual(
+                self.run_cli("begin", "--repo", str(repo), "--task-id", "task-001").returncode,
+                0,
+            )
             receipt = {
                 "schema": "007-framework/receipt/v1",
                 "task_id": "task-001",
@@ -266,6 +270,80 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(stored["cost_usd"], 0.42)
             self.assertEqual(stored["served_model"], "gpt-served")
             self.assertRegex(stored["completed_at"], r"Z$")
+
+    def test_record_rejects_receipt_without_matching_task_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            source = Path(tmp, "receipt.json")
+            source.write_text((ROOT / "examples/task.receipt.example.json").read_text())
+
+            result = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("matching task start", result.stderr)
+            self.assertFalse((repo / ".007/receipts/task-001.receipt.json").exists())
+
+    def test_record_rejects_task_start_with_mismatched_task_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            self.assertEqual(
+                self.run_cli("begin", "--repo", str(repo), "--task-id", "task-001").returncode,
+                0,
+            )
+            task_path = repo / ".007/tasks/task-001.task.json"
+            task = json.loads(task_path.read_text())
+            task["task_id"] = "another-task"
+            task_path.write_text(json.dumps(task))
+            source = Path(tmp, "receipt.json")
+            receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+            receipt["task_id"] = "task-001"
+            source.write_text(json.dumps(receipt))
+
+            result = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("task start task_id does not match receipt", result.stderr)
+            self.assertFalse((repo / ".007/receipts/task-001.receipt.json").exists())
+
+    def test_record_rejects_malformed_matching_task_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            self.assertEqual(
+                self.run_cli("begin", "--repo", str(repo), "--task-id", "task-001").returncode,
+                0,
+            )
+            (repo / ".007/tasks/task-001.task.json").write_text("not-json")
+            source = Path(tmp, "receipt.json")
+            receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+            receipt["task_id"] = "task-001"
+            source.write_text(json.dumps(receipt))
+
+            result = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+
+            self.assertEqual(result.returncode, 2)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse((repo / ".007/receipts/task-001.receipt.json").exists())
 
     def test_record_rejects_unaccounted_cost(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -653,19 +731,42 @@ class DashboardTests(unittest.TestCase):
         dashboard = self.module("dashboard")
         metrics = dashboard.metrics_from_receipts([
             {"status": "accepted", "authority_summary": {
-                "bound": True, "events": 3, "allowed_executions": 1,
+                "bound": True, "events": 6, "allowed_executions": 3,
                 "protected_blocks": 1, "friction_blocks": 1,
-                "unclassified_blocks": 0,
+                "unclassified_blocks": 1,
             }},
             {"status": "accepted"},
         ])
 
         self.assertEqual(metrics["authority_bound_tasks"], 1)
         self.assertEqual(metrics["authority_coverage"], 0.5)
-        self.assertEqual(metrics["boundary_events"], 3)
+        self.assertEqual(metrics["boundary_events"], 6)
         self.assertEqual(metrics["protected_blocks"], 1)
         self.assertEqual(metrics["friction_blocks"], 1)
-        self.assertEqual(metrics["boundary_friction_rate"], 0.5)
+        self.assertEqual(metrics["boundary_friction_rate"], 0.25)
+
+    def test_aggregate_authority_friction_matches_project_denominator(self):
+        dashboard = self.module("dashboard")
+        metrics = dashboard.metrics_from_receipts([{
+            "status": "accepted",
+            "authority_summary": {
+                "bound": True, "events": 6, "allowed_executions": 3,
+                "protected_blocks": 1, "friction_blocks": 1,
+                "unclassified_blocks": 1,
+            },
+        }])
+        project = {
+            "available": True,
+            "metrics": metrics,
+            "touch": {
+                "7": {"agent_lines_added": 0, "surviving_lines": 0, "rate": 0.0},
+                "30": {"agent_lines_added": 0, "surviving_lines": 0, "rate": 0.0},
+            },
+        }
+
+        aggregate = dashboard.aggregate_projects([project])
+
+        self.assertEqual(aggregate["boundary_friction_rate"], 0.25)
 
     def test_telemetry_completeness_uses_served_route(self):
         dashboard = self.module("dashboard")
@@ -972,13 +1073,15 @@ class DashboardTests(unittest.TestCase):
             'id="activity-tokens"', 'id="activity-cost"',
             'id="activity-equivalent-cost"',
             'id="authority-coverage"', 'id="authority-protected"',
-            'id="authority-friction"', 'id="authority-unclassified"',
+            'id="authority-friction"', 'id="authority-friction-detail"',
+            'id="authority-unclassified"',
         ):
             self.assertIn(required_id, shell)
         self.assertIn("O 007 está produzindo mais mudanças confiáveis por dólar", shell)
         self.assertIn("Atividade local não é outcome verificado", shell)
         self.assertIn("Codex · Claude · Kimi · Gemini", shell)
         self.assertIn("USD terminal observado", shell)
+        self.assertIn('setText("authority-friction-detail"', (static / "app.js").read_text())
 
 
 if __name__ == "__main__":

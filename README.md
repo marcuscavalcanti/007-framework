@@ -9,7 +9,7 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Status:** v1.2.0 is ready to test. Frozen mechanism tests include an
+> **Status:** v1.2.0 is an unreleased candidate ready to test. Frozen mechanism tests include an
 > OLD 0/3 vs NEW 3/3 contrast on one decision; the complete framework is not
 > claimed to be universally superior or production-proven. See
 > [Evidence](docs/evidence.md).
@@ -141,10 +141,13 @@ Bind explicit task authority when the work has meaningful boundaries:
 ```
 
 The adapter receives `FRAMEWORK_007_AUTHORITY_SHA256` and reports executed or
-blocked boundary events in the receipt. Reported execution outside the bound
-`allow` list is rejected. The dashboard shows authority coverage, protective
-blocks, and avoidable friction. This supplements sandboxing; it does not replace
-technical isolation for secrets, network, production, or destructive actions.
+blocked boundary events in the receipt. Every receipt requires its matching
+task start; reported execution outside the bound `allow` list is rejected.
+Dashboard events are self-reported, and envelope presence does not measure
+policy strictness. Task-start files are also unauthenticated local records: the
+gate prevents accidental omission, not tampering by the same filesystem user.
+This does not replace technical isolation for secrets, network, production, or
+destructive actions.
 
 Start the all-project control room:
 
