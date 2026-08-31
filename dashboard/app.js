@@ -121,6 +121,14 @@ function renderMetrics(metrics) {
   setTrack("track-cost", metrics.cost_coverage);
 }
 
+function renderAuthority(metrics) {
+  setText("authority-coverage", percent(metrics.authority_coverage));
+  setText("authority-coverage-detail", `${metrics.authority_bound_tasks || 0}/${metrics.tasks || 0} outcomes vinculados`);
+  setText("authority-protected", metrics.protected_blocks || 0);
+  setText("authority-friction", percent(metrics.boundary_friction_rate));
+  setText("authority-unclassified", metrics.unclassified_blocks || 0);
+}
+
 function renderFunnel(metrics) {
   setText("funnel-started", metrics.started_tasks || 0);
   setText("funnel-terminal", metrics.tasks || 0);
@@ -238,6 +246,9 @@ function diagnostics(metrics, project) {
   if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo ${percent(metrics.cost_coverage)}; o KPI exige 100% dos receipts.`);
   if (metrics.activity?.sessions && metrics.activity.reported_cost_coverage !== 1) values.push(`Custo terminal cobre ${percent(metrics.activity.reported_cost_coverage)} das sessões locais; estimativas externas não fecham esse gate.`);
   if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) aguardam maturação de sete dias.`);
+  if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Autoridade vinculada cobre ${percent(metrics.authority_coverage)} dos outcomes; os demais preservam o contrato legado.`);
+  if (metrics.friction_blocks) values.push(`${metrics.friction_blocks} ação(ões) permitida(s) foram bloqueadas: atrito de fence a investigar.`);
+  if (metrics.unclassified_blocks) values.push(`${metrics.unclassified_blocks} bloqueio(s) ficaram fora do envelope declarado.`);
   const touch = metrics.touch?.["30"];
   if (!touch || touch.rate == null) values.push(`Touch 30d: ${touch?.reason || "N/D"}.`);
   const projects = project ? [project] : state.snapshot.projects;
@@ -274,6 +285,7 @@ function render() {
   renderInstrumentation(metrics);
   renderRuntimeActivity(metrics.activity);
   renderMetrics(metrics);
+  renderAuthority(metrics);
   renderFunnel(metrics);
   renderProjects();
   renderActivity(recentTasks());

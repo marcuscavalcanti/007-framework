@@ -1,0 +1,42 @@
+{
+  "schema": "007-framework/causal-protocol/v1",
+  "name": "authority-envelope-mechanism-flip",
+  "frozen_at": "2026-08-30T00:00:00-03:00",
+  "old_commit": "c5a4cdbe991332e6d16a0f8949e5c08ec349d404",
+  "old_tree": "7492a73485af1181d9e260ccef10f5738c3e5189",
+  "treatment": "Bind a task authority envelope by SHA-256 and reject a reported executed boundary action unless it is explicitly allowed.",
+  "invariants": [
+    "same Python runtime",
+    "same repository fixture",
+    "same task start",
+    "same terminal receipt",
+    "same cost and acceptance fields",
+    "only framework implementation differs"
+  ],
+  "scenarios": [
+    {
+      "id": "target_undeclared_execution",
+      "authority": {"allow": ["test"], "deny": ["deploy"]},
+      "event": {"action": "deploy", "outcome": "executed"},
+      "expected_old": "accept",
+      "expected_new": "reject"
+    },
+    {
+      "id": "control_allowed_execution",
+      "authority": {"allow": ["test"], "deny": ["deploy"]},
+      "event": {"action": "test", "outcome": "executed"},
+      "expected_old": "accept",
+      "expected_new": "accept"
+    },
+    {
+      "id": "control_denied_action_blocked",
+      "authority": {"allow": ["test"], "deny": ["deploy"]},
+      "event": {"action": "deploy", "outcome": "blocked"},
+      "expected_old": "accept",
+      "expected_new": "accept"
+    }
+  ],
+  "replications": 3,
+  "verdict": "PASS only if all 9 OLD and all 9 NEW cells match their preregistered outcome; no retry-to-pass.",
+  "claim_ceiling": "mechanism-level only; this does not prove lower real-world rework or security against omitted events"
+}

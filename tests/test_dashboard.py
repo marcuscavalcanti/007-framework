@@ -1,4 +1,5 @@
 import json
+import hashlib
 import importlib
 import os
 import subprocess
@@ -141,6 +142,83 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("task_id", unsafe.stderr)
             self.assertFalse((repo / ".007/escape.task.json").exists())
 
+    def test_bound_authority_accepts_safe_events_and_summarizes_fences(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode, 0)
+            authority = Path(tmp, "authority.json")
+            authority.write_text(json.dumps({
+                "schema": "007-framework/authority/v1",
+                "allow": ["test"],
+                "deny": ["deploy"],
+            }))
+            begun = self.run_cli(
+                "begin", "--repo", str(repo), "--task-id", "authority-safe",
+                "--authority-file", str(authority),
+            )
+            self.assertEqual(begun.returncode, 0, begun.stderr)
+            authority_hash = hashlib.sha256(authority.read_bytes()).hexdigest()
+            receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+            receipt.update({
+                "task_id": "authority-safe",
+                "authority_sha256": authority_hash,
+                "boundary_events": [
+                    {"action": "test", "outcome": "executed"},
+                    {"action": "deploy", "outcome": "blocked"},
+                ],
+            })
+            source = Path(tmp, "receipt.json")
+            source.write_text(json.dumps(receipt))
+
+            recorded = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+            stored = json.loads((repo / ".007/receipts/authority-safe.receipt.json").read_text())
+            self.assertEqual(stored["authority_sha256"], authority_hash)
+            self.assertEqual(stored["authority_summary"], {
+                "bound": True,
+                "events": 2,
+                "allowed_executions": 1,
+                "protected_blocks": 1,
+                "friction_blocks": 0,
+                "unclassified_blocks": 0,
+            })
+
+    def test_bound_authority_rejects_executed_denied_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode, 0)
+            authority = Path(tmp, "authority.json")
+            authority.write_text(json.dumps({
+                "schema": "007-framework/authority/v1",
+                "allow": ["test"],
+                "deny": ["deploy"],
+            }))
+            self.assertEqual(self.run_cli(
+                "begin", "--repo", str(repo), "--task-id", "authority-violation",
+                "--authority-file", str(authority),
+            ).returncode, 0)
+            receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+            receipt.update({
+                "task_id": "authority-violation",
+                "authority_sha256": hashlib.sha256(authority.read_bytes()).hexdigest(),
+                "boundary_events": [{"action": "deploy", "outcome": "executed"}],
+            })
+            source = Path(tmp, "receipt.json")
+            source.write_text(json.dumps(receipt))
+
+            recorded = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+
+            self.assertEqual(recorded.returncode, 2)
+            self.assertIn("outside bound authority", recorded.stderr)
+            self.assertFalse((repo / ".007/receipts/authority-violation.receipt.json").exists())
+
     def test_record_requires_cost_and_writes_no_replace_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")
@@ -222,6 +300,8 @@ class DashboardTests(unittest.TestCase):
             cli.validate_receipt({**base, "cost_usd": float("nan")})
         with self.assertRaisesRegex(ValueError, "cost_source"):
             cli.validate_receipt({**base, "cost_source": "unaccounted"})
+        with self.assertRaisesRegex(ValueError, "authority_summary"):
+            cli.validate_receipt({**base, "authority_summary": {"bound": True}})
 
     def test_record_accepts_documented_or_namespaced_cost_sources_only(self):
         cli = self.module("framework_cli")
@@ -569,6 +649,24 @@ class DashboardTests(unittest.TestCase):
             },
         ])
 
+    def test_authority_metrics_separate_protection_from_friction(self):
+        dashboard = self.module("dashboard")
+        metrics = dashboard.metrics_from_receipts([
+            {"status": "accepted", "authority_summary": {
+                "bound": True, "events": 3, "allowed_executions": 1,
+                "protected_blocks": 1, "friction_blocks": 1,
+                "unclassified_blocks": 0,
+            }},
+            {"status": "accepted"},
+        ])
+
+        self.assertEqual(metrics["authority_bound_tasks"], 1)
+        self.assertEqual(metrics["authority_coverage"], 0.5)
+        self.assertEqual(metrics["boundary_events"], 3)
+        self.assertEqual(metrics["protected_blocks"], 1)
+        self.assertEqual(metrics["friction_blocks"], 1)
+        self.assertEqual(metrics["boundary_friction_rate"], 0.5)
+
     def test_telemetry_completeness_uses_served_route(self):
         dashboard = self.module("dashboard")
         metrics = dashboard.metrics_from_receipts([{
@@ -622,6 +720,7 @@ class DashboardTests(unittest.TestCase):
                 "wall_s": 12,
                 "uncertainty": "runtime not exercised",
                 "private_prompt": "must not escape",
+                "authority_summary": {"private_detail": "must not escape"},
             }))
             entry = {
                 "project_id": "project-1", "name": "Example",
@@ -644,6 +743,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(result["recent_tasks"][0]["task_id"], "task-1")
             self.assertNotIn("checks", result["recent_tasks"][0])
             self.assertNotIn("private_prompt", result["recent_tasks"][0])
+            self.assertNotIn("authority_summary", result["recent_tasks"][0])
 
     def test_touch_rate_exposes_structured_unknown_result(self):
         touch_rate = self.module("touch_rate")
@@ -871,6 +971,8 @@ class DashboardTests(unittest.TestCase):
             'id="activity-sessions"', 'id="activity-active"',
             'id="activity-tokens"', 'id="activity-cost"',
             'id="activity-equivalent-cost"',
+            'id="authority-coverage"', 'id="authority-protected"',
+            'id="authority-friction"', 'id="authority-unclassified"',
         ):
             self.assertIn(required_id, shell)
         self.assertIn("O 007 está produzindo mais mudanças confiáveis por dólar", shell)

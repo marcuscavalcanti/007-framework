@@ -6,6 +6,12 @@ All notable changes are documented here.
 
 ### Added
 
+- optional SHA-256-bound authority envelopes with fail-closed terminal
+  validation of reported boundary actions;
+- aggregate and per-project fence telemetry for authority coverage, protective
+  blocks, avoidable friction, and unclassified blocks;
+- a preregistered 18-cell OLD×NEW mechanism test with two negative controls.
+
 - atomic, no-replace task-start records that expose missing terminal receipts;
 - an Evidence Cockpit focused on reliable first-pass outcomes, observation
   coverage, cost per reliable outcome, and an explicit operational-versus-causal boundary.

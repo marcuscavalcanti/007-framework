@@ -1,0 +1,5 @@
+{
+  "schema": "007-framework/authority/v1",
+  "allow": ["read", "write", "test", "commit"],
+  "deny": ["secrets", "merge", "push", "deploy", "destructive"]
+}

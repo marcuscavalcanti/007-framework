@@ -73,3 +73,23 @@ The command reads `FRAMEWORK_007_TASK_ID`, `FRAMEWORK_007_RECEIPT_PATH`, and
 `FRAMEWORK_007_REPO`, then writes the normalized receipt. `007 run` preserves
 the command's non-zero exit status and leaves a start open when no valid,
 task-matched terminal receipt exists. Raw transcripts are not retained.
+
+## Optional authority envelope
+
+For a task that crosses meaningful boundaries, bind a small action envelope at
+start time:
+
+```bash
+007 begin --repo . --task-id task-123 --authority-file examples/authority.example.json
+```
+
+The start stores the envelope and its raw-file SHA-256. The terminal receipt
+must repeat `authority_sha256` and include `boundary_events`, whose entries are
+`{"action":"test","outcome":"executed"}` or
+`{"action":"deploy","outcome":"blocked"}`. `007 record` rejects a hash
+mismatch and any reported executed action not listed in `allow`. It summarizes
+protective, friction, and unclassified blocks for the dashboard.
+
+This is an auditable terminal fence, not a security sandbox: it cannot detect an
+event the host omits. Secrets, production, network egress, and destructive
+actions still require technical isolation and host-level approval.

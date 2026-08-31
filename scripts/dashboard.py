@@ -18,7 +18,7 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/D", "unknown", None}
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
@@ -35,6 +35,8 @@ RAW_METRICS = (
     "accepted_cost_usd_known_sum", "accepted_cost_usd_known_tasks",
     "cost_final_tasks", "cost_provisional_tasks",
     "escape_7d_yes", "escape_7d_known",
+    "authority_bound_tasks", "boundary_events", "allowed_executions",
+    "protected_blocks", "friction_blocks", "unclassified_blocks",
     "telemetry_known", "telemetry_possible",
     "delta_files", "delta_added", "delta_deleted",
 )
@@ -136,6 +138,7 @@ def metrics_from_receipts(receipts):
 
     escape_yes = 0
     escape_known = 0
+    authority_totals = Counter()
     telemetry_known = 0
     delta_totals = {"files": 0, "added": 0, "deleted": 0}
     for item in receipts:
@@ -145,6 +148,15 @@ def metrics_from_receipts(receipts):
             escape_known += 1
         elif escape in (False, "no"):
             escape_known += 1
+        authority = item.get("authority_summary")
+        if isinstance(authority, dict) and authority.get("bound") is True:
+            authority_totals["authority_bound_tasks"] += 1
+            for key in (
+                "events", "allowed_executions", "protected_blocks",
+                "friction_blocks", "unclassified_blocks",
+            ):
+                if is_number(authority.get(key)):
+                    authority_totals[key] += authority[key]
         for served, legacy in (
             ("served_provider", "provider"),
             ("served_model", "model"),
@@ -187,6 +199,12 @@ def metrics_from_receipts(receipts):
         "cost_provisional_tasks": sum(has_accounted_cost(item) and item.get("cost_status") == "provisional" for item in receipts),
         "escape_7d_yes": escape_yes,
         "escape_7d_known": escape_known,
+        "authority_bound_tasks": authority_totals["authority_bound_tasks"],
+        "boundary_events": authority_totals["events"],
+        "allowed_executions": authority_totals["allowed_executions"],
+        "protected_blocks": authority_totals["protected_blocks"],
+        "friction_blocks": authority_totals["friction_blocks"],
+        "unclassified_blocks": authority_totals["unclassified_blocks"],
         "telemetry_known": telemetry_known,
         "telemetry_possible": tasks * len(TELEMETRY_FIELDS),
         "delta_files": delta_totals["files"],
@@ -219,6 +237,11 @@ def metrics_from_receipts(receipts):
         ),
         "escape_7d_rate": ratio(escape_yes, escape_known),
         "escape_7d_pending_tasks": tasks - escape_known,
+        "authority_coverage": ratio(authority_totals["authority_bound_tasks"], tasks),
+        "boundary_friction_rate": ratio(
+            authority_totals["friction_blocks"],
+            authority_totals["protected_blocks"] + authority_totals["friction_blocks"] + authority_totals["unclassified_blocks"],
+        ),
         "telemetry_completeness": ratio(telemetry_known, tasks * len(TELEMETRY_FIELDS)),
     })
     return result
@@ -470,6 +493,11 @@ def aggregate_projects(projects, registry_error_count=0):
         ),
         "escape_7d_rate": ratio(result["escape_7d_yes"], result["escape_7d_known"]),
         "escape_7d_pending_tasks": result["tasks"] - result["escape_7d_known"],
+        "authority_coverage": ratio(result["authority_bound_tasks"], result["tasks"]),
+        "boundary_friction_rate": ratio(
+            result["friction_blocks"],
+            result["protected_blocks"] + result["friction_blocks"] + result["unclassified_blocks"],
+        ),
         "telemetry_completeness": ratio(result["telemetry_known"], result["telemetry_possible"]),
         "routes": [combined_routes[key] for key in sorted(combined_routes)],
     })

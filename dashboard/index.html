@@ -70,6 +70,17 @@
           <article class="metric-card"><div class="metric-heading"><span>Custo / resultado confiável</span><i class="metric-signal signal-violet"></i></div><strong id="metric-reliable-cost">N/D</strong><p id="metric-reliable-cost-detail">Inclui tentativas bloqueadas e falhas</p><div class="micro-track"><span id="track-cost"></span></div></article>
         </section>
 
+        <section class="panel" aria-labelledby="authority-title">
+          <div class="panel-heading"><div><p class="panel-kicker">Autonomia delimitada</p><h2 id="authority-title">Fronteiras de execução</h2></div><span class="sample-pill">fences + sandbox</span></div>
+          <p class="panel-intro">Autoridade vinculada reduz interrupções legítimas sem transformar regras em substituto de isolamento técnico.</p>
+          <div class="metric-grid decision-metrics">
+            <article class="metric-card"><div class="metric-heading"><span>Autoridade vinculada</span><i class="metric-signal signal-cyan"></i></div><strong id="authority-coverage">N/D</strong><p id="authority-coverage-detail">Receipts com envelope hash-bound</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Bloqueios protetivos</span><i class="metric-signal signal-violet"></i></div><strong id="authority-protected">0</strong><p>Ação negada corretamente</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Atrito evitável</span><i class="metric-signal signal-amber"></i></div><strong id="authority-friction">N/D</strong><p>Ação permitida que foi bloqueada</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Não classificados</span><i class="metric-signal signal-red"></i></div><strong id="authority-unclassified">0</strong><p>Bloqueados fora do envelope</p></article>
+          </div>
+        </section>
+
         <section class="panel funnel-panel" id="reliability-funnel" aria-labelledby="funnel-title">
           <div class="panel-heading"><div><p class="panel-kicker">Da atividade ao resultado</p><h2 id="funnel-title">Funil de confiabilidade</h2></div><span class="sample-pill" id="funnel-maturity">0 maduras</span></div>
           <p class="panel-intro">Cada etapa mostra onde o resultado se perdeu. Contagens, não uma nota composta.</p>

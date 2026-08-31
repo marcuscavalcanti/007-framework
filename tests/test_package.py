@@ -10,7 +10,7 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.1\.0$")
+        self.assertRegex(skill, r"(?m)^  version: 1\.2\.0$")
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))

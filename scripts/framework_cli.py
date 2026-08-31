@@ -2,6 +2,7 @@
 """Local project registration and dashboard entrypoint for 007 Framework."""
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -19,7 +20,9 @@ PROJECT_SCHEMA = "007-framework/project/v1"
 REGISTRY_SCHEMA = "007-framework/registry/v1"
 RECEIPT_SCHEMA = "007-framework/receipt/v1"
 TASK_START_SCHEMA = "007-framework/task-start/v1"
+AUTHORITY_SCHEMA = "007-framework/authority/v1"
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COST_SOURCES = {
     "provider-reported", "rate-card-estimate", "subscription-allocated", "local-compute",
 }
@@ -137,12 +140,38 @@ def validate_task_id(task_id):
     return task_id
 
 
+def validate_authority(value):
+    if not isinstance(value, dict) or value.get("schema") != AUTHORITY_SCHEMA:
+        raise ValueError(f"authority schema must be {AUTHORITY_SCHEMA}")
+    for key in ("allow", "deny"):
+        actions = value.get(key)
+        if not isinstance(actions, list) or any(not isinstance(action, str) or not TASK_ID.fullmatch(action) for action in actions):
+            raise ValueError(f"authority {key} must be a list of action names")
+        if len(actions) != len(set(actions)):
+            raise ValueError(f"authority {key} contains duplicate actions")
+    if set(value["allow"]) & set(value["deny"]):
+        raise ValueError("authority actions cannot be both allowed and denied")
+    return value
+
+
+def read_authority(path):
+    payload = Path(path).expanduser().read_bytes()
+    authority = validate_authority(json.loads(payload))
+    return authority, hashlib.sha256(payload).hexdigest()
+
+
 def validate_task_start(value):
     if not isinstance(value, dict) or value.get("schema") != TASK_START_SCHEMA:
         raise ValueError(f"task start schema must be {TASK_START_SCHEMA}")
     validate_task_id(value.get("task_id"))
     if not isinstance(value.get("started_at"), str) or not value["started_at"]:
         raise ValueError("started_at must be a timestamp string")
+    authority = value.get("authority")
+    authority_hash = value.get("authority_sha256")
+    if authority is not None or authority_hash is not None:
+        validate_authority(authority)
+        if not isinstance(authority_hash, str) or not SHA256.fullmatch(authority_hash):
+            raise ValueError("authority_sha256 must be a lowercase SHA-256")
     return value
 
 
@@ -202,7 +231,7 @@ def unregister_project(project, registry_path):
     return removed[0]
 
 
-def begin_task(repo, task_id=None, now=None):
+def begin_task(repo, task_id=None, now=None, authority_file=None):
     root = git_root(repo)
     marker_path = root / ".007" / "project.json"
     if not marker_path.exists():
@@ -218,6 +247,8 @@ def begin_task(repo, task_id=None, now=None):
         "task_id": task_id,
         "started_at": instant.isoformat().replace("+00:00", "Z"),
     }
+    if authority_file:
+        task["authority"], task["authority_sha256"] = read_authority(authority_file)
     validate_task_start(task)
     destination = marker_path.parent / "tasks" / f"{task_id}.task.json"
     write_json_no_replace(destination, task, "task start")
@@ -227,6 +258,8 @@ def begin_task(repo, task_id=None, now=None):
 def validate_receipt(value):
     if not isinstance(value, dict) or value.get("schema") != RECEIPT_SCHEMA:
         raise ValueError(f"receipt schema must be {RECEIPT_SCHEMA}")
+    if "authority_summary" in value:
+        raise ValueError("authority_summary is computed by 007 record")
     validate_task_id(value.get("task_id"))
     if value.get("status") not in ("accepted", "blocked", "no-op"):
         raise ValueError("status must be accepted, blocked, or no-op")
@@ -264,7 +297,55 @@ def validate_receipt(value):
             isinstance(measured, bool) or not isinstance(measured, (int, float)) or measured < 0
         ):
             raise ValueError(f"{key} must be a non-negative number or unmeasured")
+    authority_hash = value.get("authority_sha256")
+    events = value.get("boundary_events")
+    if authority_hash is not None or events is not None:
+        if not isinstance(authority_hash, str) or not SHA256.fullmatch(authority_hash):
+            raise ValueError("authority_sha256 must be a lowercase SHA-256")
+        if not isinstance(events, list):
+            raise ValueError("boundary_events must be a list")
+        for event in events:
+            if (
+                not isinstance(event, dict)
+                or not isinstance(event.get("action"), str)
+                or not TASK_ID.fullmatch(event["action"])
+                or event.get("outcome") not in ("executed", "blocked")
+            ):
+                raise ValueError("boundary event requires action and executed|blocked outcome")
     return value
+
+
+def bind_authority(receipt, task):
+    authority = task.get("authority") if task else None
+    supplied = receipt.get("authority_sha256") is not None or receipt.get("boundary_events") is not None
+    if authority is None:
+        if supplied:
+            raise ValueError("receipt claims authority but task start is not authority-bound")
+        return receipt
+    if receipt.get("authority_sha256") != task.get("authority_sha256"):
+        raise ValueError("receipt authority_sha256 does not match task start")
+    events = receipt.get("boundary_events")
+    if not isinstance(events, list):
+        raise ValueError("authority-bound task requires boundary_events")
+    allowed, denied = set(authority["allow"]), set(authority["deny"])
+    summary = {
+        "bound": True, "events": len(events), "allowed_executions": 0,
+        "protected_blocks": 0, "friction_blocks": 0, "unclassified_blocks": 0,
+    }
+    for event in events:
+        action, outcome = event["action"], event["outcome"]
+        if outcome == "executed":
+            if action not in allowed:
+                raise ValueError(f"executed action outside bound authority: {action}")
+            summary["allowed_executions"] += 1
+        elif action in allowed:
+            summary["friction_blocks"] += 1
+        elif action in denied:
+            summary["protected_blocks"] += 1
+        else:
+            summary["unclassified_blocks"] += 1
+    receipt["authority_summary"] = summary
+    return receipt
 
 
 def record_receipt(repo, source, now=None):
@@ -278,6 +359,9 @@ def record_receipt(repo, source, now=None):
     else:
         value = read_json(Path(source).expanduser())
     receipt = validate_receipt(value)
+    task_path = marker_path.parent / "tasks" / f"{receipt['task_id']}.task.json"
+    task = validate_task_start(read_json(task_path)) if task_path.exists() else None
+    receipt = bind_authority(receipt, task)
     if "completed_at" not in receipt:
         instant = now or datetime.now(timezone.utc)
         receipt["completed_at"] = instant.isoformat().replace("+00:00", "Z")
@@ -288,7 +372,7 @@ def record_receipt(repo, source, now=None):
     return destination
 
 
-def run_task(repo, task_id, receipt, command):
+def run_task(repo, task_id, receipt, command, authority_file=None):
     root = git_root(repo)
     command = command[1:] if command[:1] == ["--"] else command
     if not command:
@@ -300,13 +384,15 @@ def run_task(repo, task_id, receipt, command):
     if receipt_path.exists():
         raise ValueError(f"terminal receipt already exists: {receipt_path}")
 
-    task = begin_task(root, task_id)
+    task = begin_task(root, task_id, authority_file=authority_file)
     environment = {
         **os.environ,
         "FRAMEWORK_007_TASK_ID": task["task_id"],
         "FRAMEWORK_007_RECEIPT_PATH": str(receipt_path),
         "FRAMEWORK_007_REPO": str(root),
     }
+    if task.get("authority_sha256"):
+        environment["FRAMEWORK_007_AUTHORITY_SHA256"] = task["authority_sha256"]
     completed = subprocess.run(command, cwd=root, env=environment)
     if completed.returncode:
         return completed.returncode, None
@@ -327,6 +413,7 @@ def parser():
     begin = commands.add_parser("begin", help="observe the start of one task")
     begin.add_argument("--repo", default=".")
     begin.add_argument("--task-id")
+    begin.add_argument("--authority-file", type=Path)
     record = commands.add_parser("record", help="validate and persist one terminal task receipt")
     record.add_argument("--repo", default=".")
     record.add_argument("--file", required=True, help="receipt JSON path, or - for stdin")
@@ -334,6 +421,7 @@ def parser():
     run.add_argument("--repo", default=".")
     run.add_argument("--task-id")
     run.add_argument("--receipt", required=True)
+    run.add_argument("--authority-file", type=Path)
     run.add_argument("argv", nargs=argparse.REMAINDER, help="command after --")
     unregister = commands.add_parser("unregister", help="remove a stale project from the local registry")
     unregister.add_argument("--project", required=True, help="registered project path or project ID")
@@ -373,7 +461,7 @@ def main(argv=None):
             print(f"receipts: {Path(entry['path']) / '.007' / 'receipts'}")
             return 0
         if args.command == "begin":
-            task = begin_task(args.repo, args.task_id)
+            task = begin_task(args.repo, args.task_id, authority_file=args.authority_file)
             print(f"started: {task['task_id']}")
             return 0
         if args.command == "record":
@@ -381,7 +469,7 @@ def main(argv=None):
             print(f"recorded: {destination}")
             return 0
         if args.command == "run":
-            status, destination = run_task(args.repo, args.task_id, args.receipt, args.argv)
+            status, destination = run_task(args.repo, args.task_id, args.receipt, args.argv, args.authority_file)
             if destination:
                 print(f"recorded: {destination}")
             return status

@@ -1,0 +1,192 @@
+{
+  "cells": 18,
+  "claim_ceiling": "mechanism-level only; this does not prove lower real-world rework or security against omitted events",
+  "matched": 18,
+  "new_patch_sha256": "bf0cad7fafdea1276f9218ea87b6c74901d3fc3d15b271090abe53a1c864016b",
+  "old_commit": "c5a4cdbe991332e6d16a0f8949e5c08ec349d404",
+  "protocol_sha256": "999b9f2d7aca0f1c27eb5aa6a6dae59d508bfa347cef0405f62866abc179bbeb",
+  "rows": [
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "target_undeclared_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "target_undeclared_execution",
+      "stderr": "error: executed action outside bound authority: deploy"
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "target_undeclared_execution",
+      "stderr": "error: executed action outside bound authority: deploy"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "target_undeclared_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "target_undeclared_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": false,
+      "arm": "new",
+      "exit": 2,
+      "expected_accept": false,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "target_undeclared_execution",
+      "stderr": "error: executed action outside bound authority: deploy"
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_allowed_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_allowed_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_allowed_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_allowed_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_allowed_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_allowed_execution",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_denied_action_blocked",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 1,
+      "scenario": "control_denied_action_blocked",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_denied_action_blocked",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 2,
+      "scenario": "control_denied_action_blocked",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "old",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_denied_action_blocked",
+      "stderr": ""
+    },
+    {
+      "accepted": true,
+      "arm": "new",
+      "exit": 0,
+      "expected_accept": true,
+      "matched": true,
+      "repetition": 3,
+      "scenario": "control_denied_action_blocked",
+      "stderr": ""
+    }
+  ],
+  "schema": "007-framework/causal-result/v1",
+  "verdict": "PASS"
+}

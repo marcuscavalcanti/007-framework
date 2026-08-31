@@ -52,6 +52,18 @@ and externally reviewed read-only by Opus 5/xhigh. Review receipt SHA-256:
 The public V1 is a generalized, security-hardened derivative and has its own
 release manifest under `evidence/v1.0.0/`.
 
+## Authority-envelope mechanism
+
+A public deterministic OLD×NEW flip-test exercised one terminal fence with two
+negative controls. Across three repetitions per scenario and arm, all 18 cells
+matched the preregistered outcome: OLD accepted a reported denied execution,
+NEW rejected it, and both arms continued accepting an allowed execution and a
+denied action that was correctly blocked. Protocol and complete cell results are
+under `evidence/v1.2.0/`.
+
+This proves the reported-event gate, not complete event capture, real-world
+rework reduction, or security without a sandbox.
+
 ## Not proved
 
 - provider/model portability;
