@@ -355,6 +355,46 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    def test_replay_summary_binds_exact_set_and_replicate_count(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                replay_set = root / "set.json"
+                output = root / "out"
+                output.mkdir()
+                config = {
+                    "experiment_id": "experiment-1",
+                    "seed": 17,
+                    "replicates_per_arm_task": 3,
+                }
+                replay_set.write_text(json.dumps(config))
+
+                replay_eval.write_summary(output, replay_set, config, 3, [])
+
+                summary = json.loads((output / "summary.json").read_text())
+                self.assertEqual(summary["experiment_id"], "experiment-1")
+                self.assertEqual(summary["replicates_per_arm_task"], 3)
+                self.assertEqual(
+                    summary["replay_set_sha256"],
+                    __import__("hashlib").sha256(replay_set.read_bytes()).hexdigest(),
+                )
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_rejects_replicate_override_against_frozen_set(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            self.assertEqual(
+                replay_eval.experiment_replicates({"replicates_per_arm_task": 3}, None), 3,
+            )
+            with self.assertRaises(ValueError):
+                replay_eval.experiment_replicates({"replicates_per_arm_task": 3}, 2)
+        finally:
+            sys.path.pop(0)
+
     def test_replay_extracts_regular_files_and_rejects_links(self):
         sys.path.insert(0, str(SCRIPTS))
         try:

@@ -246,9 +246,26 @@ def experiment_seed(config):
     return seed
 
 
-def write_summary(output_dir, seed, rows):
+def experiment_replicates(config, requested):
+    configured = config.get("replicates_per_arm_task")
+    if configured is None:
+        configured = 1 if requested is None else requested
+    if not isinstance(configured, int) or isinstance(configured, bool) or configured < 1:
+        raise ValueError("replicates_per_arm_task must be a positive integer")
+    if requested is not None and requested != configured:
+        raise ValueError("--replicates does not match the frozen replay set")
+    return configured
+
+
+def write_summary(output_dir, replay_set, config, replicates, rows):
     (output_dir / "summary.json").write_text(
-        json.dumps({"seed": seed, "cells": rows}, indent=2)
+        json.dumps({
+            "experiment_id": config.get("experiment_id"),
+            "replay_set_sha256": hashlib.sha256(replay_set.read_bytes()).hexdigest(),
+            "seed": experiment_seed(config),
+            "replicates_per_arm_task": replicates,
+            "cells": rows,
+        }, indent=2)
     )
 
 
@@ -353,9 +370,10 @@ def main():
     parser.add_argument("--arms", default="OLD,NEW")
     parser.add_argument("--out", default="replay-results")
     parser.add_argument("--timeout-min", type=int, default=30)
-    parser.add_argument("--replicates", type=int, default=1)
+    parser.add_argument("--replicates", type=int)
     args = parser.parse_args()
-    config = json.loads(Path(args.set).expanduser().read_text())
+    replay_set = Path(args.set).expanduser().resolve()
+    config = json.loads(replay_set.read_text())
     tasks = config["tasks"]
     for task in tasks:
         validate_task_id(task["id"])
@@ -372,13 +390,12 @@ def main():
         parser.error(f"unknown arms: {sorted(unknown)}")
     output_dir = Path(args.out).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=False)
-    if args.replicates < 1:
-        parser.error("--replicates must be at least 1")
+    replicates = experiment_replicates(config, args.replicates)
     seed = experiment_seed(config)
     rng = random.Random(seed)
     rows = []
     for task in tasks:
-        for replicate in range(1, args.replicates + 1):
+        for replicate in range(1, replicates + 1):
             pair = arms[:]
             rng.shuffle(pair)
             for arm in pair:
@@ -386,10 +403,10 @@ def main():
                 record["execution_index"] = len(rows) + 1
                 rows.append(record)
                 if not record["valid"]:
-                    write_summary(output_dir, seed, rows)
+                    write_summary(output_dir, replay_set, config, replicates, rows)
                     print(f"invalid cell: {task['id']} r{replicate:02d} {arm}; stopped", file=sys.stderr)
                     return 2
-    write_summary(output_dir, seed, rows)
+    write_summary(output_dir, replay_set, config, replicates, rows)
     print(f"wrote {len(rows)} cells to {output_dir}")
     return 0
 
