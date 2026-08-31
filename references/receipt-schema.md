@@ -83,6 +83,22 @@ start time:
 007 begin --repo . --task-id task-123 --authority-file examples/authority.example.json
 ```
 
+To make enforcement controller-observed instead of agent-declared, execute one
+classified action through the supported controller path:
+
+```bash
+007 run --repo . --task-id task-123 --receipt task.receipt.json \
+  --authority-file examples/authority.example.json --action test -- <command>
+```
+
+`--authority-file` and `--action` are required together. An allowed action runs;
+a denied or unclassified action is blocked before the subprocess starts. The
+controller writes one no-replace `.007/events/<task-id>.event.json` and stamps
+the terminal receipt with `authority_evidence: "controlled"`. A caller cannot
+set that provenance through `007 record`. Manual `begin` + `record` remains
+supported, but its receipt is explicitly marked
+`authority_evidence: "declared"`.
+
 Every terminal receipt requires its matching task-start record. The start stores
 the envelope and its raw-file SHA-256. The terminal receipt
 must repeat `authority_sha256` and include `boundary_events`, whose entries are
@@ -91,11 +107,13 @@ must repeat `authority_sha256` and include `boundary_events`, whose entries are
 mismatch and any reported executed action not listed in `allow`. It summarizes
 protective, friction, and unclassified blocks for the dashboard.
 
-This is an auditable terminal fence, not a security sandbox: boundary events are
-self-reported and the gate cannot detect an event the host omits or relabels.
-Task-start files are local, unauthenticated records and can be forged by the same
-filesystem principal; requiring them closes accidental omission, not malicious
-local tampering.
+This is an auditable terminal fence, not a security sandbox. The controlled path
+prevents an agent using the supported command from omitting or relabeling the
+classified event. The local event and task-start files remain unauthenticated:
+a process running as the same OS principal can forge or remove them. Protecting
+against the machine owner or a compromised local account requires host-level
+isolation or a remote append-only ledger and is outside this version's threat
+model.
 Envelope coverage measures presence, not policy strictness. Secrets, production,
 network egress, and destructive actions still require technical isolation and
 host-level approval.

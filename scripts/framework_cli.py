@@ -21,6 +21,7 @@ REGISTRY_SCHEMA = "007-framework/registry/v1"
 RECEIPT_SCHEMA = "007-framework/receipt/v1"
 TASK_START_SCHEMA = "007-framework/task-start/v1"
 AUTHORITY_SCHEMA = "007-framework/authority/v1"
+CONTROLLER_EVENT_SCHEMA = "007-framework/controller-event/v1"
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COST_SOURCES = {
@@ -260,6 +261,8 @@ def validate_receipt(value):
         raise ValueError(f"receipt schema must be {RECEIPT_SCHEMA}")
     if "authority_summary" in value:
         raise ValueError("authority_summary is computed by 007 record")
+    if "authority_evidence" in value:
+        raise ValueError("authority provenance is computed by 007")
     validate_task_id(value.get("task_id"))
     if value.get("status") not in ("accepted", "blocked", "no-op"):
         raise ValueError("status must be accepted, blocked, or no-op")
@@ -315,15 +318,79 @@ def validate_receipt(value):
     return value
 
 
-def bind_authority(receipt, task):
+def write_controller_event(root, task, action, outcome, exit_code=None, now=None):
+    validate_task_id(action)
+    if outcome not in ("executed", "blocked"):
+        raise ValueError("controller event outcome must be executed or blocked")
+    instant = now or datetime.now(timezone.utc)
+    event = {
+        "schema": CONTROLLER_EVENT_SCHEMA,
+        "task_id": task["task_id"],
+        "action": action,
+        "outcome": outcome,
+        "authority_sha256": task["authority_sha256"],
+        "observed_at": instant.isoformat().replace("+00:00", "Z"),
+        "exit_code": exit_code,
+    }
+    write_json_no_replace(
+        Path(root) / ".007" / "events" / f"{task['task_id']}.event.json",
+        event,
+        "controller event",
+    )
+    return event
+
+
+def blocked_receipt(task, action):
+    return {
+        "schema": RECEIPT_SCHEMA,
+        "task_id": task["task_id"],
+        "status": "blocked",
+        "proof_required": "authority",
+        "proof_reached": "controller-blocked-before-execution",
+        "checks": [{"command": f"007 authority {action}", "exit": 3}],
+        "delta": {"files": 0, "added": 0, "deleted": 0, "dependencies": 0},
+        "first_pass": "unmeasured",
+        "repair_rounds": 0,
+        "corrective_lines": "pending",
+        "escape_7d": "pending",
+        "requested_provider": "unmeasured",
+        "requested_model": "unmeasured",
+        "requested_effort": "unmeasured",
+        "served_provider": "unmeasured",
+        "served_model": "unmeasured",
+        "served_effort": "unmeasured",
+        "tokens": 0,
+        "wall_s": 0,
+        "cost_usd": 0,
+        "cost_source": "local-compute",
+        "cost_status": "final",
+        "uncertainty": "subprocess not started",
+    }
+
+
+def bind_authority(receipt, task, controller_event=None):
     authority = task.get("authority") if task else None
     supplied = receipt.get("authority_sha256") is not None or receipt.get("boundary_events") is not None
     if authority is None:
         if supplied:
             raise ValueError("receipt claims authority but task start is not authority-bound")
         return receipt
-    if receipt.get("authority_sha256") != task.get("authority_sha256"):
-        raise ValueError("receipt authority_sha256 does not match task start")
+    if controller_event is not None:
+        if (
+            controller_event.get("task_id") != task["task_id"]
+            or controller_event.get("authority_sha256") != task.get("authority_sha256")
+        ):
+            raise ValueError("controller event does not match task start")
+        receipt["authority_sha256"] = task["authority_sha256"]
+        receipt["boundary_events"] = [{
+            "action": controller_event["action"],
+            "outcome": controller_event["outcome"],
+        }]
+        receipt["authority_evidence"] = "controlled"
+    else:
+        if receipt.get("authority_sha256") != task.get("authority_sha256"):
+            raise ValueError("receipt authority_sha256 does not match task start")
+        receipt["authority_evidence"] = "declared"
     events = receipt.get("boundary_events")
     if not isinstance(events, list):
         raise ValueError("authority-bound task requires boundary_events")
@@ -348,7 +415,7 @@ def bind_authority(receipt, task):
     return receipt
 
 
-def record_receipt(repo, source, now=None):
+def record_receipt(repo, source, now=None, controller_event=None):
     root = git_root(repo)
     marker_path = root / ".007" / "project.json"
     if not marker_path.exists():
@@ -365,7 +432,7 @@ def record_receipt(repo, source, now=None):
     task = validate_task_start(read_json(task_path))
     if task["task_id"] != receipt["task_id"]:
         raise ValueError("task start task_id does not match receipt")
-    receipt = bind_authority(receipt, task)
+    receipt = bind_authority(receipt, task, controller_event)
     if "completed_at" not in receipt:
         instant = now or datetime.now(timezone.utc)
         receipt["completed_at"] = instant.isoformat().replace("+00:00", "Z")
@@ -376,11 +443,17 @@ def record_receipt(repo, source, now=None):
     return destination
 
 
-def run_task(repo, task_id, receipt, command, authority_file=None):
+def run_task(repo, task_id, receipt, command, authority_file=None, action=None):
     root = git_root(repo)
     command = command[1:] if command[:1] == ["--"] else command
     if not command:
         raise ValueError("run requires a command after --")
+    if authority_file and not action:
+        raise ValueError("authority-bound run requires --action")
+    if action and not authority_file:
+        raise ValueError("--action requires --authority-file")
+    if action:
+        validate_task_id(action)
     receipt_path = Path(receipt).expanduser()
     if not receipt_path.is_absolute():
         receipt_path = root / receipt_path
@@ -389,6 +462,10 @@ def run_task(repo, task_id, receipt, command, authority_file=None):
         raise ValueError(f"terminal receipt already exists: {receipt_path}")
 
     task = begin_task(root, task_id, authority_file=authority_file)
+    if action and action not in set(task["authority"]["allow"]):
+        event = write_controller_event(root, task, action, "blocked")
+        write_json_atomic(receipt_path, blocked_receipt(task, action))
+        return 3, record_receipt(root, receipt_path, controller_event=event)
     environment = {
         **os.environ,
         "FRAMEWORK_007_TASK_ID": task["task_id"],
@@ -398,6 +475,10 @@ def run_task(repo, task_id, receipt, command, authority_file=None):
     if task.get("authority_sha256"):
         environment["FRAMEWORK_007_AUTHORITY_SHA256"] = task["authority_sha256"]
     completed = subprocess.run(command, cwd=root, env=environment)
+    event = (
+        write_controller_event(root, task, action, "executed", completed.returncode)
+        if action else None
+    )
     if completed.returncode:
         return completed.returncode, None
     if not receipt_path.is_file():
@@ -405,7 +486,7 @@ def run_task(repo, task_id, receipt, command, authority_file=None):
     receipt_value = validate_receipt(read_json(receipt_path))
     if receipt_value["task_id"] != task["task_id"]:
         raise ValueError("terminal receipt task_id does not match the observed task")
-    return 0, record_receipt(root, receipt_path)
+    return 0, record_receipt(root, receipt_path, controller_event=event)
 
 
 def parser():
@@ -426,6 +507,7 @@ def parser():
     run.add_argument("--task-id")
     run.add_argument("--receipt", required=True)
     run.add_argument("--authority-file", type=Path)
+    run.add_argument("--action")
     run.add_argument("argv", nargs=argparse.REMAINDER, help="command after --")
     unregister = commands.add_parser("unregister", help="remove a stale project from the local registry")
     unregister.add_argument("--project", required=True, help="registered project path or project ID")
@@ -473,7 +555,10 @@ def main(argv=None):
             print(f"recorded: {destination}")
             return 0
         if args.command == "run":
-            status, destination = run_task(args.repo, args.task_id, args.receipt, args.argv, args.authority_file)
+            status, destination = run_task(
+                args.repo, args.task_id, args.receipt, args.argv,
+                args.authority_file, args.action,
+            )
             if destination:
                 print(f"recorded: {destination}")
             return status

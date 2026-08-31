@@ -186,6 +186,7 @@ class DashboardTests(unittest.TestCase):
                 "friction_blocks": 0,
                 "unclassified_blocks": 0,
             })
+            self.assertEqual(stored["authority_evidence"], "declared")
 
     def test_bound_authority_rejects_executed_denied_action(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -218,6 +219,112 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(recorded.returncode, 2)
             self.assertIn("outside bound authority", recorded.stderr)
             self.assertFalse((repo / ".007/receipts/authority-violation.receipt.json").exists())
+
+    def test_run_blocks_denied_action_before_subprocess(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode, 0)
+            authority = Path(tmp, "authority.json")
+            authority.write_text(json.dumps({
+                "schema": "007-framework/authority/v1",
+                "allow": ["test"],
+                "deny": ["deploy"],
+            }))
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "deny-1",
+                "--receipt", "blocked.json", "--authority-file", str(authority),
+                "--action", "deploy", "--", sys.executable, "-c",
+                "from pathlib import Path; Path('sentinel').write_text('ran')",
+            )
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertFalse((repo / "sentinel").exists())
+            stored = json.loads((repo / ".007/receipts/deny-1.receipt.json").read_text())
+            self.assertEqual(stored["authority_evidence"], "controlled")
+            self.assertEqual(stored["authority_summary"]["protected_blocks"], 1)
+            event = json.loads((repo / ".007/events/deny-1.event.json").read_text())
+            self.assertEqual(event["outcome"], "blocked")
+            self.assertIsNone(event["exit_code"])
+
+    def test_run_records_allowed_action_as_controlled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode, 0)
+            authority = Path(tmp, "authority.json")
+            authority.write_text(json.dumps({
+                "schema": "007-framework/authority/v1",
+                "allow": ["test"],
+                "deny": ["deploy"],
+            }))
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "Path('sentinel').write_text('ran')\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+            )
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "allow-1",
+                "--receipt", "allowed.json", "--authority-file", str(authority),
+                "--action", "test", "--", sys.executable, str(adapter),
+                str(ROOT / "examples/task.receipt.example.json"),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((repo / "sentinel").exists())
+            stored = json.loads((repo / ".007/receipts/allow-1.receipt.json").read_text())
+            self.assertEqual(stored["authority_evidence"], "controlled")
+            self.assertEqual(stored["authority_summary"]["allowed_executions"], 1)
+            event = json.loads((repo / ".007/events/allow-1.event.json").read_text())
+            self.assertEqual(event["exit_code"], 0)
+
+    def test_run_rejects_partial_authority_arguments_before_start(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "state", "projects.json")
+            self.assertEqual(self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode, 0)
+            authority = Path(tmp, "authority.json")
+            authority.write_text(json.dumps({
+                "schema": "007-framework/authority/v1",
+                "allow": ["test"],
+                "deny": ["deploy"],
+            }))
+
+            missing_action = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "partial-1",
+                "--receipt", "partial-1.json", "--authority-file", str(authority),
+                "--", sys.executable, "-c", "raise SystemExit(0)",
+            )
+            missing_authority = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "partial-2",
+                "--receipt", "partial-2.json", "--action", "test",
+                "--", sys.executable, "-c", "raise SystemExit(0)",
+            )
+
+            self.assertEqual(missing_action.returncode, 2)
+            self.assertEqual(missing_authority.returncode, 2)
+            self.assertFalse((repo / ".007/tasks/partial-1.task.json").exists())
+            self.assertFalse((repo / ".007/tasks/partial-2.task.json").exists())
+
+    def test_record_rejects_caller_supplied_controlled_provenance(self):
+        cli = self.module("framework_cli")
+        receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        receipt["authority_evidence"] = "controlled"
+
+        with self.assertRaisesRegex(ValueError, "authority provenance"):
+            cli.validate_receipt(receipt)
 
     def test_record_requires_cost_and_writes_no_replace_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
