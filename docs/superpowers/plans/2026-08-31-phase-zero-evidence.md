@@ -53,4 +53,13 @@
 - [x] **Step 2: Run the focused tests** and confirm the current `unmeasured` behavior fails them.
 - [x] **Step 3: Implement the smallest harness-neutral binding supported by the chosen CLI's structured output**; do not parse prose.
 - [x] **Step 4: Run focused and full tests** and capture exact results.
-- [ ] **Step 5: Freeze the experiment protocol only after both tasks pass**; zero model calls occur during these tasks.
+- [x] **Step 5: Freeze the experiment protocol only after both tasks pass**; zero model calls occurred.
+
+### Task 3: Hidden acceptance, D0 and minimum real freeze
+
+- [x] Install hash-bound acceptance files only after the model turn and restore agent bytes before diff metrics.
+- [x] Reject hidden-test path escape and incomplete D0.
+- [x] Measure changed files, added/deleted lines and dependency-manifest deltas without adding an AST subsystem.
+- [x] Select eight real parent→accepted tasks from one repository and prove all eight RED→GREEN.
+- [x] Freeze CONTROL `gpt-5.6-sol@xhigh` versus TREATMENT `gpt-5.6-sol@medium`, three pairs per task, official rate-card estimate, deterministic grader and early-stop rule.
+- [x] Persist the local no-replace freeze manifest; keep all experimental cells at zero pending structural review and human hash-bound ratification.
