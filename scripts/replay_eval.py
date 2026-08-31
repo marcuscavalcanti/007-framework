@@ -257,6 +257,17 @@ def experiment_replicates(config, requested):
     return configured
 
 
+def experiment_schedule(config, arms, replicates):
+    rng = random.Random(experiment_seed(config))
+    schedule = {}
+    for task in config["tasks"]:
+        for replicate in range(1, replicates + 1):
+            pair = arms[:]
+            rng.shuffle(pair)
+            schedule[(task["id"], replicate)] = pair
+    return schedule
+
+
 def write_summary(output_dir, replay_set, config, replicates, rows):
     (output_dir / "summary.json").write_text(
         json.dumps({
@@ -391,14 +402,11 @@ def main():
     output_dir = Path(args.out).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=False)
     replicates = experiment_replicates(config, args.replicates)
-    seed = experiment_seed(config)
-    rng = random.Random(seed)
+    schedule = experiment_schedule(config, arms, replicates)
     rows = []
     for task in tasks:
         for replicate in range(1, replicates + 1):
-            pair = arms[:]
-            rng.shuffle(pair)
-            for arm in pair:
+            for arm in schedule[(task["id"], replicate)]:
                 record = execute_cell(config, task, arm, replicate, output_dir, args.timeout_min * 60)
                 record["execution_index"] = len(rows) + 1
                 rows.append(record)

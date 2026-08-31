@@ -395,6 +395,25 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    def test_replay_arm_order_is_global_across_task_slices(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            schedule = replay_eval.experiment_schedule(
+                {"seed": 7007, "tasks": [{"id": "a"}, {"id": "b"}]},
+                ["OLD", "NEW"], 3,
+            )
+            self.assertEqual(
+                [schedule[("a", replicate)] for replicate in range(1, 4)],
+                [["OLD", "NEW"], ["OLD", "NEW"], ["NEW", "OLD"]],
+            )
+            self.assertEqual(
+                [schedule[("b", replicate)] for replicate in range(1, 4)],
+                [["OLD", "NEW"], ["NEW", "OLD"], ["OLD", "NEW"]],
+            )
+        finally:
+            sys.path.pop(0)
+
     def test_replay_extracts_regular_files_and_rejects_links(self):
         sys.path.insert(0, str(SCRIPTS))
         try:
