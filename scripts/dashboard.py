@@ -75,6 +75,7 @@ def load_causal_evidence(path=None):
             or value.get("schema") != "007-framework/causal-roi/v1"
             or not all(isinstance(value.get(key), expected) for key, expected in (
                 ("status", str), ("claim", str), ("boundary", str),
+                ("sample", dict), ("served_identity", dict),
                 ("old", dict), ("new", dict), ("delta", dict),
             ))
         ):
@@ -85,7 +86,7 @@ def load_causal_evidence(path=None):
             "status": "unavailable",
             "claim": "No causal ROI result is available.",
             "boundary": "The frozen causal ROI artifact is not available; operational metrics remain observational.",
-            "old": {}, "new": {}, "delta": {},
+            "sample": {}, "served_identity": {}, "old": {}, "new": {}, "delta": {},
         }
 
 
@@ -581,7 +582,7 @@ def project_snapshot(entry, touch_provider=touch_rate.calculate):
         marker = framework_cli.validate_marker(framework_cli.read_json(path / ".007/project.json"))
         if marker["project_id"] != entry["project_id"]:
             raise ValueError("project marker does not match registry")
-        receipt_dir = path / ".007" / marker["receipt_dir"]
+        receipt_dir = framework_cli.receipt_directory(path / ".007/project.json", marker)
         receipts, errors = harness_report.load_receipts(receipt_dir)
     except (OSError, ValueError) as exc:
         touch = {str(days): unknown_touch(days, str(exc)) for days in (7, 30)}

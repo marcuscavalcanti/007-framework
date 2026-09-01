@@ -129,6 +129,14 @@ def validate_marker(value):
     return value
 
 
+def receipt_directory(marker_path, marker):
+    state_dir = marker_path.parent.resolve()
+    receipt_dir = (state_dir / marker["receipt_dir"]).resolve()
+    if not receipt_dir.is_relative_to(state_dir):
+        raise ValueError("receipt_dir must stay inside .007")
+    return receipt_dir
+
+
 def load_registry(path):
     if not path.exists():
         return {"schema": REGISTRY_SCHEMA, "projects": []}
@@ -274,22 +282,18 @@ def select_route(candidates, receipts, task_class, which=shutil.which):
     }
 
 
-def load_route_receipts(registry_path):
-    registry_path = Path(registry_path).expanduser()
-    if not registry_path.exists():
+def load_route_receipts(repo):
+    root = git_root(repo)
+    marker_path = root / ".007" / "project.json"
+    if not marker_path.is_file():
         return []
     receipts = []
-    for entry in load_registry(registry_path)["projects"]:
-        root = Path(entry["path"])
-        marker_path = root / ".007" / "project.json"
-        if not marker_path.is_file():
-            continue
-        marker = validate_marker(read_json(marker_path))
-        for path in sorted((marker_path.parent / marker["receipt_dir"]).glob("*.receipt.json")):
-            value = read_json(path)
-            if not isinstance(value, dict):
-                raise ValueError(f"invalid route receipt: {path}")
-            receipts.append(value)
+    marker = validate_marker(read_json(marker_path))
+    for path in sorted(receipt_directory(marker_path, marker).glob("*.receipt.json")):
+        value = read_json(path)
+        if not isinstance(value, dict):
+            raise ValueError(f"invalid route receipt: {path}")
+        receipts.append(value)
     return receipts
 
 
@@ -372,7 +376,7 @@ def init_project(repo, registry_path, now=None):
             "receipt_dir": "receipts",
         }
         write_json_atomic(marker_path, marker)
-    (marker_path.parent / marker["receipt_dir"]).mkdir(parents=True, exist_ok=True)
+    receipt_directory(marker_path, marker).mkdir(parents=True, exist_ok=True)
 
     registry_path = Path(registry_path).expanduser().resolve()
     registry = load_registry(registry_path)
@@ -683,7 +687,7 @@ def record_receipt(repo, source, now=None, controller_event=None, acceptance_res
         receipt["completed_at"] = instant.isoformat().replace("+00:00", "Z")
     elif not isinstance(receipt["completed_at"], str) or not receipt["completed_at"]:
         raise ValueError("completed_at must be a timestamp string")
-    destination = marker_path.parent / marker["receipt_dir"] / f"{receipt['task_id']}.receipt.json"
+    destination = receipt_directory(marker_path, marker) / f"{receipt['task_id']}.receipt.json"
     write_json_no_replace(destination, receipt)
     return destination
 
@@ -764,7 +768,7 @@ def parser():
     route = commands.add_parser("route", help="select the cheapest measured eligible executor")
     route.add_argument("--task-class", required=True, choices=sorted(TASK_CLASSES))
     route.add_argument("--config", type=Path, default=default_route_config_path())
-    route.add_argument("--registry", type=Path, default=default_registry_path())
+    route.add_argument("--repo", default=".")
     route.add_argument("--format", choices=("json", "text"), default="text")
     unregister = commands.add_parser("unregister", help="remove a stale project from the local registry")
     unregister.add_argument("--project", required=True, help="registered project path or project ID")
@@ -822,13 +826,14 @@ def main(argv=None):
         if args.command == "route":
             config = validate_route_config(read_json(args.config.expanduser()))
             decision = select_route(
-                config["candidates"], load_route_receipts(args.registry), args.task_class,
+                config["candidates"], load_route_receipts(args.repo), args.task_class,
             )
+            decision["evidence_scope"] = "repository-local"
             if args.format == "json":
                 print(json.dumps(decision, indent=2, sort_keys=True))
             elif decision["selected"]:
                 selected = decision["selected"]
-                print(f"{selected['id']}: {selected['provider']}/{selected['model']}@{selected['effort']} ({decision['strategy']})")
+                print(f"{selected['id']}: {selected['provider']}/{selected['model']}@{selected['effort']} ({decision['strategy']}) [repository-local]")
             else:
                 print("no available route", file=sys.stderr)
             return 0 if decision["selected"] else 3

@@ -68,10 +68,11 @@ The snapshot publishes `telemetry_fields` alongside the completeness numerator
 and denominator so consumers can see that V1.1 measures provider, model, effort,
 tokens, and wall time.
 
-The route selector reads the same normalized receipts across registered
-projects. It filters by task class and exact served binding, rejects immature or
-low-quality routes, and makes one deterministic choice before execution. There
-is no daemon, gateway, database, background agent, or mid-attempt rerouting.
+The experimental route recommender reads normalized receipts from the current
+repository only. It filters by task class and exact served binding and returns one
+deterministic recommendation before execution. It is observational, not a
+certified runtime selector, and never starts the recommended command. There is
+no daemon, gateway, database, background agent, or mid-attempt rerouting.
 
 ## Trust boundaries
 

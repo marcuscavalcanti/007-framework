@@ -375,12 +375,23 @@ function renderDiagnostics(metrics, project) {
 
 function renderEvidence() {
   const evidence = state.snapshot.causal_evidence;
+  const sample = evidence?.sample || {};
+  const oldCosts = evidence?.old?.cell_cost_usd || [];
+  const newCosts = evidence?.new?.cell_cost_usd || [];
+  const oldWall = evidence?.old?.cell_wall_s || [];
+  const newWall = evidence?.new?.cell_wall_s || [];
+  setText("causal-strength", evidence?.status === "supported-task-local" ? "Suporte local" : "Não comprovado");
+  setText("causal-sample", sample.tasks == null ? "Amostra N/D" : `${sample.tasks} tarefa real · ${sample.accepted}/${sample.cells} células aceitas · identidade servida verificada`);
+  setText("causal-pricing", evidence?.pricing?.status?.includes("estimate") ? "USD estimado por rate card; não é faturamento do provider." : "Custo conforme provenance do artefato.");
   setText("causal-claim", evidence?.claim_pt_br || evidence?.claim || "Nenhum experimento causal publicado.");
   setText("causal-boundary", evidence?.boundary_pt_br || evidence?.boundary || "Uso operacional não prova causalidade.");
   setText("causal-old-cost", money(evidence?.old?.cost_usd_per_accepted));
   setText("causal-new-cost", money(evidence?.new?.cost_usd_per_accepted));
   setText("causal-cost-delta", evidence?.delta?.cost_pct == null ? "N/D" : `${decimal(evidence.delta.cost_pct, 1)}%`);
-  setText("causal-latency-delta", evidence?.delta?.median_wall_pct == null ? "N/D" : `${decimal(evidence.delta.median_wall_pct, 1)}%`);
+  setText("causal-latency-delta", evidence?.delta?.wall_per_accepted_pct == null ? "N/D" : `${decimal(evidence.delta.wall_per_accepted_pct, 1)}%`);
+  setText("causal-spread", oldCosts.length && newCosts.length && oldWall.length && newWall.length
+    ? `Faixa das 3 réplicas · custo/célula CONTROL ${money(Math.min(...oldCosts))}–${money(Math.max(...oldCosts))} · TREATMENT ${money(Math.min(...newCosts))}–${money(Math.max(...newCosts))} · tempo CONTROL ${integer(Math.min(...oldWall))}–${integer(Math.max(...oldWall))}s · TREATMENT ${integer(Math.min(...newWall))}–${integer(Math.max(...newWall))}s`
+    : "Dispersão N/D");
 }
 
 function render() {

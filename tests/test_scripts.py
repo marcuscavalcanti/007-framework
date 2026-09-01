@@ -553,6 +553,9 @@ class ScriptContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp, "routes.json")
             registry = Path(tmp, "projects.json")
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
             config.write_text(json.dumps({
                 "schema": "007-framework/routes/v1",
                 "candidates": [{
@@ -565,10 +568,14 @@ class ScriptContractTests(unittest.TestCase):
             registry.write_text(json.dumps({
                 "schema": "007-framework/registry/v1", "projects": [],
             }))
+            initialized = self.run_script(
+                "framework_cli.py", "init", "--repo", str(repo), "--registry", str(registry),
+            )
+            self.assertEqual(initialized.returncode, 0, initialized.stderr)
 
             result = self.run_script(
                 "framework_cli.py", "route", "--task-class", "implement",
-                "--config", str(config), "--registry", str(registry), "--format", "json",
+                "--config", str(config), "--repo", str(repo), "--format", "json",
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -576,6 +583,14 @@ class ScriptContractTests(unittest.TestCase):
             self.assertEqual(decision["schema"], "007-framework/route-decision/v1")
             self.assertEqual(decision["strategy"], "policy-fallback")
             self.assertEqual(decision["selected"]["id"], "local-default")
+            self.assertEqual(decision["evidence_scope"], "repository-local")
+
+            text_result = self.run_script(
+                "framework_cli.py", "route", "--task-class", "implement",
+                "--config", str(config), "--repo", str(repo),
+            )
+            self.assertEqual(text_result.returncode, 0, text_result.stderr)
+            self.assertIn("[repository-local]", text_result.stdout)
 
     def test_route_selector_matches_frozen_old_new_mechanism_cells(self):
         sys.path.insert(0, str(SCRIPTS))

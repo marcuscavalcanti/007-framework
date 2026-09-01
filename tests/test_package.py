@@ -1,5 +1,7 @@
 import re
 import unittest
+import json
+import hashlib
 from pathlib import Path
 
 
@@ -80,6 +82,53 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("if: startsWith(github.ref, 'refs/tags/v')", workflow)
         self.assertIn('evidence/${GITHUB_REF_NAME}/manifest.sha256', workflow)
         self.assertNotIn("sha256sum --check evidence/v1.1.0/manifest.sha256", workflow)
+
+    def test_v14_public_evidence_keeps_support_and_inconclusive_results_distinct(self):
+        causal = json.loads((ROOT / "evidence/v1.4.0/causal-roi-result.json").read_text())
+        incident = json.loads((ROOT / "evidence/v1.4.0/phase-zero-v16-inconclusive.json").read_text())
+
+        self.assertEqual(causal["status"], "supported-task-local")
+        self.assertEqual(causal["sample"], {"tasks": 1, "cells": 6, "accepted": 6})
+        self.assertEqual(causal["served_identity"]["verified_cells"], 6)
+        self.assertEqual(len(causal["old"]["cell_cost_usd"]), 3)
+        self.assertEqual(len(causal["new"]["cell_wall_s"]), 3)
+        self.assertEqual(causal["delta"]["cost_pct"], -42.6)
+        expected_wall_delta = round(
+            (causal["new"]["wall_s_per_accepted"] / causal["old"]["wall_s_per_accepted"] - 1) * 100,
+            1,
+        )
+        self.assertEqual(causal["delta"]["wall_per_accepted_pct"], expected_wall_delta)
+        self.assertNotIn("median_wall_pct", causal["delta"])
+        self.assertEqual(incident["status"], "inconclusive-instrument-conflict")
+        self.assertEqual(incident["executed_cells"], 6)
+        self.assertEqual(incident["not_executed_cells"], 36)
+        self.assertIsNone(incident["claims"]["cost_reduction_per_accepted_task"])
+
+    def test_v14_adversarial_release_review_is_hash_bound(self):
+        review = json.loads((ROOT / "evidence/v1.4.0/adversarial-review.json").read_text())
+
+        self.assertEqual(review["schema"], "007-framework/adversarial-review/v1")
+        self.assertEqual(review["reviewer"], "anthropic/claude-opus-5")
+        self.assertEqual(review["effort"], "xhigh")
+        self.assertFalse(review["tools"])
+        self.assertEqual(review["final"], {
+            "context_sha256": "f05da0125155ad013bd654e9e216051829d1a23d03c5537258ba6e20bbe56d77",
+            "source_result_sha256": "d6e7472edd04d657fe649d88596e10c618ff9be5ee12ce5c6f5546964a17fe8d",
+            "verdict": "approve",
+            "highest_severity": "low",
+        })
+        self.assertEqual([item["verdict"] for item in review["history"]], ["reject", "reject"])
+        self.assertEqual(len(review["reconciled_low_findings"]), 3)
+
+    def test_v14_release_manifest_matches_public_bytes(self):
+        manifest = ROOT / "evidence/v1.4.0/manifest.sha256"
+        mismatches = []
+        for line in manifest.read_text().splitlines():
+            digest, relative = line.split("  ", 1)
+            source = ROOT / relative
+            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+                mismatches.append(relative)
+        self.assertEqual(mismatches, [])
 
 
 if __name__ == "__main__":

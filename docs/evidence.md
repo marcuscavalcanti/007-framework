@@ -2,31 +2,40 @@
 
 ## Release claim
 
-V1.4 is a usable, dependency-free orchestration skill with one real-task causal
-ROI contrast, one deterministic selector-mechanism contrast, and package checks.
+V1.4 is a usable, dependency-free causal beta with one real-task causal ROI
+contrast, one deterministic selector-mechanism contrast, and package checks.
 
 It is not a claim that the complete bundle is generally superior.
 
 ## Causal ROI result for v1.4.0
 
-One frozen real coding task ran OLD and NEW three times each with the same task,
-code snapshot, model class, effort, hidden acceptance, and serial controller.
-Both arms passed 3/3. Using the frozen terminal token records and a retrospective
-Headroom/LiteLLM rate card, NEW cost 24.9% less per accepted result and changed
-21.5% fewer median lines; median wall time was 3.4% higher.
+The real historical `register-projects` task ran three times per arm from the
+same source snapshot. The task, harness, served model alias, tools, timeout,
+hidden acceptance, pricing and serial controller were held constant; reasoning
+effort was the only changed policy variable. `xhigh` and `medium` both passed
+3/3, with requested-versus-served identity verified in all six cells. `medium`
+reduced estimated cost per accepted task by 42.6%, wall time per accepted task
+by 53.9%, total tokens by 42.7%, and median changed lines by 24.2%. Per-cell
+cost and wall-time arrays are public so three-replicate dispersion remains visible.
 
-This is a positive secondary endpoint on one task. Cost is provisional rather
-than provider-reported, and seven-day durability was not measured. It supports
-the narrow statement that this treatment produced a cheaper equally accepted
-outcome in this task; it does not prove universal ROI, routing superiority, or
-provider portability. Sanitized result: `evidence/v1.4.0/causal-roi-result.json`.
-The embedded SHA-256 values bind the private source summary and six terminal
-streams without publishing hidden tests.
+This supports the minimum-intelligence mechanism for one task and run window.
+It does not establish task-class generalization, cross-provider portability,
+dynamic routing, or D7/D30 durability. Cost uses the frozen rate-card estimate,
+not provider billing. The sanitized result and source hashes are in
+`evidence/v1.4.0/causal-roi-result.json`; the earlier weaker secondary result is
+preserved in `causal-roi-secondary-result.json`.
+
+A later seven-task bank stopped after the first task because both arms passed
+0/3 and the frozen protocol conflicted with the grader's precedence. Its six raw
+cells remain valid observations, but no quality, economic, or policy conclusion
+is permitted. The remaining 36 cells were not run. Public disposition and
+provenance are in `phase-zero-v16-inconclusive.json`.
 
 The new task-start selector also passes an 18/18 deterministic OLD×NEW mechanism
-test. It preserves a cheap eligible route and rejects that route when mature
+test. It preserves a cheap eligible route and rejects that route when synthetic mature
 receipts show a quality regression or incomplete cost telemetry. This proves the
-selection branch only, with synthetic receipts and zero model calls; protocol and
+selection branch only, with synthetic receipts and zero model calls. It does not
+certify automatic serving or cross-project learning; protocol and
 result are in `evidence/v1.4.0/`.
 
 ## Observed frozen result
@@ -122,3 +131,4 @@ framework improves longitudinal productivity.
 - production runtime behavior;
 - accuracy of touch-rate without agent commit attribution;
 - causal benefit of the complete framework bundle.
+- task-class or cross-project superiority of the experimental route recommendation.

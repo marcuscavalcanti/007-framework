@@ -384,6 +384,8 @@ td:first-child { color: var(--text); font-weight: 560; }
 .evidence-panel { display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 17px; padding: 23px; }
 .evidence-icon { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid rgba(181,148,255,.25); border-radius: 13px; background: rgba(181,148,255,.09); color: var(--violet); font-size: 20px; }
 .evidence-panel > div:last-child > p:not(.panel-kicker) { margin: 9px 0 0; color: var(--muted-bright); font-size: 11px; }
+.evidence-panel .evidence-sample { color: var(--green); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
+.evidence-panel .evidence-pricing, .evidence-panel .evidence-spread { color: #71869b; font-size: 9px; }
 .evidence-boundary { margin-top: 14px; padding: 10px 12px; border-left: 2px solid var(--violet); background: rgba(181,148,255,.05); color: #8293aa; font-size: 10px; }
 .causal-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 14px; }
 .causal-grid span { padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px; background: rgba(4,13,25,.42); }

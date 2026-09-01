@@ -1,13 +1,13 @@
 # Phase Zero diagnosis
 
 Date: 2026-08-31
-Status: verified current-state diagnosis; no thesis experiment has been run under this contract
+Status: superseded by the completed v12 task-local experiment and v16 inconclusive bank
 
 ## Authority
 
 - Target definition: `docs/target-definition.md`
 - Target-definition SHA-256: `c695e687cb870b1a6482a52af808e791dced1b92a07be4f9ffc8da8efe9c5841`
-- Current candidate commit: `ec614b17a6884a73dcc607397b8d859abbe369f0`
+- Source controller commit used by both experiments: `08f9bf65ad62374d5e2170c438c199ee17a208be`
 - Last public baseline in this branch ancestry: `0e6be2d3d04b9d17ad75fa84db0c06d276ef925c`
 
 ## Current verified state
@@ -16,11 +16,20 @@ The repository has a local task lifecycle, immutable terminal receipts, requeste
 
 The replay runner does execute repository-native acceptance commands after the agent exits. However, its cell receipt currently records `served_model` and `served_effort` as `unmeasured`. Therefore it cannot support a causal claim whose treatment changes model or effort.
 
-The selector reads receipts across every registered project and applies fixed thresholds without a release-bound certified policy envelope or repository-local learned-state boundary. That behavior is observational routing, not certified online learning. Version strings also exist independently in multiple surfaces.
+The original selector read receipts across every registered project. The v1.4
+candidate correction scopes its experimental recommendation to the current
+repository and labels that scope in machine output. It remains observational,
+not certified online learning. Version strings still exist independently in
+multiple surfaces.
 
 ## Current thesis evidence
 
-The strongest current result covers one frozen real coding task with three OLD and three NEW executions. Both arms passed hidden acceptance 3/3. NEW used 24.9% less retrospectively estimated USD and 21.5% fewer median added lines, while median wall time was 3.4% higher. This supports a narrow mechanism observation only. It does not establish task-class generalization, served-policy causality, routing superiority, provider portability, or realized durability.
+The v12 experiment verified requested-versus-served identity in six cells and
+isolated reasoning effort on one real task. Both arms passed 3/3; `medium`
+reduced estimated cost per accepted task by 42.6% and wall time per accepted
+task by 53.9% versus `xhigh`. This supports a task-local minimum-intelligence
+mechanism only. The broader v16 bank is inconclusive after an instrument
+precedence conflict and does not add a policy or economic claim.
 
 ## Existing primitives to preserve
 

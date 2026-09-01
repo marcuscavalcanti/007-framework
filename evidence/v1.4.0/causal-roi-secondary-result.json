@@ -1,0 +1,9 @@
+{
+  "schema": "007-framework/causal-roi/v1",
+  "status": "positive-secondary-superseded",
+  "claim": "In one earlier frozen real coding task, OLD and NEW both passed 3/3 hidden acceptance runs; NEW used 24.9% less API-equivalent USD and 21.5% fewer median added lines.",
+  "boundary": "Superseded as the release headline by the v12 paired effort result. Cost was retrospective and median wall time was 3.4% higher for NEW.",
+  "old": {"accepted": 3, "cells": 3, "cost_usd_per_accepted": 0.384273, "median_wall_s": 206.834, "median_added_lines": 163},
+  "new": {"accepted": 3, "cells": 3, "cost_usd_per_accepted": 0.288431, "median_wall_s": 213.915, "median_added_lines": 128},
+  "delta": {"cost_pct": -24.9411, "median_wall_pct": 3.4235, "median_added_lines_pct": -21.4724}
+}

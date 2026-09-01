@@ -73,9 +73,11 @@ touch-rate, escapes, telemetry, and cost. It does not turn those operational
 signals into causal proof. Release-level causal evidence remains a separate,
 frozen OLD×NEW experiment.
 
-Routing is also deliberately small: a deterministic task-start decision over
-user-configured CLIs, using only mature receipts. 007 is not a model gateway and
-does not switch executors inside an attempt.
+Routing is also deliberately small: v1.4 offers a deterministic experimental
+repository-local recommendation over user-configured CLIs and mature receipts. It is not a
+certified policy engine, does not serve automatically, and does not establish
+cross-project transfer. 007 is not a model gateway and does not switch executors
+inside an attempt.
 
 Before receipts exist, a separate local-activity lane can already show Codex,
 Claude, Kimi, and Gemini sessions, served routes, and 24-hour token deltas.

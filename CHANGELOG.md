@@ -13,15 +13,18 @@ All notable changes are documented here.
   and wall time before cost/latency optimization;
 - aggregate and per-route reliable outcomes per USD and wall time per reliable
   outcome, counting failed attempts;
-- a separately frozen causal ROI card based on one real OLD×NEW coding task.
+- a separately frozen causal ROI card based on one real paired-effort coding task;
+- a public fail-closed record for the broader v16 bank that stopped inconclusive.
 
 ### Evidence boundary
 
-- the frozen task passed hidden acceptance 3/3 in both arms; NEW used 24.9% less
-  estimated USD and 21.5% fewer median added lines, while median latency was
-  3.4% higher;
-- this is a narrow retrospective secondary cost endpoint, not proof of universal
-  route superiority, provider portability, or seven-day durability.
+- `medium` and `xhigh` passed deterministic acceptance 3/3 on the same real
+  task; `medium` reduced estimated cost per accepted task by 42.6% and wall
+  time per accepted task by 53.9%; per-cell ranges remain visible;
+- this is a task-local mechanism result, not proof of task-class routing,
+  provider portability, or D7/D30 durability;
+- the v16 bank is inconclusive because protocol and grader precedence conflicted;
+  its raw failed outputs do not support an economic or policy verdict.
 
 ### Fixed
 

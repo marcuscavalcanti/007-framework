@@ -1,0 +1,28 @@
+{
+  "schema": "007-framework/phase-zero-inconclusive/v1",
+  "experiment_id": "007-phase-zero-sol-effort-bank-v16",
+  "status": "inconclusive-instrument-conflict",
+  "reason": "The protocol required INCONCLUSIVE when CONTROL was below 2/3, while the frozen grader emitted FAIL after evaluating TREATMENT first.",
+  "task": "aggregate-metrics",
+  "executed_cells": 6,
+  "not_executed_cells": 36,
+  "retries": 0,
+  "control": {"valid": 3, "accepted": 0},
+  "treatment": {"valid": 3, "accepted": 0},
+  "served_identity_verified_cells": 6,
+  "claims": {
+    "quality_non_inferiority": null,
+    "cost_reduction_per_accepted_task": null,
+    "latency_reduction_per_accepted_task": null,
+    "policy_disposition": null
+  },
+  "disposition": "Preserve the raw cells, do not run the remaining bank, and do not use the emitted FAIL as a policy verdict.",
+  "provenance": {
+    "run_freeze_manifest_sha256": "37e0476e80025a84dea55856daaa9f5f63c08f4766aa5e38b6ab47873c0e5807",
+    "terminal_receipt_sha256": "499e9ff49c2e608e307ae35a8ebdb023cb2018d62ad5076aa248bc716b284926",
+    "terminal_report_sha256": "0a0c0f2ecedcb7d8b75167901091fc490b745e57032a75f16236a8b17a4e9040",
+    "protocol_conflict_sha256": "2acb1342e3302e893435b03a0d2c263434c900d485fc79f84e982916707cd92e",
+    "adjudication_context_sha256": "c47bb4be42978f6bfad88c4feb8e6d9eac681ba18ad31b3128ecf79a6c33f19a",
+    "adjudication_result_sha256": "5f01412e29743dd3a1b009e1d95b7ced5f3e602d3d50b19b34b60272dcafcd61"
+  }
+}

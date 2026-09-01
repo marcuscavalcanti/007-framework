@@ -98,6 +98,28 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("invalid registry", result.stderr)
             self.assertNotIn("Traceback", result.stderr)
 
+    def test_route_receipts_cannot_escape_through_a_symlink(self):
+        cli = self.module("framework_cli")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            state = repo / ".007"
+            state.mkdir()
+            (state / "project.json").write_text(json.dumps({
+                "schema": "007-framework/project/v1",
+                "project_id": "project-1",
+                "name": "Example",
+                "receipt_dir": "receipts",
+            }))
+            external = Path(tmp, "external")
+            external.mkdir()
+            (external / "foreign.receipt.json").write_text("{}")
+            (state / "receipts").symlink_to(external, target_is_directory=True)
+
+            with self.assertRaisesRegex(ValueError, "receipt_dir must stay inside .007"):
+                cli.load_route_receipts(repo)
+
     def test_begin_creates_no_replace_task_start(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")
@@ -1622,9 +1644,11 @@ class DashboardTests(unittest.TestCase):
             source = Path(tmp, "causal-roi.json")
             source.write_text(json.dumps({
                 "schema": "007-framework/causal-roi/v1",
-                "status": "positive-secondary",
+                "status": "supported-task-local",
                 "claim": "NEW reduced estimated cost without quality loss.",
                 "boundary": "Durability remains unmeasured.",
+                "sample": {"tasks": 1, "cells": 6, "accepted": 6},
+                "served_identity": {"verified_cells": 6, "total_cells": 6},
                 "old": {"accepted": 3, "cost_usd_per_accepted": 0.38},
                 "new": {"accepted": 3, "cost_usd_per_accepted": 0.29},
                 "delta": {"cost_pct": -24.0},
@@ -1632,7 +1656,8 @@ class DashboardTests(unittest.TestCase):
 
             result = dashboard.load_causal_evidence(source)
 
-        self.assertEqual(result["status"], "positive-secondary")
+        self.assertEqual(result["status"], "supported-task-local")
+        self.assertEqual(result["sample"], {"tasks": 1, "cells": 6, "accepted": 6})
         self.assertEqual(result["delta"]["cost_pct"], -24.0)
 
     def test_causal_evidence_loader_fails_closed_when_artifact_is_missing(self):
@@ -1650,10 +1675,14 @@ class DashboardTests(unittest.TestCase):
                 self.tags = []
                 self.urls = []
                 self.live_regions = 0
+                self.elements = []
 
             def handle_starttag(self, tag, attrs):
                 self.tags.append(tag)
                 values = dict(attrs)
+                if values.get("id"):
+                    self.elements.append(f"id:{values['id']}")
+                self.elements.extend(f"class:{name}" for name in values.get("class", "").split())
                 for key in ("src", "href"):
                     if values.get(key):
                         self.urls.append(values[key])
@@ -1670,6 +1699,9 @@ class DashboardTests(unittest.TestCase):
         self.assertGreaterEqual(parser.live_regions, 1)
         self.assertEqual(set(parser.urls), {"/styles.css", "/app.js"})
         self.assertFalse(any(url.startswith(("http://", "https://", "//")) for url in parser.urls))
+        self.assertLess(parser.elements.index("id:causal-pricing"), parser.elements.index("class:causal-grid"))
+        self.assertLess(parser.elements.index("class:causal-grid"), parser.elements.index("id:causal-spread"))
+        self.assertLess(parser.elements.index("id:causal-spread"), parser.elements.index("id:causal-boundary"))
 
         shell = (static / "index.html").read_text()
         for required_id in (
@@ -1688,6 +1720,8 @@ class DashboardTests(unittest.TestCase):
             'id="outcome-trend"', 'id="authority-controlled"',
             'id="authority-declared"', 'id="authority-unobserved"',
             'id="metric-roi"', 'id="metric-reliable-time"',
+            'id="causal-strength"', 'id="causal-sample"',
+            'id="causal-pricing"', 'id="causal-spread"',
             'id="causal-old-cost"', 'id="causal-new-cost"',
             'id="causal-cost-delta"', 'id="causal-latency-delta"',
         ):
@@ -1698,6 +1732,9 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("USD terminal observado", shell)
         app = (static / "app.js").read_text()
         self.assertIn('setText("authority-friction-detail"', app)
+        self.assertIn('setText("causal-pricing"', app)
+        self.assertIn('setText("causal-spread"', app)
+        self.assertIn("evidence?.delta?.wall_per_accepted_pct", app)
         self.assertIn("createElementNS", app)
         self.assertNotIn(".innerHTML =", app)
 

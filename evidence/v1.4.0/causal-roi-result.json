@@ -1,44 +1,59 @@
 {
   "schema": "007-framework/causal-roi/v1",
-  "status": "positive-secondary",
-  "claim": "In one frozen real coding task, OLD and NEW both passed 3/3 hidden acceptance runs; NEW used 24.9% less API-equivalent USD and 21.5% fewer median added lines.",
-  "claim_pt_br": "Em uma tarefa real congelada, OLD e NEW passaram 3/3 testes ocultos; NEW usou 24,9% menos USD equivalente de API e adicionou 21,5% menos linhas na mediana.",
-  "boundary": "Cost is a retrospective secondary endpoint priced from frozen token receipts with Headroom 0.36.5 and LiteLLM 1.98.0. Median wall time was 3.4% higher for NEW. Seven-day durability and routing superiority remain unproved.",
-  "boundary_pt_br": "Custo é um endpoint secundário retrospectivo calculado sobre tokens congelados com Headroom 0.36.5 e LiteLLM 1.98.0. A latência mediana foi 3,4% maior no NEW. Durabilidade em 7 dias e superioridade do roteamento continuam não provadas.",
+  "status": "supported-task-local",
+  "experiment_id": "007-phase-zero-register-projects-paired-v12",
+  "claim": "For one real register-projects task, medium and xhigh both passed 3/3 deterministic acceptance runs; medium reduced estimated cost per accepted task by 42.6% and wall time per accepted task by 53.9%.",
+  "claim_pt_br": "Em uma tarefa real de registro de projetos, medium e xhigh passaram 3/3 aceites determinísticos; medium reduziu o custo estimado por tarefa aceita em 42,6% e o tempo por tarefa aceita em 53,9%.",
+  "boundary": "One task, one repository snapshot, one harness, one served model alias and one run window. This supports a task-local minimum-intelligence mechanism, not class-level routing, cross-provider portability or D7/D30 durability. A broader v16 bank is separately recorded as inconclusive.",
+  "boundary_pt_br": "Uma tarefa, um snapshot, um harness, um alias de modelo servido e uma janela de execução. Isto sustenta um mecanismo local de inteligência mínima, não roteamento por classe, portabilidade entre providers ou durabilidade D7/D30. O banco v16 mais amplo está registrado separadamente como inconclusivo.",
+  "sample": {"tasks": 1, "cells": 6, "accepted": 6},
+  "served_identity": {
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "verified_cells": 6,
+    "total_cells": 6,
+    "control_effort": "xhigh",
+    "treatment_effort": "medium"
+  },
   "old": {
+    "policy": "openai/gpt-5.6-sol@xhigh",
     "accepted": 3,
     "cells": 3,
-    "cost_usd_total": 1.15282,
-    "cost_usd_per_accepted": 0.384273,
-    "median_wall_s": 206.834,
-    "median_added_lines": 163
+    "cost_usd_total": 3.1103288,
+    "cost_usd_per_accepted": 1.0367762666666667,
+    "wall_s_per_accepted": 627.05,
+    "tokens_total": 3060951,
+    "median_changed_lines": 405,
+    "cell_cost_usd": [1.0470728, 1.0642536, 0.9990024],
+    "cell_wall_s": [863.85, 630.83, 386.47]
   },
   "new": {
+    "policy": "openai/gpt-5.6-sol@medium",
     "accepted": 3,
     "cells": 3,
-    "cost_usd_total": 0.865294,
-    "cost_usd_per_accepted": 0.288431,
-    "median_wall_s": 213.915,
-    "median_added_lines": 128
+    "cost_usd_total": 1.7839272,
+    "cost_usd_per_accepted": 0.5946424,
+    "wall_s_per_accepted": 289.31,
+    "tokens_total": 1754337,
+    "median_changed_lines": 307,
+    "cell_cost_usd": [0.6012576, 0.4622984, 0.7203712],
+    "cell_wall_s": [415.88, 180.63, 271.42]
   },
   "delta": {
-    "cost_pct": -24.9411,
-    "median_wall_pct": 3.4235,
-    "median_added_lines_pct": -21.4724
+    "cost_pct": -42.6,
+    "wall_per_accepted_pct": -53.9,
+    "tokens_pct": -42.7,
+    "median_changed_lines_pct": -24.2
   },
   "pricing": {
-    "model": "gpt-5.6-sol",
-    "source": "headroom/litellm",
-    "version": "headroom=0.36.5;litellm=1.98.0",
+    "source": "rate-card-estimate:9be0a87454fa",
     "status": "provisional-rate-card-estimate"
   },
-  "source_sha256": {
-    "summary": "8a006ec661d7dd25f6c2275a8c29c1d9a4ff3119bd67a43f1b9e8ff9d7a6fee3",
-    "new_r1": "f6478716755d42c42083c18f428b24a1eb49f5fefd0ee02d78cd4a2812ecd409",
-    "new_r2": "7d19ed4010b183033319c6340b9918735cbf6fddae5f030ad2103f38adf1131e",
-    "new_r3": "dbf65c89a349d5e8cd7a9dc0a36bf5252113fbea2175f54a2d0ae727e80234be",
-    "old_r1": "f544748fd6ddcf76fd6b550117964ed4689edba3ef8e8893d74c89a0992e1a45",
-    "old_r2": "f94e3b2e4e550ebd4d37e1f1b7270b9cc2519a82a407e86a836cf451f9b637b2",
-    "old_r3": "65a8dbeb87dfe26b4f1536137ac9361a7d555aed2a1491bb0d34359e0f1ec641"
+  "provenance": {
+    "run_freeze_manifest_sha256": "824366c3247f0ff86b5538565164c67c77e2a0a3915d3692c0ddc4d0cf1161b9",
+    "run_freeze_metadata_sha256": "1d0aba8e0240c9293e92b8580c3d410459edd5909e0a1cd1aaed66ff2987787d",
+    "review_result_sha256": "4800ee7e640c92a90b745c246e911e1a5ca05f2c6a336a8a15f083ba175b1e41",
+    "terminal_receipt_sha256": "db61eb90d413cd46a9991505b77e4ddf8fc6cd7a78a6fc7eabece4cf81e74740",
+    "terminal_report_sha256": "4f1e2ebf3b34150a30b9043ef8c5e5afecb4b5f5c435f5b65173529878841505"
   }
 }

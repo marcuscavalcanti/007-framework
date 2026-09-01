@@ -18,7 +18,8 @@ served values; otherwise use `unmeasured`.
 Put the routes you intentionally support in `~/.007-framework/routes.json` and
 run `007 route --task-class inspect|implement|deep|design`. The command does not
 discover credentials or invent provider policy. It only considers configured
-commands present on `PATH`.
+commands present on `PATH` and receipts from the current Git repository. Both
+text and JSON output identify the evidence scope as `repository-local`.
 
 A route becomes measured-eligible after at least five mature matching outcomes
 with reliable first-pass rate at least 70%, escape rate at most 5%, mean repair

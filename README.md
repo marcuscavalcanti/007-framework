@@ -9,10 +9,11 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Status:** v1.4.0 is ready to test. In one frozen real coding task, OLD and
-> NEW both passed hidden acceptance 3/3; NEW used 24.9% less estimated USD and
-> 21.5% fewer median added lines, with 3.4% higher median latency. This narrow
-> result does not prove universal superiority or seven-day durability. See
+> **Status:** v1.4.0 is ready to test. In one frozen real coding task, `medium`
+> and `xhigh` both passed deterministic acceptance 3/3; `medium` used 42.6%
+> less estimated USD and 53.9% less wall time per accepted task. This narrow
+> result does not prove task-class routing, universal superiority, or D7/D30
+> durability. See
 > [Evidence](docs/evidence.md).
 
 ## What it gives you
@@ -24,11 +25,11 @@ code that looks finished but must be rewritten, repaired, or explained again.
   cost accounting;
 - Git-based corrective touch-rate and receipt reporting;
 - a polished localhost dashboard that reconciles all registered projects;
-- a task-start selector that learns from mature receipts across registered projects;
+- an experimental route recommendation from mature receipts, never automatic serving;
 - an OLD×NEW replay runner for causal tests on real historical tasks.
 
 No database, API key, package manager, or model-runtime dependency is added.
-The included tools use Python's standard library. Outcome cost comes from the
+The included tools require Python 3.11+ and use only its standard library. Outcome cost comes from the
 terminal receipt. If Headroom is installed, the dashboard may additionally use
 its LiteLLM pricing engine for a non-authoritative local estimate.
 
@@ -130,11 +131,15 @@ cp examples/routes.example.json ~/.007-framework/routes.json
 007 route --task-class implement --format json
 ```
 
-The selector filters unavailable commands and routes that miss the reliability
+The experimental selector filters unavailable commands and routes that miss the reliability
 gates, then minimizes **all-attempt cost per reliable outcome** with latency as
 the tie-breaker. Until a route has five mature receipts, it uses only a
 configured fallback. The decision is made once per task; 007 does not run a
 gateway, silently change providers, or switch models mid-attempt.
+
+This command is a repository-local observational recommendation, not a certified policy engine.
+Its deterministic mechanism test does not prove model quality, cross-project
+transfer, or causal ROI. Keep human control of the chosen executor in v1.4.
 
 To make the lifecycle automatic for any agent CLI, wrap it with `007 run`:
 

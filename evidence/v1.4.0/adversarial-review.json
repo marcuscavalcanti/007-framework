@@ -1,0 +1,31 @@
+{
+  "schema": "007-framework/adversarial-review/v1",
+  "reviewer": "anthropic/claude-opus-5",
+  "effort": "xhigh",
+  "tools": false,
+  "final": {
+    "context_sha256": "f05da0125155ad013bd654e9e216051829d1a23d03c5537258ba6e20bbe56d77",
+    "source_result_sha256": "d6e7472edd04d657fe649d88596e10c618ff9be5ee12ce5c6f5546964a17fe8d",
+    "verdict": "approve",
+    "highest_severity": "low"
+  },
+  "history": [
+    {
+      "context_sha256": "6f396a3409cdaf4dc053a7ccaa62c18c5498fd5ca53449c031cb6446c6de4372",
+      "source_result_sha256": "15ba7fe6d87bd2c245e4cc8307d927293408b3dfb0021f856c4c2d51ba9ed565",
+      "verdict": "reject",
+      "highest_severity": "medium"
+    },
+    {
+      "context_sha256": "1b6a2a67544bf1865be15dfd54d11175ba97a0ff6761ac929ff66d47ae71d791",
+      "source_result_sha256": "3120916b08363b5fe2224d9ab890a30fe5afae11e752892e2eaa144a8092e4ab",
+      "verdict": "reject",
+      "highest_severity": "medium"
+    }
+  ],
+  "reconciled_low_findings": [
+    "dispersion DOM order is pinned between the metric grid and claim boundary",
+    "the release manifest is finalized after this review artifact and verified by tag-conditioned CI; its digest is reported outside the self-hashed tree",
+    "the documented and CI-tested minimum runtime is Python 3.11"
+  ]
+}
