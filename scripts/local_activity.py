@@ -182,7 +182,10 @@ def parse_codex_session(path, now=None, lookback_hours=24):
         if event.get("type") in ("task_started", "task_complete"):
             last_task_event = event.get("type")
         if event.get("type") == "token_count":
-            info = event.get("info", {})
+            info = event.get("info")
+            if not isinstance(info, dict):
+                increment_missing |= bool(stamp and stamp >= cutoff)
+                continue
             total = info.get("total_token_usage", {})
             snapshots.append((stamp, {
                 "input_tokens": int(safe_number(total.get("input_tokens"))),

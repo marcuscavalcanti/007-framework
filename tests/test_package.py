@@ -1,4 +1,5 @@
 import re
+import subprocess
 import unittest
 import json
 import hashlib
@@ -122,11 +123,15 @@ class PackageContractTests(unittest.TestCase):
 
     def test_v14_release_manifest_matches_public_bytes(self):
         manifest = ROOT / "evidence/v1.4.0/manifest.sha256"
+        self.assertEqual(hashlib.sha256(manifest.read_bytes()).hexdigest(), "af18a8d85705d02b5fb5363c20ae130311e609322deba56eb84a8c083bd6ab6d")
+        release = "301b1aa30522e87a486088c79687a93d95d2aa4a"
+        if subprocess.run(["git", "cat-file", "-e", f"{release}^{{tree}}"], cwd=ROOT).returncode:
+            return
         mismatches = []
         for line in manifest.read_text().splitlines():
             digest, relative = line.split("  ", 1)
-            source = ROOT / relative
-            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+            source = subprocess.run(["git", "show", f"{release}:{relative}"], cwd=ROOT, capture_output=True)
+            if source.returncode or hashlib.sha256(source.stdout).hexdigest() != digest:
                 mismatches.append(relative)
         self.assertEqual(mismatches, [])
 

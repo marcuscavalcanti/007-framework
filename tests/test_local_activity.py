@@ -131,6 +131,21 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(result["usage"]["total_tokens"], 680)
         self.assertTrue(result["usage"]["usage_complete"])
 
+    def test_codex_invalid_token_info_is_incomplete_without_hiding_valid_delta(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            for invalid in ({"info": None}, {}, {"info": []}):
+                path = Path(tmp, "codex-invalid.jsonl")
+                rows = codex_rows("codex-invalid", Path(tmp))[:4] + [
+                    {"timestamp": "2026-08-30T14:01:00Z", "type": "event_msg", "payload": {"type": "token_count", **invalid}},
+                    {"timestamp": "2026-08-30T14:02:00Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {}, "last_token_usage": {"input_tokens": 7, "total_tokens": 7}}}},
+                ]
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["input_tokens"], 7)
+                self.assertFalse(result["usage"]["usage_complete"])
+                self.assertIsNone(activity.pricing_request(result))
+
     def test_claude_session_sums_token_classes_and_cache_tiers(self):
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
