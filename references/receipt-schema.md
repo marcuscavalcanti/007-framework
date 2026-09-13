@@ -104,6 +104,55 @@ non-zero hard gate forces a persisted `blocked` receipt and CLI exit `4`.
 through manual `record`. This proves only the declared commands ran on that
 working tree; it does not prove that the command set is sufficient.
 
+## Cost unavailable (explicit opt-in)
+
+Some routes cannot be priced at all, for example a flat subscription with no
+per-task allocation. A project may opt in by setting `cost_unavailable_opt_in`
+to a strict boolean `true` in `.007/project.json`; any non-boolean value is
+rejected. With the opt-in active, a receipt may carry all four of:
+
+```json
+{"cost_usd": null, "cost_status": "unavailable",
+ "cost_source": "custom:<name>", "cost_unavailable_reason": "why no price exists"}
+```
+
+`cost_usd` must be present and `null`; an absent key is still rejected. Any
+partial combination is rejected, and priced receipts follow the previous rules
+unchanged. Without the opt-in the same receipt is rejected as a missing cost.
+`007 run` captures the opt-in once, before the task start, so the executor
+cannot change the decision by editing the marker; a standalone `007 record`
+reads the marker at record time because no run decision exists to inherit.
+Aggregators do not change: an unavailable cost is unaccounted, so coverage
+drops below 1, per-outcome ROI becomes unknown, and the route is excluded from
+ranking rather than treated as cheapest or as an implicit fallback.
+
+Replay sets may normalize a frozen runner's unpriced labels.
+`allow_cost_unavailable` is a strict boolean (absent means `false`).
+`cost_unavailable_map` is required when it is `true` and forbidden otherwise;
+it is a list of objects, each with all five fields:
+
+```json
+{
+  "observed_cost_status": "UNMEASURED",
+  "observed_cost_source": "chatgpt-plan-unpriced-route",
+  "normalized_cost_source": "custom:chatgpt-plan",
+  "cost_unavailable_reason": "subscription route is unpriced",
+  "policy_sha256": "<64 lowercase hex>"
+}
+```
+
+The first four are non-empty strings and `normalized_cost_source` must use the
+`custom:<name>` namespace. Only an unavailable runner receipt is normalized:
+`cost_usd` present and `null`, with `cost_status`, `cost_source`, and
+`cost_policy_sha256` equal to one entry exactly (no case folding, no prefixes).
+Any other unavailable receipt stays `cost-missing`. A priced runner receipt,
+one whose `cost_usd` is a finite non-negative number, never consults the map
+and follows the previous rules unchanged. Two entries with the same observed
+pair fail at load, before any cell runs. The cell keeps `cost_status_observed`,
+`cost_source_observed`, and `cost_policy_sha256` beside the normalized fields.
+Nothing here implies zero cost, a known subscription allocation, or a monetary
+comparison between arms.
+
 ## Optional authority envelope
 
 For a task that crosses meaningful boundaries, bind a small action envelope at

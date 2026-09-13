@@ -1738,6 +1738,179 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("createElementNS", app)
         self.assertNotIn(".innerHTML =", app)
 
+    def unavailable_receipt(self, **overrides):
+        base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        return {
+            **base, "cost_usd": None, "cost_status": "unavailable",
+            "cost_source": "custom:chatgpt-plan", "cost_unavailable_reason": "subscription route is unpriced",
+            **overrides,
+        }
+
+    def test_receipt_cost_unavailable_requires_opt_in_and_all_four_fields(self):
+        # gates 1, 2, 4
+        cli = self.module("framework_cli")
+        stored = cli.validate_receipt(self.unavailable_receipt(), allow_cost_unavailable=True)
+        self.assertIsNone(stored["cost_usd"])
+        self.assertIn("cost_usd", stored)
+        self.assertEqual(stored["cost_status"], "unavailable")
+        self.assertEqual(stored["cost_source"], "custom:chatgpt-plan")
+        rejected = (
+            ("numeric", {"cost_usd": 0.5}, "cost_status must be final or provisional"),
+            ("zero", {"cost_usd": 0}, "cost_status must be final or provisional"),
+            ("no-reason", {"cost_unavailable_reason": None}, "cost_unavailable_reason"),
+            ("empty-reason", {"cost_unavailable_reason": ""}, "cost_unavailable_reason"),
+            ("outside-namespace", {"cost_source": "provider-reported"}, "custom:<name>"),
+            ("null-final", {"cost_status": "final"}, "cost_status unavailable"),
+            ("null-provisional", {"cost_status": "provisional"}, "cost_status unavailable"),
+        )
+        for label, overrides, message in rejected:
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, message):
+                    cli.validate_receipt(self.unavailable_receipt(**overrides), allow_cost_unavailable=True)
+        missing_key = self.unavailable_receipt()
+        del missing_key["cost_usd"]
+        with self.assertRaisesRegex(ValueError, "cost_usd must be a non-negative measured number"):
+            cli.validate_receipt(missing_key, allow_cost_unavailable=True)
+        for opt_out in ({}, {"allow_cost_unavailable": False}):
+            with self.subTest(opt_out=opt_out):
+                with self.assertRaisesRegex(ValueError, "cost_usd must be a non-negative measured number"):
+                    cli.validate_receipt(self.unavailable_receipt(), **opt_out)
+
+    def test_marker_cost_unavailable_opt_in_is_strict_boolean(self):
+        # gate 3
+        cli = self.module("framework_cli")
+        marker = {"schema": cli.PROJECT_SCHEMA, "project_id": "p", "name": "n", "receipt_dir": "receipts"}
+        self.assertEqual(cli.validate_marker(dict(marker)), marker)
+        for value in (True, False):
+            self.assertIs(cli.validate_marker({**marker, "cost_unavailable_opt_in": value})["cost_unavailable_opt_in"], value)
+        for value in (1, 0, "true", "false", None, [], {}):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "cost_unavailable_opt_in must be a boolean"):
+                    cli.validate_marker({**marker, "cost_unavailable_opt_in": value})
+
+    def run_with_marker_flip(self, tmp, initial, flipped, receipt, *extra):
+        repo = Path(tmp, "repo")
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        registry = Path(tmp, "state", "projects.json")
+        self.assertEqual(self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode, 0)
+        marker_path = repo / ".007/project.json"
+        marker = json.loads(marker_path.read_text())
+        if initial is not None:
+            marker["cost_unavailable_opt_in"] = initial
+        marker_path.write_text(json.dumps(marker))
+        source = Path(tmp, "receipt.json")
+        source.write_text(json.dumps(receipt))
+        adapter = Path(tmp, "adapter.py")
+        adapter.write_text(
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "marker = Path(os.environ['FRAMEWORK_007_REPO'], '.007/project.json')\n"
+            "marker.write_text(json.dumps({**json.loads(marker.read_text()), 'cost_unavailable_opt_in': " + repr(flipped) + "}))\n"
+            "value = json.loads(Path(sys.argv[1]).read_text())\n"
+            "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+            "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+        )
+        result = self.run_cli(
+            "run", "--repo", str(repo), "--task-id", "flip-001", "--receipt", "task.receipt.json",
+            *extra, "--", sys.executable, str(adapter), str(source),
+        )
+        self.assertEqual(json.loads(marker_path.read_text())["cost_unavailable_opt_in"], flipped)
+        return repo, result
+
+    def test_run_captures_cost_policy_before_executor_can_change_it(self):
+        # gate 5: the decision captured before begin_task prevails in both directions
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, result = self.run_with_marker_flip(tmp, None, True, self.unavailable_receipt())
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("cost_usd must be a non-negative measured number", result.stderr)
+            self.assertTrue((repo / ".007/tasks/flip-001.task.json").is_file())
+            self.assertFalse((repo / ".007/receipts/flip-001.receipt.json").exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, result = self.run_with_marker_flip(tmp, True, False, self.unavailable_receipt())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stored = json.loads((repo / ".007/receipts/flip-001.receipt.json").read_text())
+            self.assertIsNone(stored["cost_usd"])
+            self.assertEqual(stored["cost_status"], "unavailable")
+
+    def test_unavailable_cost_survives_record_and_controlled_acceptance(self):
+        # gate 6: persisted through run + bind_acceptance, and through standalone record
+        with tempfile.TemporaryDirectory() as tmp:
+            acceptance = Path(tmp, "acceptance.json")
+            acceptance.write_text(json.dumps({
+                "schema": "007-framework/acceptance/v1",
+                "commands": [[sys.executable, "-c", "print('gate-ok')"]],
+            }))
+            repo, result = self.run_with_marker_flip(
+                tmp, True, True, self.unavailable_receipt(), "--acceptance-file", str(acceptance),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            stored = json.loads((repo / ".007/receipts/flip-001.receipt.json").read_text())
+            self.assertEqual(stored["acceptance_evidence"], "controlled")
+            self.assertIn("cost_usd", stored)
+            self.assertIsNone(stored["cost_usd"])
+            self.assertEqual(stored["cost_status"], "unavailable")
+            self.assertEqual(stored["cost_source"], "custom:chatgpt-plan")
+            self.assertEqual(stored["cost_unavailable_reason"], "subscription route is unpriced")
+            source = Path(tmp, "manual.json")
+            source.write_text(json.dumps(self.unavailable_receipt(task_id="manual-001")))
+            self.assertEqual(self.run_cli("begin", "--repo", str(repo), "--task-id", "manual-001").returncode, 0)
+            recorded = self.run_cli("record", "--repo", str(repo), "--file", str(source))
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+            manual = json.loads((repo / ".007/receipts/manual-001.receipt.json").read_text())
+            self.assertEqual(manual["cost_status"], "unavailable")
+            self.assertEqual(manual["cost_unavailable_reason"], "subscription route is unpriced")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, result = self.run_with_marker_flip(tmp, False, False, self.unavailable_receipt())
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("cost_usd must be a non-negative measured number", result.stderr)
+
+    def test_priced_receipts_are_unchanged_by_cost_unavailable_opt_in(self):
+        # gate 9
+        cli = self.module("framework_cli")
+        dashboard = self.module("dashboard")
+        base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        self.assertEqual(cli.validate_receipt(dict(base), allow_cost_unavailable=True), cli.validate_receipt(dict(base)))
+        for cost in (0, 0.84):
+            with self.subTest(cost=cost):
+                self.assertEqual(cli.validate_receipt({**base, "cost_usd": cost}, allow_cost_unavailable=True)["cost_usd"], cost)
+        with self.assertRaisesRegex(ValueError, "cost_status must be final or provisional"):
+            cli.validate_receipt({**base, "cost_status": "unavailable"}, allow_cost_unavailable=True)
+        receipts = [{**base, "task_id": f"t{index}", "cost_usd": 0.1 * index} for index in range(1, 4)]
+        metrics = dashboard.metrics_from_receipts(receipts)
+        self.assertEqual(metrics["cost_usd_known_tasks"], 3)
+        self.assertEqual(metrics["cost_coverage"], 1.0)
+        self.assertEqual(metrics["routes"][0]["cost_usd_known_tasks"], 3)
+
+    def test_compatibility_regression_priced_receipt_keeps_cost_unavailable_reason(self):
+        # priced receipts carrying the extension field validate unchanged under every policy state
+        cli = self.module("framework_cli")
+        base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        for reason in ("legacy extension", "", None):
+            for policy in ({}, {"allow_cost_unavailable": False}, {"allow_cost_unavailable": True}):
+                with self.subTest(reason=reason, policy=policy):
+                    expected = {**base, "cost_unavailable_reason": reason}
+                    self.assertEqual(cli.validate_receipt(dict(expected), **policy), expected)
+
+    def test_unavailable_cost_is_unaccounted_in_both_aggregators(self):
+        # gate 10: dashboard and harness_report untouched, coverage < 1, ROI None
+        dashboard = self.module("dashboard")
+        report = self.module("harness_report")
+        priced = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        receipts = [priced, self.unavailable_receipt(task_id="unpriced-001")]
+        metrics = dashboard.metrics_from_receipts(receipts)
+        self.assertEqual(metrics["cost_usd_known_tasks"], 1)
+        self.assertEqual(metrics["cost_usd_known_sum"], 0.84)
+        self.assertEqual(metrics["cost_coverage"], 0.5)
+        self.assertIsNone(metrics["cost_usd_per_accepted"])
+        self.assertEqual(metrics["routes"][0]["cost_usd_known_tasks"], 1)
+        self.assertIsNone(metrics["routes"][0]["cost_usd_per_reliable"])
+        summary = report.summarize(receipts, [])
+        self.assertEqual(summary["cost_usd_known_tasks"], 1)
+        self.assertEqual(summary["cost_unaccounted_tasks"], 1)
+        self.assertEqual(summary["cost_coverage"], 0.5)
+        self.assertIsNone(summary["cost_usd_per_accepted"])
+
 
 if __name__ == "__main__":
     unittest.main()

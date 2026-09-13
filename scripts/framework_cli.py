@@ -126,6 +126,8 @@ def validate_marker(value):
     receipt_dir = Path(value["receipt_dir"])
     if receipt_dir.is_absolute() or ".." in receipt_dir.parts:
         raise ValueError("receipt_dir must stay inside .007")
+    if not isinstance(value.get("cost_unavailable_opt_in", False), bool):
+        raise ValueError("cost_unavailable_opt_in must be a boolean")
     return value
 
 
@@ -444,7 +446,7 @@ def begin_task(repo, task_id=None, now=None, authority_file=None, acceptance_fil
     return task
 
 
-def validate_receipt(value):
+def validate_receipt(value, allow_cost_unavailable=False):
     if not isinstance(value, dict) or value.get("schema") != RECEIPT_SCHEMA:
         raise ValueError(f"receipt schema must be {RECEIPT_SCHEMA}")
     if "authority_summary" in value:
@@ -459,20 +461,30 @@ def validate_receipt(value):
     if value.get("task_class") is not None and value["task_class"] not in TASK_CLASSES:
         raise ValueError(f"task_class must be one of: {', '.join(sorted(TASK_CLASSES))}")
     cost = value.get("cost_usd")
-    if (
-        isinstance(cost, bool)
-        or not isinstance(cost, (int, float))
-        or not math.isfinite(cost)
-        or cost < 0
-    ):
-        raise ValueError("cost_usd must be a non-negative measured number")
-    source = value.get("cost_source")
-    if not isinstance(source, str) or (
-        source not in COST_SOURCES and not CUSTOM_COST_SOURCE.fullmatch(source)
-    ):
-        raise ValueError("cost_source must be documented or use custom:<name>")
-    if value.get("cost_status") not in ("final", "provisional"):
-        raise ValueError("cost_status must be final or provisional")
+    if allow_cost_unavailable and "cost_usd" in value and cost is None:
+        if value.get("cost_status") != "unavailable":
+            raise ValueError("cost_usd null requires cost_status unavailable")
+        source = value.get("cost_source")
+        if not isinstance(source, str) or not CUSTOM_COST_SOURCE.fullmatch(source):
+            raise ValueError("unavailable cost_source must use custom:<name>")
+        reason = value.get("cost_unavailable_reason")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("cost_status unavailable requires cost_unavailable_reason")
+    else:
+        if (
+            isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+            or not math.isfinite(cost)
+            or cost < 0
+        ):
+            raise ValueError("cost_usd must be a non-negative measured number")
+        source = value.get("cost_source")
+        if not isinstance(source, str) or (
+            source not in COST_SOURCES and not CUSTOM_COST_SOURCE.fullmatch(source)
+        ):
+            raise ValueError("cost_source must be documented or use custom:<name>")
+        if value.get("cost_status") not in ("final", "provisional"):
+            raise ValueError("cost_status must be final or provisional")
     required_strings = (
         "proof_required", "proof_reached", "first_pass", "corrective_lines",
         "escape_7d", "requested_provider", "requested_model", "requested_effort",
@@ -659,17 +671,21 @@ def bind_acceptance(receipt, task, checks=None):
     return receipt
 
 
-def record_receipt(repo, source, now=None, controller_event=None, acceptance_results=None):
+def record_receipt(
+    repo, source, now=None, controller_event=None, acceptance_results=None, cost_policy=None,
+):
     root = git_root(repo)
     marker_path = root / ".007" / "project.json"
     if not marker_path.exists():
         raise ValueError("project is not initialized; run 007 init first")
     marker = validate_marker(read_json(marker_path))
+    if cost_policy is None:
+        cost_policy = marker.get("cost_unavailable_opt_in", False)
     if source == "-":
         value = json.load(sys.stdin)
     else:
         value = read_json(Path(source).expanduser())
-    receipt = validate_receipt(value)
+    receipt = validate_receipt(value, allow_cost_unavailable=cost_policy)
     task_path = marker_path.parent / "tasks" / f"{receipt['task_id']}.task.json"
     if not task_path.exists():
         raise ValueError("receipt requires a matching task start")
@@ -709,6 +725,10 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     receipt_path = receipt_path.resolve()
     if receipt_path.exists():
         raise ValueError(f"terminal receipt already exists: {receipt_path}")
+    marker_path = root / ".007" / "project.json"
+    if not marker_path.exists():
+        raise ValueError("project is not initialized; run 007 init first")
+    allow = validate_marker(read_json(marker_path)).get("cost_unavailable_opt_in", False)
 
     task = begin_task(
         root, task_id, authority_file=authority_file, acceptance_file=acceptance_file,
@@ -716,7 +736,7 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     if action and action not in set(task["authority"]["allow"]):
         event = write_controller_event(root, task, action, "blocked")
         write_json_atomic(receipt_path, blocked_receipt(task, action))
-        return 3, record_receipt(root, receipt_path, controller_event=event)
+        return 3, record_receipt(root, receipt_path, controller_event=event, cost_policy=allow)
     environment = {
         **os.environ,
         "FRAMEWORK_007_TASK_ID": task["task_id"],
@@ -734,12 +754,12 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
         return completed.returncode, None
     if not receipt_path.is_file():
         raise ValueError(f"command did not produce terminal receipt: {receipt_path}")
-    receipt_value = validate_receipt(read_json(receipt_path))
+    receipt_value = validate_receipt(read_json(receipt_path), allow_cost_unavailable=allow)
     if receipt_value["task_id"] != task["task_id"]:
         raise ValueError("terminal receipt task_id does not match the observed task")
     checks = run_acceptance(root, task) if acceptance_file else None
     destination = record_receipt(
-        root, receipt_path, controller_event=event, acceptance_results=checks,
+        root, receipt_path, controller_event=event, acceptance_results=checks, cost_policy=allow,
     )
     return (4 if checks and any(check["exit"] != 0 for check in checks) else 0), destination
 

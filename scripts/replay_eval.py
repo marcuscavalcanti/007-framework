@@ -27,6 +27,11 @@ from pathlib import Path
 
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+CUSTOM_COST_SOURCE = re.compile(r"^custom:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+COST_UNAVAILABLE_FIELDS = (
+    "observed_cost_status", "observed_cost_source", "normalized_cost_source",
+    "cost_unavailable_reason", "policy_sha256",
+)
 DEPENDENCY_MANIFESTS = {
     "Cargo.toml", "Gemfile", "Pipfile", "go.mod", "package.json",
     "package-lock.json", "pnpm-lock.yaml", "poetry.lock", "pyproject.toml",
@@ -202,7 +207,35 @@ def grade_cell(agent_exit, checks_passed):
     return valid, valid and checks_passed
 
 
-def validate_served_identity(value, policy):
+def cost_unavailable_map(config):
+    allow = config.get("allow_cost_unavailable", False)
+    if not isinstance(allow, bool):
+        raise ValueError("allow_cost_unavailable must be a boolean")
+    if not allow:
+        if "cost_unavailable_map" in config:
+            raise ValueError("cost_unavailable_map requires allow_cost_unavailable: true")
+        return {}
+    entries = config.get("cost_unavailable_map")
+    if not isinstance(entries, list):
+        raise ValueError("allow_cost_unavailable requires a cost_unavailable_map list")
+    mapping = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not all(
+            isinstance(entry.get(key), str) and entry[key] for key in COST_UNAVAILABLE_FIELDS
+        ):
+            raise ValueError(f"cost_unavailable_map entries require: {', '.join(COST_UNAVAILABLE_FIELDS)}")
+        if not CUSTOM_COST_SOURCE.fullmatch(entry["normalized_cost_source"]):
+            raise ValueError("normalized_cost_source must use custom:<name>")
+        if not SHA256.fullmatch(entry["policy_sha256"]):
+            raise ValueError("policy_sha256 must be a lowercase SHA-256")
+        observed = (entry["observed_cost_status"], entry["observed_cost_source"])
+        if observed in mapping:
+            raise ValueError(f"duplicate cost_unavailable_map entry: {observed}")
+        mapping[observed] = entry
+    return mapping
+
+
+def validate_served_identity(value, policy, unavailable_map=None):
     if value is None:
         return None, "served-identity-missing"
     if not isinstance(value, dict) or value.get("schema") != "007-framework/runner-receipt/v1":
@@ -222,21 +255,37 @@ def validate_served_identity(value, policy):
     if not isinstance(value.get("source_sha256"), str) or not SHA256.fullmatch(value["source_sha256"]):
         return None, "identity-source-hash-invalid"
     cost = value.get("cost_usd")
-    if (
+    observed = (value.get("cost_status"), value.get("cost_source"))
+    unavailable = None
+    if "cost_usd" in value and cost is None and all(isinstance(item, str) for item in observed):
+        unavailable = (unavailable_map or {}).get(observed)
+        if unavailable and value.get("cost_policy_sha256") != unavailable["policy_sha256"]:
+            unavailable = None
+    if unavailable is None and (
         isinstance(cost, bool) or not isinstance(cost, (int, float))
         or not math.isfinite(cost) or cost < 0
     ):
         return None, "cost-missing"
     if not isinstance(value.get("cost_source"), str) or not value["cost_source"]:
         return None, "cost-source-missing"
-    return {
+    identity = {
         **served,
         "identity_source": value["identity_source"],
         "source_sha256": value["source_sha256"],
         "usage": value.get("usage"),
         "cost_usd": cost,
         "cost_source": value["cost_source"],
-    }, None
+    }
+    if unavailable is not None:
+        identity.update({
+            "cost_status": "unavailable",
+            "cost_source": unavailable["normalized_cost_source"],
+            "cost_unavailable_reason": unavailable["cost_unavailable_reason"],
+            "cost_status_observed": observed[0],
+            "cost_source_observed": observed[1],
+            "cost_policy_sha256": value["cost_policy_sha256"],
+        })
+    return identity, None
 
 
 def experiment_seed(config):
@@ -282,6 +331,7 @@ def write_summary(output_dir, replay_set, config, replicates, rows):
 
 def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
     validate_task_id(task["id"])
+    unavailable_map = cost_unavailable_map(config)
     source_repo = Path(config["repos"][task["repo"]]).expanduser().resolve()
     policy = config["arms"][arm]
     workspace = Path(tempfile.mkdtemp(prefix=f"007-{task['id']}-{arm}-r{replicate:02d}-"))
@@ -324,7 +374,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
         except json.JSONDecodeError:
             runner_value = {}
         identity, identity_failure = (
-            validate_served_identity(runner_value, policy)
+            validate_served_identity(runner_value, policy, unavailable_map)
             if config.get("require_served_identity") else (None, None)
         )
         d0 = diagnostics(task, workspace, source_repo)
@@ -358,6 +408,10 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             "tokens": usage.get("total_tokens", "unmeasured") if isinstance(usage, dict) else "unmeasured",
             "cost_usd": identity["cost_usd"] if identity else "unmeasured",
             "cost_source": identity["cost_source"] if identity else "unmeasured",
+            **{key: identity[key] for key in (
+                "cost_status", "cost_unavailable_reason", "cost_status_observed",
+                "cost_source_observed", "cost_policy_sha256",
+            ) if identity and key in identity},
             "agent_exit": exit_code,
             "wall_s": round(time.monotonic() - started, 2),
             "valid": valid,
@@ -385,6 +439,7 @@ def main():
     args = parser.parse_args()
     replay_set = Path(args.set).expanduser().resolve()
     config = json.loads(replay_set.read_text())
+    cost_unavailable_map(config)
     tasks = config["tasks"]
     for task in tasks:
         validate_task_id(task["id"])
