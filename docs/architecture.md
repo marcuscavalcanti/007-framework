@@ -103,6 +103,34 @@ no daemon, gateway, database, background agent, or mid-attempt rerouting.
    quality or accounting. Local records are not a security boundary against a
    process with the same OS identity.
 
+## Verified guarantees
+
+Each guarantee below is an obligation with a scope, an existing mechanism, an
+evidence artifact, and a residual limit. "Valid case" means a public test shows
+the permitted path passes; "counter-proof" means a test or frozen protocol shows
+the mechanism rejects the specific violation, or that removing the mechanism
+makes the test fail. Where a column says *not demonstrated*, the state is
+undemonstrated, not presumed green. Everything here is local synthetic
+conformance on macOS with Python 3.14; it does not qualify a real provider,
+another OS, or causal value.
+
+| Guarantee | Scope and hypotheses | Mechanism | Valid case | Counter-proof | Residual limit |
+|---|---|---|---|---|---|
+| No execution without authority | `007 run --authority-file --action`; same OS principal is trusted | `run_task` checks the bound envelope before `subprocess.run`; only writer of `controlled` provenance | `test_run_records_allowed_action_as_controlled` | `test_run_blocks_denied_action_before_subprocess`; frozen OLD×NEW protocol `evidence/v1.3.0/controller-authority-result.json` (18/18) | Manual `begin`+`record` is `declared`; records forgeable by the same principal |
+| Receipt bound to its task start | `007 record`; local files trusted | matching `.007/tasks/<id>.task.json` required, ids must agree | `test_record_requires_cost_and_writes_no_replace_receipt` | `test_record_rejects_receipt_without_matching_task_start`, `..._mismatched_task_id`; protocol `evidence/v1.2.0/task-start-binding-result-r2.json` (24/24) | No commit/tree hash inside the receipt yet |
+| Receipt integrity and completeness | every terminal receipt | `validate_receipt`: required fields, finite non-negative numbers, cost accounted or explicitly unavailable under opt-in, computed provenance not caller-supplied; `write_json_no_replace` | `test_receipt_cost_unavailable_requires_opt_in_and_all_four_fields`, priced regression tests | `test_receipt_rejects_non_finite_tokens_and_wall_s` (focal mutation RED with `10**400`), `test_record_rejects_caller_supplied_controlled_provenance`, `test_record_rejects_unaccounted_cost` | No-replace is creation without replacement, not immutability |
+| Served identity and usage structure | replay cells with `require_served_identity: true` | `validate_served_identity` fail-closed; `validate_usage` structural | `test_replay_cell_binds_standard_runner_identity_and_cost` | `test_replay_requires_exact_served_identity_when_policy_is_causal`, `test_replay_run_stops_on_invalid_usage_before_next_executor` | Structure only: no completeness, truth, or cross-provider meaning of counts; skipped without the flag |
+| Executor sees only the snapshot | replay workspace; no OS sandbox assumed | `git archive` export, regular files only; hidden acceptance copied into a separate workspace after the agent exits | `test_replay_extracts_regular_files_and_rejects_links` | `test_hidden_acceptance_rejects_workspace_escape`, `test_hidden_acceptance_is_hash_bound_and_restores_agent_bytes` | No physical isolation: the agent process can read any path the OS user can |
+| Execution really ends | replay agent and controller acceptance commands; POSIX sessions | child in its own session, `killpg(SIGKILL)` on timeout | `test_run_replaces_claimed_checks_with_controller_observed_acceptance` | `test_replay_timeout_kills_agent_descendants`, `test_run_acceptance_timeout_kills_descendants_and_blocks` (base RED on the previous implementation: grandchild survived) | A descendant that starts its own session escapes; the main `007 run` command has no timeout by design |
+| Public command is what the cell runs | replay sets | `agent_command` and arms come only from the frozen set; `summary.json` binds `replay_set_sha256`, seed, replicates | `test_replay_summary_binds_exact_set_and_replicate_count` | `test_replay_rejects_replicate_override_against_frozen_set`, `test_replay_requires_a_preregistered_seed` | The executor binary itself is not hash-bound |
+| Acceptance is controller-observed | `007 run --acceptance-file` | argv-only contract hashed at task start; controller replaces agent-claimed `checks` | `test_run_replaces_claimed_checks_with_controller_observed_acceptance` | `test_run_persists_blocked_receipt_when_controller_acceptance_fails` | Proves the declared commands ran, not that they are sufficient; oracle dependencies unqualified |
+| Route selection excludes unknown cost | `007 route` | `select_route` rejects routes without full cost coverage; fallback only when explicit | `test_router_selects_lowest_cost_eligible_route_and_rejects_quality_loss` | `test_router_excludes_unavailable_cost_route_without_implicit_fallback`, `test_router_blocks_when_no_measured_or_explicit_fallback_exists`; protocol `evidence/v1.4.0/route-selector-result.json` (18/18) | Observational recommender; no model-quality claim |
+
+Focal mutation (removing the mechanism and watching the test fail) has been
+demonstrated only for the finite-number and timeout guarantees. The other
+counter-proofs show rejection of a violation but were not re-run against a
+mutated implementation; that remains a documented gap, not a failure.
+
 ## Extension points
 
 Provider adapters and repository-specific harness commands live outside the
