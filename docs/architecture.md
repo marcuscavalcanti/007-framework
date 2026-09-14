@@ -116,8 +116,8 @@ another OS, or causal value.
 
 | Guarantee | Scope and hypotheses | Mechanism | Valid case | Counter-proof | Residual limit |
 |---|---|---|---|---|---|
-| No execution without authority | `007 run --authority-file --action`; same OS principal is trusted | `run_task` checks the bound envelope before `subprocess.run`; only writer of `controlled` provenance | `test_run_records_allowed_action_as_controlled` | `test_run_blocks_denied_action_before_subprocess`; frozen OLD×NEW protocol `evidence/v1.3.0/controller-authority-result.json` (18/18) | Manual `begin`+`record` is `declared`; records forgeable by the same principal |
-| Receipt bound to its task start | `007 record`; local files trusted | matching `.007/tasks/<id>.task.json` required, ids must agree | `test_record_requires_cost_and_writes_no_replace_receipt` | `test_record_rejects_receipt_without_matching_task_start`, `..._mismatched_task_id`; protocol `evidence/v1.2.0/task-start-binding-result-r2.json` (24/24) | No commit/tree hash inside the receipt yet |
+| No execution without authority | `007 run --authority-file --action`; same OS principal is trusted | `run_task` checks the bound envelope before `subprocess.run`; only writer of `controlled` provenance | `test_run_records_allowed_action_as_controlled` | `test_run_blocks_denied_action_before_subprocess`; frozen OLD×NEW protocol `evidence/v1.3.0/controller-authority-result.json` (reported 18/18): feature-level conformance of the new `run --action` lifecycle with one positive control, not a focal mutation of a single guard | Manual `begin`+`record` is `declared`; records forgeable by the same principal |
+| Receipt bound to its task start | `007 record`; local files trusted | matching `.007/tasks/<id>.task.json` required, ids must agree | `test_record_requires_cost_and_writes_no_replace_receipt` | `test_record_rejects_receipt_without_matching_task_start`, `..._mismatched_task_id`; protocol `evidence/v1.2.0/task-start-binding-result-r2.json` (reported 24/24): historical comparison compatible with focal isolation (the public diff `fabc8f4`→`be83a3f` changes two guards), but the result binds no NEW bytes, so attribution is limited | No commit/tree hash inside the receipt yet |
 | Receipt integrity and completeness | every terminal receipt | `validate_receipt`: required fields, finite non-negative numbers, cost accounted or explicitly unavailable under opt-in, computed provenance not caller-supplied; `write_json_no_replace` | `test_receipt_cost_unavailable_requires_opt_in_and_all_four_fields`, priced regression tests | `test_receipt_rejects_non_finite_tokens_and_wall_s` (focal mutation RED with `10**400`), `test_record_rejects_caller_supplied_controlled_provenance`, `test_record_rejects_unaccounted_cost` | No-replace is creation without replacement, not immutability |
 | Served identity and usage structure | replay cells with `require_served_identity: true` | `validate_served_identity` fail-closed; `validate_usage` structural | `test_replay_cell_binds_standard_runner_identity_and_cost` | `test_replay_requires_exact_served_identity_when_policy_is_causal`, `test_replay_run_stops_on_invalid_usage_before_next_executor` | Structure only: no completeness, truth, or cross-provider meaning of counts; skipped without the flag |
 | Workspace is a fresh snapshot; hidden acceptance stays out of it | replay workspace; no OS sandbox assumed; not read isolation | `git archive` export, regular files only; hidden acceptance copied into a separate workspace after the agent exits | `test_replay_extracts_regular_files_and_rejects_links` | `test_hidden_acceptance_rejects_workspace_escape`, `test_hidden_acceptance_is_hash_bound_and_restores_agent_bytes` | No read or network isolation: the agent process can read any path the OS user can |
@@ -130,6 +130,16 @@ Focal mutation (removing the mechanism and watching the test fail) has been
 demonstrated only for the finite-number and timeout guarantees. The other
 counter-proofs show rejection of a violation but were not re-run against a
 mutated implementation; that remains a documented gap, not a failure.
+
+The frozen OLD×NEW protocols cited above compare a mechanism absent with a
+mechanism present; their N/N counts are results reported by the artifacts,
+not executions repeated for this document. `evidence/v1.2.0/authority-envelope-result-r2.json`
+(reported 18/18) is feature-level conformance with two negative controls; the
+patch matching its recorded `new_patch_sha256` was not located in the bounded
+analysis. The controller-authority protocol is feature-level conformance with
+one control. The task-start v2 comparison is compatible with focal isolation
+but its NEW bytes are unbound in the artifact. None of them is a mutation of
+the present implementation, and none bears on product value.
 
 ## Extension points
 
