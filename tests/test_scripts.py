@@ -737,7 +737,7 @@ class ScriptContractTests(unittest.TestCase):
             self.assertFalse(Path(tmp, "out").exists())
 
     def test_replay_cell_records_observed_and_normalized_unavailable_cost(self):
-        # gate 6 (cell side) and gate 8 legacy: usage is copied without validation
+        # gate 6 (cell side); usage absent from the runner receipt stays unmeasured in the cell
         sys.path.insert(0, str(SCRIPTS))
         try:
             import replay_eval
@@ -790,22 +790,110 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
-    def test_replay_usage_is_copied_without_validation_legacy(self):
-        # gate 8: legacy characterization, not a desired guarantee (replay_eval copies usage unvalidated)
+    def test_replay_usage_structure_is_validated_not_interpreted(self):
+        # structure only: absent/null stay unmeasured, non-object and bad counters fail closed,
+        # unknown keys are preserved verbatim, nothing is summed or derived
         sys.path.insert(0, str(SCRIPTS))
         try:
             import replay_eval
             policy = {"provider": "openai", "model": "gpt-test", "effort": "medium"}
-            absent, failure = replay_eval.validate_served_identity(self.unavailable_runner(cost_usd=0.01), policy)
+
+            def identity(**overrides):
+                return replay_eval.validate_served_identity(
+                    self.unavailable_runner(cost_usd=0.01, **overrides), policy,
+                )
+
+            absent = self.unavailable_runner(cost_usd=0.01)
+            self.assertNotIn("usage", absent)
+            self.assertEqual(replay_eval.validate_served_identity(absent, policy)[1], None)
+            self.assertIsNone(replay_eval.validate_served_identity(absent, policy)[0]["usage"])
+            explicit_null, failure = identity(usage=None)
             self.assertIsNone(failure)
-            self.assertIsNone(absent["usage"])
-            inconsistent, failure = replay_eval.validate_served_identity(
-                self.unavailable_runner(cost_usd=0.01, usage="not-an-object"), policy,
-            )
-            self.assertIsNone(failure)
-            self.assertEqual(inconsistent["usage"], "not-an-object")
+            self.assertIsNone(explicit_null["usage"])
+            for label, usage in (
+                ("full", {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}),
+                ("no-total", {"input_tokens": 10, "output_tokens": 2}),
+                ("empty", {}),
+                ("zero", {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}),
+                ("big-int", {"total_tokens": 10 ** 30}),
+                ("no-relation-check", {"input_tokens": 20, "output_tokens": 5, "total_tokens": 12}),
+                ("unknown-preserved", {
+                    "total_tokens": 3, "cached_input_tokens": 8, "reasoning_output_tokens": "n/a",
+                    "vendor_tokens": None, "provider_extra": [1, 2],
+                }),
+            ):
+                with self.subTest(label=label):
+                    result, failure = identity(usage=dict(usage))
+                    self.assertIsNone(failure)
+                    self.assertEqual(result["usage"], usage)
+            self.assertNotIn("total_tokens", identity(usage={"input_tokens": 10, "output_tokens": 2})[0]["usage"])
+            for label, usage in (
+                ("string", "not-an-object"), ("list", []), ("bool", True), ("int", 12),
+                ("total-string", {"total_tokens": "12"}), ("total-bool", {"total_tokens": True}),
+                ("total-negative", {"total_tokens": -1}), ("total-fraction", {"total_tokens": 12.5}),
+                ("total-float-whole", {"total_tokens": 12.0}), ("total-nan", {"total_tokens": float("nan")}),
+                ("total-inf", {"total_tokens": float("inf")}), ("total-null", {"total_tokens": None}),
+                ("input-null", {"input_tokens": None, "total_tokens": 1}),
+                ("input-negative", {"input_tokens": -5}), ("output-bool", {"output_tokens": False}),
+                ("output-fraction", {"output_tokens": 0.5}),
+            ):
+                with self.subTest(label=label):
+                    self.assertEqual(identity(usage=usage), (None, "usage-invalid"))
         finally:
             sys.path.pop(0)
+
+    def test_replay_run_stops_on_invalid_usage_before_next_executor(self):
+        # public execution path: an invalid usage produces an invalid cell and exit 2 before the next cell
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            env = {
+                **os.environ,
+                "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.test",
+                "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.test",
+            }
+            (repo / "value.txt").write_text("base\n")
+            subprocess.run(["git", "add", "value.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            runner = Path(tmp, "runner.json")
+            runner.write_text(json.dumps(self.unavailable_runner(cost_usd=0.01, usage={"total_tokens": "12"})))
+            launches = Path(tmp, "launches.txt")
+            replay_set = Path(tmp, "set.json")
+            replay_set.write_text(json.dumps({
+                "seed": 3, "replicates_per_arm_task": 2,
+                "repos": {"repo": str(repo)}, "require_served_identity": True,
+                "agent_command": [
+                    sys.executable, "-c",
+                    "import shutil,sys; open(sys.argv[3],'a').write('x'); shutil.copy(sys.argv[1], sys.argv[2])",
+                    str(runner), "{runner_receipt}", str(launches),
+                ],
+                "arms": {"NEW": {"provider": "openai", "model": "gpt-test", "effort": "medium", "doctrine": "minimal"}},
+                "tasks": [{
+                    "id": "usage-cell", "repo": "repo", "base": base, "accepted": base,
+                    "prompt": "Keep the base valid.", "acceptance": [[sys.executable, "-c", "raise SystemExit(0)"]],
+                }],
+            }))
+            output = Path(tmp, "out")
+
+            result = self.run_script(
+                "replay_eval.py", "--set", str(replay_set), "run", "--arms", "NEW", "--out", str(output),
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("invalid cell: usage-cell r01 NEW; stopped", result.stderr)
+            self.assertEqual(launches.read_text(), "x")
+            summary = json.loads((output / "summary.json").read_text())
+            self.assertEqual(len(summary["cells"]), 1)
+            cell = summary["cells"][0]
+            self.assertFalse(cell["valid"])
+            self.assertEqual(cell["failure_class"], "usage-invalid")
+            self.assertEqual(cell["usage"], "unmeasured")
+            self.assertEqual(cell["tokens"], "unmeasured")
+            self.assertFalse((output / "usage-cell-r02-NEW.json").exists())
 
     def test_router_excludes_unavailable_cost_route_without_implicit_fallback(self):
         # gate 11

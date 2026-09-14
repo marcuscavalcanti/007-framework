@@ -36,7 +36,7 @@ When provider, model, or effort is a causal variable, set
   "served": {"provider": "openai", "model": "model-a", "effort": "medium"},
   "identity_source": "provider-structured-response",
   "source_sha256": "<sha256>",
-  "usage": {"input_tokens": 1, "output_tokens": 1},
+  "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
   "cost_usd": 0.01,
   "cost_source": "rate-card-estimate"
 }
@@ -46,6 +46,19 @@ The adapter owns provider-specific parsing; the replay core only validates the
 provider-neutral receipt against the pre-registered policy. Missing identity,
 an adapter-invalid result, or requested/served mismatch invalidates the cell and
 stops the run. A requested CLI flag is not served-identity evidence.
+
+`usage` is optional. When absent or `null`, the cell records `usage` and
+`tokens` as `unmeasured`; the cell stays operationally valid, which does not
+satisfy any protocol that requires token telemetry. When present it must be an
+object, otherwise the cell fails with `usage-invalid` and the run stops before
+the next executor. The public counters are `input_tokens`, `output_tokens`,
+and `total_tokens`: each, when present, must be a non-negative, non-boolean
+integer; an explicit `null` is invalid and nothing is coerced. Every other key,
+including provider-specific `*_tokens` names, is preserved verbatim and not
+interpreted. The core never sums components, derives `total_tokens`, or checks
+relations between counters; the cell's `tokens` is the observed `total_tokens`
+or `unmeasured`. This validates structure only, not completeness, truthfulness,
+or the meaning of a count across providers.
 
 ## Controls
 

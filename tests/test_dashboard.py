@@ -557,6 +557,18 @@ class DashboardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "authority_summary"):
             cli.validate_receipt({**base, "authority_summary": {"bound": True}})
 
+    def test_receipt_rejects_non_finite_tokens_and_wall_s(self):
+        cli = self.module("framework_cli")
+        base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        for key in ("tokens", "wall_s"):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaisesRegex(ValueError, key):
+                        cli.validate_receipt({**base, key: value})
+            for value in (0, 12.5, 10 ** 400, "unmeasured"):
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(cli.validate_receipt({**base, key: value})[key], value)
+
     def test_record_accepts_documented_or_namespaced_cost_sources_only(self):
         cli = self.module("framework_cli")
         base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())

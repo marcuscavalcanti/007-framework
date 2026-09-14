@@ -60,6 +60,8 @@ rate-card, subscription-allocation, or local-compute source. Headroom, RTK, and
 provider CLIs are replaceable adapters, not framework dependencies. An optional
 activity estimate never substitutes for the terminal receipt.
 
+`tokens` and `wall_s` are `unmeasured` or finite non-negative numbers; `NaN`
+and `±Infinity` are rejected.
 Use `unmeasured`, `pending`, or `N/D` explicitly for telemetry the host cannot
 expose. Never infer model, effort, token usage, cost, or human rework from a
 conversation summary. Persist a receipt atomically with:

@@ -32,6 +32,7 @@ COST_UNAVAILABLE_FIELDS = (
     "observed_cost_status", "observed_cost_source", "normalized_cost_source",
     "cost_unavailable_reason", "policy_sha256",
 )
+USAGE_COUNTERS = ("input_tokens", "output_tokens", "total_tokens")
 DEPENDENCY_MANIFESTS = {
     "Cargo.toml", "Gemfile", "Pipfile", "go.mod", "package.json",
     "package-lock.json", "pnpm-lock.yaml", "poetry.lock", "pyproject.toml",
@@ -235,6 +236,20 @@ def cost_unavailable_map(config):
     return mapping
 
 
+def validate_usage(value):
+    usage = value.get("usage")
+    if usage is None:
+        return None, None
+    if not isinstance(usage, dict):
+        return None, "usage-invalid"
+    for key in USAGE_COUNTERS:
+        if key in usage and (
+            isinstance(usage[key], bool) or not isinstance(usage[key], int) or usage[key] < 0
+        ):
+            return None, "usage-invalid"
+    return usage, None
+
+
 def validate_served_identity(value, policy, unavailable_map=None):
     if value is None:
         return None, "served-identity-missing"
@@ -268,11 +283,14 @@ def validate_served_identity(value, policy, unavailable_map=None):
         return None, "cost-missing"
     if not isinstance(value.get("cost_source"), str) or not value["cost_source"]:
         return None, "cost-source-missing"
+    usage, usage_failure = validate_usage(value)
+    if usage_failure:
+        return None, usage_failure
     identity = {
         **served,
         "identity_source": value["identity_source"],
         "source_sha256": value["source_sha256"],
-        "usage": value.get("usage"),
+        "usage": usage,
         "cost_usd": cost,
         "cost_source": value["cost_source"],
     }

@@ -502,6 +502,7 @@ def validate_receipt(value, allow_cost_unavailable=False):
         measured = value.get(key)
         if measured != "unmeasured" and (
             isinstance(measured, bool) or not isinstance(measured, (int, float)) or measured < 0
+            or (isinstance(measured, float) and not math.isfinite(measured))
         ):
             raise ValueError(f"{key} must be a non-negative number or unmeasured")
     authority_hash = value.get("authority_sha256")
