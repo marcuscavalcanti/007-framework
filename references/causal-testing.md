@@ -52,8 +52,13 @@ remaining member of that group is killed and observed gone before the result
 is interpreted. The controlled waits total up to two seconds; the OS may keep
 a group observable beyond that. If cleanup is not confirmed, the cell is
 invalid with `cleanup-child-unconfirmed` or `cleanup-group-observable` as its
-failure class, acceptance is skipped, the run stops before the next executor,
-and a timeout diagnostic (`agent_exit -9`, `TIMEOUT`) is preserved. Services
+failure class, acceptance is skipped, no Git helper starts (the cell records
+`d0_complete: false` and the seven diagnostic fields as `unmeasured`, never
+zero), the run stops before the next executor, and a timeout diagnostic
+(`agent_exit -9`, `TIMEOUT`) is preserved. The runner receipt, if present, is
+still read and hashed as a diagnostic observation; while cleanup is
+unconfirmed its bytes are not stable evidence and its identity is not
+consolidated terminal evidence. Services
 that must outlive a command are not supported in these groups. A descendant
 that starts its own session escapes that cleanup. The workspace is a fresh
 snapshot export, not read isolation: the agent process can still read any path

@@ -34,6 +34,10 @@ COST_UNAVAILABLE_FIELDS = (
     "cost_unavailable_reason", "policy_sha256",
 )
 USAGE_COUNTERS = ("input_tokens", "output_tokens", "total_tokens")
+D0_DIAGNOSTIC_FIELDS = (
+    "changed_files", "lines_added", "lines_deleted", "binary_files_changed",
+    "dependency_manifests_changed", "file_jaccard_diagnostic", "line_similarity_diagnostic",
+)
 DEPENDENCY_MANIFESTS = {
     "Cargo.toml", "Gemfile", "Pipfile", "go.mod", "package.json",
     "package-lock.json", "pnpm-lock.yaml", "poetry.lock", "pyproject.toml",
@@ -454,7 +458,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
                     with hidden_acceptance(task, acceptance_workspace):
                         checks, checks_passed = acceptance(task, acceptance_workspace)
             except CleanupIncomplete as exc:
-                hidden_failure = exc.state
+                hidden_failure = cleanup_failure = exc.state
             except (OSError, ValueError, RuntimeError) as exc:
                 hidden_failure = f"hidden-acceptance-{type(exc).__name__.lower()}"
         try:
@@ -465,7 +469,11 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             validate_served_identity(runner_value, policy, unavailable_map)
             if config.get("require_served_identity") else (None, None)
         )
-        d0 = diagnostics(task, workspace, source_repo)
+        if cleanup_failure:
+            # No Git helper may start after an unconfirmed cleanup: diagnostics are unmeasured, never zero.
+            d0 = {"d0_complete": False, **{key: "unmeasured" for key in D0_DIAGNOSTIC_FIELDS}}
+        else:
+            d0 = diagnostics(task, workspace, source_repo)
         d0_failure = None if d0["d0_complete"] else "d0-incomplete"
         agent_valid, _ = grade_cell(exit_code, checks_passed)
         valid = agent_valid and identity_failure is None and hidden_failure is None and d0["d0_complete"]

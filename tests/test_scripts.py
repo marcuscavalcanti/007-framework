@@ -1170,6 +1170,19 @@ class ScriptContractTests(unittest.TestCase):
                 }
                 arms = {"NEW": {"model": "gpt-test", "effort": "medium", "doctrine": "minimal"}}
                 not_git = lambda args: args[0] != "git"
+                unmeasured_d0 = {"d0_complete": False, **{key: "unmeasured" for key in replay_eval.D0_DIAGNOSTIC_FIELDS}}
+                started, real_popen = [], subprocess.Popen
+
+                class RecordingPopen(real_popen):
+                    def __init__(self, args, *a, **k):
+                        super().__init__(args, *a, **k)
+                        started.append(list(args))
+
+                def assert_unmeasured_and_no_later_subprocess(cell, after_index):
+                    self.assertEqual({key: cell[key] for key in unmeasured_d0}, unmeasured_d0)
+                    self.assertEqual(started[after_index:], [], "a subprocess started after an unconfirmed cleanup")
+                    diagnostics.assert_not_called()
+
                 for label, agent, timeout_s, state, expected_exit, expected_tail in (
                     ("normal-exit", "raise SystemExit(0)", 30, "cleanup-group-observable", 0, ""),
                     ("timeout", "import time; time.sleep(60)", 1, "cleanup-child-unconfirmed", -9, "TIMEOUT"),
@@ -1178,8 +1191,16 @@ class ScriptContractTests(unittest.TestCase):
                         output = Path(tmp, f"out-{label}")
                         output.mkdir()
                         config = {"repos": {"repo": str(repo)}, "agent_command": [sys.executable, "-c", agent], "arms": arms}
-                        with mock.patch.object(replay_eval, "kill_process_group", self.cleanup_stub(replay_eval, not_git, state)):
+                        started.clear()
+                        with mock.patch.object(replay_eval, "kill_process_group", self.cleanup_stub(replay_eval, not_git, state)), \
+                                mock.patch.object(subprocess, "Popen", RecordingPopen), \
+                                mock.patch.object(replay_eval, "diagnostics", wraps=replay_eval.diagnostics) as diagnostics:
                             cell = replay_eval.execute_cell(config, task, "NEW", 1, output, timeout_s)
+                        agent_index = next(i for i, args in enumerate(started) if args[0] != "git")
+                        assert_unmeasured_and_no_later_subprocess(cell, agent_index + 1)
+                        Path(tmp, "set.json").write_text("{}")
+                        replay_eval.write_summary(output, Path(tmp, "set.json"), {"seed": 1}, 1, [cell])
+                        self.assertEqual(json.loads((output / "summary.json").read_text())["cells"][0]["lines_added"], "unmeasured")
                         self.assertFalse(cell["valid"])
                         self.assertFalse(cell["accepted"])
                         self.assertEqual(cell["failure_class"], state)
@@ -1193,8 +1214,14 @@ class ScriptContractTests(unittest.TestCase):
                     output.mkdir()
                     config = {"repos": {"repo": str(repo)}, "agent_command": [sys.executable, "-c", "raise SystemExit(0)"], "arms": arms}
                     is_acceptance = lambda args: args[0] != "git" and "acceptance-ran" in " ".join(args)
-                    with mock.patch.object(replay_eval, "kill_process_group", self.cleanup_stub(replay_eval, is_acceptance, "cleanup-group-observable")):
+                    started.clear()
+                    with mock.patch.object(replay_eval, "kill_process_group", self.cleanup_stub(replay_eval, is_acceptance, "cleanup-group-observable")), \
+                            mock.patch.object(subprocess, "Popen", RecordingPopen), \
+                            mock.patch.object(replay_eval, "diagnostics", wraps=replay_eval.diagnostics) as diagnostics:
                         cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+                    acceptance_index = next(i for i, args in enumerate(started) if "acceptance-ran" in " ".join(args))
+                    assert_unmeasured_and_no_later_subprocess(cell, acceptance_index + 1)
+                    self.assertTrue(marker.exists())
                     self.assertFalse(cell["valid"])
                     self.assertEqual(cell["failure_class"], "cleanup-group-observable")
                     self.assertEqual(cell["agent_exit"], 0)
