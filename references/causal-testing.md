@@ -45,10 +45,19 @@ When provider, model, or effort is a causal variable, set
 The adapter owns provider-specific parsing; the replay core only validates the
 provider-neutral receipt against the pre-registered policy. Missing identity,
 an adapter-invalid result, or requested/served mismatch invalidates the cell and
-stops the run. A requested CLI flag is not served-identity evidence. An agent
-command that exceeds the cell timeout is killed with its whole process group
-and the cell is classified `timeout`; a descendant that starts its own session
-escapes that cleanup.
+stops the run. A requested CLI flag is not served-identity evidence. The agent
+command, the acceptance commands, and the replay's own Git helpers each run in
+their own session; when a command returns, by exit, failure, or timeout, every
+remaining member of that group is killed and observed gone before the result
+is interpreted. The controlled waits total up to two seconds; the OS may keep
+a group observable beyond that. If cleanup is not confirmed, the cell is
+invalid with `cleanup-child-unconfirmed` or `cleanup-group-observable` as its
+failure class, acceptance is skipped, the run stops before the next executor,
+and a timeout diagnostic (`agent_exit -9`, `TIMEOUT`) is preserved. Services
+that must outlive a command are not supported in these groups. A descendant
+that starts its own session escapes that cleanup. The workspace is a fresh
+snapshot export, not read isolation: the agent process can still read any path
+the OS user can.
 
 `usage` is optional. When absent or `null`, the cell records `usage` and
 `tokens` as `unmeasured`; the cell stays operationally valid, which does not

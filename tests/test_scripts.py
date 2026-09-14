@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest import mock
 import stat
 from pathlib import Path
 
@@ -21,6 +22,39 @@ GRANDCHILD_SPAWNER = (
     "'import os, sys, time; open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(60)', sys.argv[1]]); "
     "time.sleep(60)"
 )
+
+
+EXIT0_SPAWNER = (
+    "import subprocess, sys; "
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+    "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+    "open(sys.argv[1], 'w').write(str(child.pid)); sys.exit(0)"
+)
+
+
+def make_base_repo(tmp):
+    repo = Path(tmp, "repo")
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.test",
+        "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.test",
+    }
+    (repo / "value.txt").write_text("base\n")
+    subprocess.run(["git", "add", "value.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return repo, base
+
+
+def reap(pid):
+    try:
+        os.kill(pid, 9)
+    except ProcessLookupError:
+        pass
 
 
 def process_alive(pid, settle_s=3.0):
@@ -996,11 +1030,150 @@ class ScriptContractTests(unittest.TestCase):
 
                 cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 1)
 
+                self.addCleanup(reap, int(pidfile.read_text()))
                 self.assertEqual(cell["failure_class"], "timeout")
                 self.assertEqual(cell["agent_exit"], -9)
                 self.assertFalse(cell["valid"])
                 self.assertLess(cell["wall_s"], 20)
                 self.assertFalse(process_alive(int(pidfile.read_text())), "grandchild survived the timeout")
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_run_kills_descendants_after_normal_exit(self):
+        # main command exits 0 at once and leaves a detached-stdio descendant in its group
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                pidfile = Path(tmp, "grandchild.pid")
+
+                completed = replay_eval.run([sys.executable, "-c", EXIT0_SPAWNER, str(pidfile)], timeout=10)
+
+                self.addCleanup(reap, int(pidfile.read_text()))
+                self.assertEqual(completed.returncode, 0)
+                self.assertFalse(process_alive(int(pidfile.read_text())), "grandchild survived a normal exit")
+        finally:
+            sys.path.pop(0)
+
+    def test_cleanup_states_are_derived_from_bounded_waits(self):
+        # deterministic: killpg, wait and the clock are substituted at the existing boundary
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import framework_cli
+            import replay_eval
+
+            class FakeProcess:
+                def __init__(self, wait_behaviour):
+                    self.pid, self.returncode, self.waits, self.wait_behaviour = 4242, None, [], wait_behaviour
+
+                def wait(self, timeout=None):
+                    self.waits.append(timeout)
+                    if self.wait_behaviour == "hang":
+                        raise subprocess.TimeoutExpired("cmd", timeout)
+                    self.returncode = 0
+
+            for module in (replay_eval, framework_cli):
+                with self.subTest(module=module.__name__, case="gone-before-signal"):
+                    process = FakeProcess("ok")
+                    with mock.patch.object(os, "killpg", side_effect=ProcessLookupError):
+                        self.assertEqual(module.kill_process_group(process, wait_s=2.0), "gone")
+                    self.assertEqual(process.waits, [])
+                with self.subTest(module=module.__name__, case="child-unconfirmed"):
+                    process = FakeProcess("hang")
+                    with mock.patch.object(os, "killpg", return_value=None):
+                        self.assertEqual(module.kill_process_group(process, wait_s=2.0), "cleanup-child-unconfirmed")
+                    self.assertEqual(len(process.waits), 1)
+                    self.assertGreaterEqual(process.waits[0], 0.0)
+                    self.assertLessEqual(process.waits[0], 2.0)
+                with self.subTest(module=module.__name__, case="group-observable"):
+                    process = FakeProcess("ok")
+                    clock = iter(float(tick) for tick in range(100))
+                    with mock.patch.object(os, "killpg", return_value=None), \
+                            mock.patch.object(time, "monotonic", side_effect=lambda: next(clock)), \
+                            mock.patch.object(time, "sleep", return_value=None):
+                        self.assertEqual(module.kill_process_group(process, wait_s=2.0), "cleanup-group-observable")
+                    self.assertLess(next(clock), 10.0)
+                with self.subTest(module=module.__name__, case="gone-after-signal"):
+                    process = FakeProcess("ok")
+                    with mock.patch.object(os, "killpg", side_effect=[None, ProcessLookupError]):
+                        self.assertEqual(module.kill_process_group(process, wait_s=2.0), "gone")
+        finally:
+            sys.path.pop(0)
+
+    def cleanup_stub(self, module, failing, state):
+        # substitutes only the reported state: the real kill still runs so no process is left behind
+        real = module.kill_process_group
+
+        def fake(process, wait_s=2.0):
+            observed = real(process, wait_s)
+            return state if failing(process.args) else observed
+        return fake
+
+    def test_replay_cell_is_invalid_and_skips_acceptance_when_cleanup_unconfirmed(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo, base = make_base_repo(tmp)
+                marker = Path(tmp, "acceptance-ran")
+                task = {
+                    "id": "cleanup-cell", "repo": "repo", "base": base, "accepted": base,
+                    "prompt": "Exit.", "acceptance": [[sys.executable, "-c", f"open({str(marker)!r}, 'w').write('x')"]],
+                }
+                arms = {"NEW": {"model": "gpt-test", "effort": "medium", "doctrine": "minimal"}}
+                not_git = lambda args: args[0] != "git"
+                for label, agent, timeout_s, state, expected_exit, expected_tail in (
+                    ("normal-exit", "raise SystemExit(0)", 30, "cleanup-group-observable", 0, ""),
+                    ("timeout", "import time; time.sleep(60)", 1, "cleanup-child-unconfirmed", -9, "TIMEOUT"),
+                ):
+                    with self.subTest(label=label):
+                        output = Path(tmp, f"out-{label}")
+                        output.mkdir()
+                        config = {"repos": {"repo": str(repo)}, "agent_command": [sys.executable, "-c", agent], "arms": arms}
+                        with mock.patch.object(replay_eval, "kill_process_group", self.cleanup_stub(replay_eval, not_git, state)):
+                            cell = replay_eval.execute_cell(config, task, "NEW", 1, output, timeout_s)
+                        self.assertFalse(cell["valid"])
+                        self.assertFalse(cell["accepted"])
+                        self.assertEqual(cell["failure_class"], state)
+                        self.assertEqual(cell["agent_exit"], expected_exit)
+                        self.assertEqual(cell["agent_tail"], expected_tail if expected_tail else cell["agent_tail"])
+                        self.assertEqual(cell["acceptance"], [])
+                        self.assertFalse(marker.exists(), "acceptance ran after an unconfirmed cleanup")
+                        self.assertTrue((output / "cleanup-cell-r01-NEW.json").is_file())
+                with self.subTest(label="acceptance-command-cleanup"):
+                    output = Path(tmp, "out-acceptance")
+                    output.mkdir()
+                    config = {"repos": {"repo": str(repo)}, "agent_command": [sys.executable, "-c", "raise SystemExit(0)"], "arms": arms}
+                    is_acceptance = lambda args: args[0] != "git" and "acceptance-ran" in " ".join(args)
+                    with mock.patch.object(replay_eval, "kill_process_group", self.cleanup_stub(replay_eval, is_acceptance, "cleanup-group-observable")):
+                        cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+                    self.assertFalse(cell["valid"])
+                    self.assertEqual(cell["failure_class"], "cleanup-group-observable")
+                    self.assertEqual(cell["agent_exit"], 0)
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_helper_cleanup_failure_stops_before_agent(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo, base = make_base_repo(tmp)
+                output = Path(tmp, "out")
+                output.mkdir()
+                launched = Path(tmp, "agent-launched")
+                config = {
+                    "repos": {"repo": str(repo)},
+                    "agent_command": [sys.executable, "-c", f"open({str(launched)!r}, 'w').write('x')"],
+                    "arms": {"NEW": {"model": "gpt-test", "effort": "medium", "doctrine": "minimal"}},
+                }
+                task = {"id": "helper-cell", "repo": "repo", "base": base, "accepted": base, "prompt": "Exit.", "acceptance": []}
+                is_git = lambda args: args[0] == "git"
+                with mock.patch.object(replay_eval, "kill_process_group", self.cleanup_stub(replay_eval, is_git, "cleanup-group-observable")):
+                    with self.assertRaisesRegex(replay_eval.CleanupIncomplete, "cleanup-group-observable: process group"):
+                        replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+                self.assertFalse(launched.exists(), "agent started after a helper cleanup failure")
+                self.assertEqual(list(output.iterdir()), [])
         finally:
             sys.path.pop(0)
 

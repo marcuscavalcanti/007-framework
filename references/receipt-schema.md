@@ -100,11 +100,18 @@ contract:
 The task start stores the contract and its raw SHA-256 before the coding command
 runs. After that command exits successfully, the controller executes each argv
 without a shell and replaces agent-claimed `checks` with command, working
-directory, exit code, duration, timeout state, and stdout/stderr digests. A
-command that exceeds `timeout_s` is killed together with every descendant in
-its process group; a descendant that starts its own session escapes that
-cleanup. Any non-zero hard gate forces a persisted `blocked` receipt and CLI
-exit `4`.
+directory, exit code, duration, timeout state, and stdout/stderr digests. Each
+command runs in its own session. When it returns, by exit, failure, or
+`timeout_s`, every remaining member of that process group is killed and the
+group is observed gone before the check is recorded; the controlled waits
+total up to two seconds, and the OS may keep a group observable beyond that.
+If the group is not confirmed gone (`cleanup-child-unconfirmed` or
+`cleanup-group-observable`), `007 run` fails with an explicit error and exit
+`2`, writes no terminal receipt, and leaves the start open. Services that must
+outlive a command are not supported in these groups. A descendant that starts
+its own session escapes that cleanup, and the coding command wrapped by
+`007 run` itself is not subject to it. Any non-zero hard gate forces a
+persisted `blocked` receipt and CLI exit `4`.
 `acceptance_evidence: "controlled"` is computed by 007 and cannot be supplied
 through manual `record`. This proves only the declared commands ran on that
 working tree; it does not prove that the command set is sufficient.

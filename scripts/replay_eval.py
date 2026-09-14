@@ -47,24 +47,61 @@ def validate_task_id(value):
     return value
 
 
-def kill_process_group(process):
+class CleanupIncomplete(RuntimeError):
+    """Raised when a command returned but its 007-created process group was not confirmed gone."""
+
+    def __init__(self, state, process, original=None):
+        super().__init__(f"{state}: process group {process.pid} after command returned")
+        self.state, self.returncode, self.original = state, process.returncode, original
+
+
+def kill_process_group(process, wait_s=2.0):
+    """SIGKILL every remaining member of the child's group and observe the outcome.
+
+    Returns "gone", "cleanup-child-unconfirmed" (child exit not confirmed within
+    wait_s) or "cleanup-group-observable" (group still observable; no execution
+    inferred). Every wait consumes the same deadline; sending SIGKILL is not proof.
+    """
+    deadline = time.monotonic() + wait_s
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
-        pass
+        return "gone"
+    try:
+        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        return "cleanup-child-unconfirmed"
+    while True:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return "gone"
+        if time.monotonic() >= deadline:
+            return "cleanup-group-observable"
+        time.sleep(0.01)
 
 
 def run(args, cwd=None, timeout=1800, input_text=None):
-    # The child leads its own session so a timeout can kill every descendant in its group.
-    with subprocess.Popen(
+    # The child leads its own session; whenever it returns (exit, failure or timeout)
+    # every remaining member of that group is killed before the result is interpreted.
+    # No context manager: Popen.__exit__ would add an unbounded wait.
+    process = subprocess.Popen(
         args, cwd=cwd, stdin=subprocess.PIPE if input_text is not None else None,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
-    ) as process:
-        try:
-            stdout, stderr = process.communicate(input_text, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            kill_process_group(process)
-            raise
+    )
+    original = None
+    try:
+        stdout, stderr = process.communicate(input_text, timeout=timeout)
+    except BaseException as exc:
+        original = exc
+        raise
+    finally:
+        state = kill_process_group(process)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+        if state != "gone":
+            raise CleanupIncomplete(state, process, original) from original
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
 
@@ -387,22 +424,30 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
                 part = part.replace(marker, value)
             argv.append(part)
         started = time.monotonic()
+        cleanup_failure = None
         try:
             agent = run(argv, cwd=workspace, timeout=timeout_s, input_text=prompt.read_text())
             exit_code, tail = agent.returncode, (agent.stdout + agent.stderr)[-1500:]
         except subprocess.TimeoutExpired:
             exit_code, tail = -9, "TIMEOUT"
+        except CleanupIncomplete as exc:
+            cleanup_failure = exc.state
+            timed_out = isinstance(exc.original, subprocess.TimeoutExpired)
+            exit_code, tail = (-9, "TIMEOUT") if timed_out else (exc.returncode, str(exc))
         prompt.unlink(missing_ok=True)
-        hidden_failure = None
-        try:
-            with tempfile.TemporaryDirectory(prefix=f"007-acceptance-{task['id']}-") as acceptance_tmp:
-                acceptance_workspace = Path(acceptance_tmp) / "workspace"
-                shutil.copytree(workspace, acceptance_workspace, symlinks=True)
-                with hidden_acceptance(task, acceptance_workspace):
-                    checks, checks_passed = acceptance(task, acceptance_workspace)
-        except (OSError, ValueError, RuntimeError) as exc:
-            checks, checks_passed = [], False
-            hidden_failure = f"hidden-acceptance-{type(exc).__name__.lower()}"
+        # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
+        hidden_failure, checks, checks_passed = cleanup_failure, [], False
+        if cleanup_failure is None:
+            try:
+                with tempfile.TemporaryDirectory(prefix=f"007-acceptance-{task['id']}-") as acceptance_tmp:
+                    acceptance_workspace = Path(acceptance_tmp) / "workspace"
+                    shutil.copytree(workspace, acceptance_workspace, symlinks=True)
+                    with hidden_acceptance(task, acceptance_workspace):
+                        checks, checks_passed = acceptance(task, acceptance_workspace)
+            except CleanupIncomplete as exc:
+                hidden_failure = exc.state
+            except (OSError, ValueError, RuntimeError) as exc:
+                hidden_failure = f"hidden-acceptance-{type(exc).__name__.lower()}"
         try:
             runner_value = json.loads(runner_receipt.read_text()) if runner_receipt.is_file() else None
         except json.JSONDecodeError:
@@ -416,7 +461,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
         agent_valid, _ = grade_cell(exit_code, checks_passed)
         valid = agent_valid and identity_failure is None and hidden_failure is None and d0["d0_complete"]
         accepted = valid and checks_passed
-        failure_class = (
+        failure_class = cleanup_failure or (
             "timeout" if exit_code == -9 else "agent-exit" if exit_code != 0
             else hidden_failure or identity_failure or d0_failure or "none"
         )

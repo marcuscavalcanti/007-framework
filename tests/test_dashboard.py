@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -19,6 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 CLI = ROOT / "scripts" / "framework_cli.py"
 BIN = ROOT / "bin" / "007"
+
+
+def reap(pidfile):
+    try:
+        os.kill(int(pidfile.read_text()), 9)
+    except (FileNotFoundError, ValueError, ProcessLookupError):
+        pass
 
 
 class DashboardTests(unittest.TestCase):
@@ -738,6 +746,7 @@ class DashboardTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 4, result.stderr)
+            self.addCleanup(reap, pidfile)
             stored = json.loads((repo / ".007/receipts/controlled-gate-timeout.receipt.json").read_text())
             self.assertEqual(stored["status"], "blocked")
             self.assertTrue(stored["checks"][0]["timed_out"])
@@ -753,6 +762,103 @@ class DashboardTests(unittest.TestCase):
                 time.sleep(0.1)
             else:
                 self.fail("grandchild survived the acceptance timeout")
+
+    def test_run_acceptance_kills_descendants_after_normal_exit(self):
+        # public CLI path: a passing hard gate that spawned a background process leaves nothing behind
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+            )
+            pidfile = Path(tmp, "grandchild.pid")
+            spawner = (
+                "import subprocess, sys; "
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+                "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+                "open(sys.argv[1], 'w').write(str(child.pid)); sys.exit(0)"
+            )
+            acceptance = Path(tmp, "acceptance.json")
+            acceptance.write_text(json.dumps({
+                "schema": "007-framework/acceptance/v1", "timeout_s": 10,
+                "commands": [[sys.executable, "-c", spawner, str(pidfile)]],
+            }))
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "controlled-gate-orphan",
+                "--receipt", "task.receipt.json", "--acceptance-file", str(acceptance),
+                "--", sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json"),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.addCleanup(reap, pidfile)
+            stored = json.loads((repo / ".007/receipts/controlled-gate-orphan.receipt.json").read_text())
+            self.assertEqual(stored["status"], "accepted")
+            self.assertEqual(stored["checks"][0]["exit"], 0)
+            self.assertFalse(stored["checks"][0]["timed_out"])
+            pid = int(pidfile.read_text())
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("grandchild survived a passing acceptance command")
+
+    def test_run_acceptance_cleanup_failure_exits_without_terminal_receipt(self):
+        # cleanup boundary substituted: no receipt, start left open, explicit error (CLI maps ValueError to exit 2)
+        cli = self.module("framework_cli")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+            )
+            acceptance = Path(tmp, "acceptance.json")
+            acceptance.write_text(json.dumps({
+                "schema": "007-framework/acceptance/v1",
+                "commands": [[sys.executable, "-c", "print('gate-ok')"]],
+            }))
+            real_cleanup = cli.kill_process_group
+            for state in ("cleanup-child-unconfirmed", "cleanup-group-observable"):
+                with self.subTest(state=state):
+                    task_id = f"cleanup-{state}"
+                    # the real kill still runs; only the reported state is substituted
+                    stub = lambda process, wait_s=2.0, state=state: (real_cleanup(process, wait_s), state)[1]
+                    with mock.patch.object(cli, "kill_process_group", stub):
+                        with self.assertRaisesRegex(ValueError, f"acceptance cleanup incomplete: {state} for process group"):
+                            cli.run_task(
+                                str(repo), task_id, "task.receipt.json",
+                                [sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json")],
+                                acceptance_file=str(acceptance),
+                            )
+                    self.assertTrue((repo / f".007/tasks/{task_id}.task.json").is_file())
+                    self.assertFalse((repo / f".007/receipts/{task_id}.receipt.json").exists())
+                    (repo / "task.receipt.json").unlink()
 
     def test_run_leaves_start_open_when_command_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

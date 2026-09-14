@@ -621,11 +621,30 @@ def bind_authority(receipt, task, controller_event=None):
     return receipt
 
 
-def kill_process_group(process):
+def kill_process_group(process, wait_s=2.0):
+    """SIGKILL every remaining member of the child's group and observe the outcome.
+
+    Returns "gone", "cleanup-child-unconfirmed" (child exit not confirmed within
+    wait_s) or "cleanup-group-observable" (group still observable; no execution
+    inferred). Every wait consumes the same deadline; sending SIGKILL is not proof.
+    """
+    deadline = time.monotonic() + wait_s
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
-        pass
+        return "gone"
+    try:
+        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        return "cleanup-child-unconfirmed"
+    while True:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return "gone"
+        if time.monotonic() >= deadline:
+            return "cleanup-group-observable"
+        time.sleep(0.01)
 
 
 def run_acceptance(root, task):
@@ -635,17 +654,15 @@ def run_acceptance(root, task):
     for command in contract["commands"]:
         started = time.monotonic()
         timed_out = False
+        # Own session: whenever the command returns (exit, failure or timeout) every
+        # remaining member of its group is killed before the check is recorded.
+        # No context manager: Popen.__exit__ would add an unbounded wait.
+        process = subprocess.Popen(
+            command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True,
+        )
         try:
-            # Own session: a timeout kills the whole process group, not only the direct child.
-            with subprocess.Popen(
-                command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                start_new_session=True,
-            ) as process:
-                try:
-                    stdout, stderr = process.communicate(timeout=timeout_s)
-                except subprocess.TimeoutExpired:
-                    kill_process_group(process)
-                    raise
+            stdout, stderr = process.communicate(timeout=timeout_s)
             exit_code = process.returncode
         except subprocess.TimeoutExpired as exc:
             exit_code, timed_out = 124, True
@@ -655,6 +672,12 @@ def run_acceptance(root, task):
                 stdout = stdout.decode(errors="replace")
             if isinstance(stderr, bytes):
                 stderr = stderr.decode(errors="replace")
+        finally:
+            state = kill_process_group(process)
+            for stream in (process.stdout, process.stderr):
+                stream.close()
+        if state != "gone":
+            raise ValueError(f"acceptance cleanup incomplete: {state} for process group {process.pid}")
         checks.append({
             "command": command,
             "cwd": ".",
