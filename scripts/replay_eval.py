@@ -16,6 +16,7 @@ import random
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -46,10 +47,25 @@ def validate_task_id(value):
     return value
 
 
+def kill_process_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def run(args, cwd=None, timeout=1800, input_text=None):
-    return subprocess.run(
-        args, cwd=cwd, capture_output=True, text=True, timeout=timeout, input=input_text
-    )
+    # The child leads its own session so a timeout can kill every descendant in its group.
+    with subprocess.Popen(
+        args, cwd=cwd, stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(input_text, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_process_group(process)
+            raise
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
 
 def new_archive_path(destination):

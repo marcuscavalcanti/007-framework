@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -697,6 +698,61 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(stored["proof_reached"], "acceptance-failed")
             self.assertEqual(stored["checks"][0]["exit"], 5)
             self.assertEqual(stored["acceptance_summary"], {"passed": 0, "failed": 1})
+
+    def test_run_acceptance_timeout_kills_descendants_and_blocks(self):
+        # public CLI path: a timed-out hard gate blocks the receipt and leaves no descendant behind
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            registry = Path(tmp, "projects.json")
+            self.assertEqual(
+                self.run_cli("init", "--repo", str(repo), "--registry", str(registry)).returncode,
+                0,
+            )
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+            )
+            pidfile = Path(tmp, "grandchild.pid")
+            spawner = (
+                "import subprocess, sys, time; "
+                "subprocess.Popen([sys.executable, '-c', "
+                "'import os, sys, time; open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(60)', sys.argv[1]]); "
+                "time.sleep(60)"
+            )
+            acceptance = Path(tmp, "acceptance.json")
+            acceptance.write_text(json.dumps({
+                "schema": "007-framework/acceptance/v1", "timeout_s": 1,
+                "commands": [[sys.executable, "-c", spawner, str(pidfile)]],
+            }))
+
+            result = self.run_cli(
+                "run", "--repo", str(repo), "--task-id", "controlled-gate-timeout",
+                "--receipt", "task.receipt.json", "--acceptance-file", str(acceptance),
+                "--", sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json"),
+            )
+
+            self.assertEqual(result.returncode, 4, result.stderr)
+            stored = json.loads((repo / ".007/receipts/controlled-gate-timeout.receipt.json").read_text())
+            self.assertEqual(stored["status"], "blocked")
+            self.assertTrue(stored["checks"][0]["timed_out"])
+            self.assertEqual(stored["checks"][0]["exit"], 124)
+            self.assertLess(stored["checks"][0]["duration_ms"], 20000)
+            pid = int(pidfile.read_text())
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("grandchild survived the acceptance timeout")
 
     def test_run_leaves_start_open_when_command_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

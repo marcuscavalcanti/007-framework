@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -620,6 +621,13 @@ def bind_authority(receipt, task, controller_event=None):
     return receipt
 
 
+def kill_process_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def run_acceptance(root, task):
     contract = task["acceptance"]
     timeout_s = contract.get("timeout_s", 900)
@@ -628,11 +636,17 @@ def run_acceptance(root, task):
         started = time.monotonic()
         timed_out = False
         try:
-            completed = subprocess.run(
-                command, cwd=root, capture_output=True, text=True, timeout=timeout_s,
-            )
-            exit_code = completed.returncode
-            stdout, stderr = completed.stdout, completed.stderr
+            # Own session: a timeout kills the whole process group, not only the direct child.
+            with subprocess.Popen(
+                command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,
+            ) as process:
+                try:
+                    stdout, stderr = process.communicate(timeout=timeout_s)
+                except subprocess.TimeoutExpired:
+                    kill_process_group(process)
+                    raise
+            exit_code = process.returncode
         except subprocess.TimeoutExpired as exc:
             exit_code, timed_out = 124, True
             stdout = exc.stdout or ""

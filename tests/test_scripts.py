@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import stat
 from pathlib import Path
@@ -12,6 +13,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
+
+
+GRANDCHILD_SPAWNER = (
+    "import subprocess, sys, time; "
+    "subprocess.Popen([sys.executable, '-c', "
+    "'import os, sys, time; open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(60)', sys.argv[1]]); "
+    "time.sleep(60)"
+)
+
+
+def process_alive(pid, settle_s=3.0):
+    deadline = time.monotonic() + settle_s
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        if time.monotonic() > deadline:
+            return True
+        time.sleep(0.1)
 
 
 class ScriptContractTests(unittest.TestCase):
@@ -937,6 +958,49 @@ class ScriptContractTests(unittest.TestCase):
             )
             self.assertEqual(explicit["strategy"], "policy-fallback")
             self.assertEqual(explicit["eligible_candidates"], 0)
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_timeout_kills_agent_descendants(self):
+        # public cell path: a timed-out agent and its grandchild are gone; the cell is invalid as timeout
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                env = {
+                    **os.environ,
+                    "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.test",
+                    "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.test",
+                }
+                (repo / "value.txt").write_text("base\n")
+                subprocess.run(["git", "add", "value.txt"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+                base = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+                ).stdout.strip()
+                output = Path(tmp, "out")
+                output.mkdir()
+                pidfile = Path(tmp, "grandchild.pid")
+                config = {
+                    "repos": {"repo": str(repo)},
+                    "agent_command": [sys.executable, "-c", GRANDCHILD_SPAWNER, str(pidfile)],
+                    "arms": {"NEW": {"model": "gpt-test", "effort": "medium", "doctrine": "minimal"}},
+                }
+                task = {
+                    "id": "timeout-cell", "repo": "repo", "base": base, "accepted": base,
+                    "prompt": "Never finish.", "acceptance": [[sys.executable, "-c", "raise SystemExit(0)"]],
+                }
+
+                cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 1)
+
+                self.assertEqual(cell["failure_class"], "timeout")
+                self.assertEqual(cell["agent_exit"], -9)
+                self.assertFalse(cell["valid"])
+                self.assertLess(cell["wall_s"], 20)
+                self.assertFalse(process_alive(int(pidfile.read_text())), "grandchild survived the timeout")
         finally:
             sys.path.pop(0)
 

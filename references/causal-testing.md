@@ -45,7 +45,10 @@ When provider, model, or effort is a causal variable, set
 The adapter owns provider-specific parsing; the replay core only validates the
 provider-neutral receipt against the pre-registered policy. Missing identity,
 an adapter-invalid result, or requested/served mismatch invalidates the cell and
-stops the run. A requested CLI flag is not served-identity evidence.
+stops the run. A requested CLI flag is not served-identity evidence. An agent
+command that exceeds the cell timeout is killed with its whole process group
+and the cell is classified `timeout`; a descendant that starts its own session
+escapes that cleanup.
 
 `usage` is optional. When absent or `null`, the cell records `usage` and
 `tokens` as `unmeasured`; the cell stays operationally valid, which does not
