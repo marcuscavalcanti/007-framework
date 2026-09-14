@@ -850,7 +850,9 @@ class DashboardTests(unittest.TestCase):
                     # the real kill still runs; only the reported state is substituted
                     stub = lambda process, wait_s=2.0, state=state: (real_cleanup(process, wait_s), state)[1]
                     with mock.patch.object(cli, "kill_process_group", stub):
-                        with self.assertRaisesRegex(ValueError, f"acceptance cleanup incomplete: {state} for process group"):
+                        with self.assertRaisesRegex(
+                            ValueError, f"acceptance cleanup incomplete: {state} for process group .*command exit 0, timed_out False",
+                        ):
                             cli.run_task(
                                 str(repo), task_id, "task.receipt.json",
                                 [sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json")],

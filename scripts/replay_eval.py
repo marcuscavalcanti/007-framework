@@ -67,6 +67,9 @@ def kill_process_group(process, wait_s=2.0):
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         return "gone"
+    except PermissionError:
+        # EPERM: a member exists but cannot be signalled; observable, nothing more inferred.
+        return "cleanup-group-observable"
     try:
         process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
@@ -76,6 +79,8 @@ def kill_process_group(process, wait_s=2.0):
             os.killpg(process.pid, 0)
         except ProcessLookupError:
             return "gone"
+        except PermissionError:
+            return "cleanup-group-observable"
         if time.monotonic() >= deadline:
             return "cleanup-group-observable"
         time.sleep(0.01)
@@ -96,10 +101,14 @@ def run(args, cwd=None, timeout=1800, input_text=None):
         original = exc
         raise
     finally:
-        state = kill_process_group(process)
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None:
-                stream.close()
+        # Pipes close even if cleanup itself raises; an unexpected cleanup exception
+        # propagates with the original exception kept as its context.
+        try:
+            state = kill_process_group(process)
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
         if state != "gone":
             raise CleanupIncomplete(state, process, original) from original
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)

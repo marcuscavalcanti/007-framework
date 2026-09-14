@@ -633,6 +633,9 @@ def kill_process_group(process, wait_s=2.0):
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         return "gone"
+    except PermissionError:
+        # EPERM: a member exists but cannot be signalled; observable, nothing more inferred.
+        return "cleanup-group-observable"
     try:
         process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
@@ -642,6 +645,8 @@ def kill_process_group(process, wait_s=2.0):
             os.killpg(process.pid, 0)
         except ProcessLookupError:
             return "gone"
+        except PermissionError:
+            return "cleanup-group-observable"
         if time.monotonic() >= deadline:
             return "cleanup-group-observable"
         time.sleep(0.01)
@@ -653,7 +658,7 @@ def run_acceptance(root, task):
     checks = []
     for command in contract["commands"]:
         started = time.monotonic()
-        timed_out = False
+        timed_out, original = False, None
         # Own session: whenever the command returns (exit, failure or timeout) every
         # remaining member of its group is killed before the check is recorded.
         # No context manager: Popen.__exit__ would add an unbounded wait.
@@ -665,7 +670,7 @@ def run_acceptance(root, task):
             stdout, stderr = process.communicate(timeout=timeout_s)
             exit_code = process.returncode
         except subprocess.TimeoutExpired as exc:
-            exit_code, timed_out = 124, True
+            exit_code, timed_out, original = 124, True, exc
             stdout = exc.stdout or ""
             stderr = exc.stderr or ""
             if isinstance(stdout, bytes):
@@ -673,11 +678,20 @@ def run_acceptance(root, task):
             if isinstance(stderr, bytes):
                 stderr = stderr.decode(errors="replace")
         finally:
-            state = kill_process_group(process)
-            for stream in (process.stdout, process.stderr):
-                stream.close()
+            # Pipes close even if cleanup itself raises; that exception keeps the
+            # original timeout as its cause so the diagnostic stays reachable.
+            try:
+                state = kill_process_group(process)
+            except BaseException as cleanup_exc:
+                raise cleanup_exc from original
+            finally:
+                for stream in (process.stdout, process.stderr):
+                    stream.close()
         if state != "gone":
-            raise ValueError(f"acceptance cleanup incomplete: {state} for process group {process.pid}")
+            raise ValueError(
+                f"acceptance cleanup incomplete: {state} for process group {process.pid} "
+                f"(command exit {exit_code}, timed_out {timed_out})"
+            )
         checks.append({
             "command": command,
             "cwd": ".",

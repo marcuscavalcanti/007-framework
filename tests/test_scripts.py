@@ -50,11 +50,13 @@ def make_base_repo(tmp):
     return repo, base
 
 
-def reap(pid):
+def reap(pid, process=None):
     try:
         os.kill(pid, 9)
     except ProcessLookupError:
         pass
+    if process is not None:
+        process.wait(timeout=5)
 
 
 def process_alive(pid, settle_s=3.0):
@@ -1097,6 +1099,52 @@ class ScriptContractTests(unittest.TestCase):
                     process = FakeProcess("ok")
                     with mock.patch.object(os, "killpg", side_effect=[None, ProcessLookupError]):
                         self.assertEqual(module.kill_process_group(process, wait_s=2.0), "gone")
+                with self.subTest(module=module.__name__, case="eperm-at-signal"):
+                    process = FakeProcess("ok")
+                    with mock.patch.object(os, "killpg", side_effect=PermissionError):
+                        self.assertEqual(module.kill_process_group(process, wait_s=2.0), "cleanup-group-observable")
+                    self.assertEqual(process.waits, [])
+                with self.subTest(module=module.__name__, case="eperm-at-poll"):
+                    process = FakeProcess("ok")
+                    with mock.patch.object(os, "killpg", side_effect=[None, PermissionError]):
+                        self.assertEqual(module.kill_process_group(process, wait_s=2.0), "cleanup-group-observable")
+        finally:
+            sys.path.pop(0)
+
+    def test_cleanup_exception_closes_pipes_and_keeps_original_context(self):
+        # an unexpected exception inside cleanup must not leak pipes nor hide the timeout
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import framework_cli
+            import replay_eval
+            started = []
+            real_popen = subprocess.Popen
+
+            class RecordingPopen(real_popen):
+                def __init__(self, args, *a, **k):
+                    super().__init__(args, *a, **k)
+                    started.append(self)
+
+            def pipes_closed(process):
+                return all(s is None or s.closed for s in (process.stdin, process.stdout, process.stderr))
+
+            with mock.patch.object(subprocess, "Popen", RecordingPopen):
+                with mock.patch.object(replay_eval, "kill_process_group", side_effect=RuntimeError("cleanup boom")):
+                    with self.assertRaisesRegex(RuntimeError, "cleanup boom") as caught:
+                        replay_eval.run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=1)
+                self.addCleanup(reap, started[-1].pid, started[-1])
+                self.assertIsInstance(caught.exception.__context__, subprocess.TimeoutExpired)
+                self.assertTrue(pipes_closed(started[-1]))
+                with tempfile.TemporaryDirectory() as tmp:
+                    subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+                    task = {"acceptance": {"schema": framework_cli.ACCEPTANCE_SCHEMA, "timeout_s": 1,
+                                           "commands": [[sys.executable, "-c", "import time; time.sleep(60)"]]}}
+                    with mock.patch.object(framework_cli, "kill_process_group", side_effect=RuntimeError("cleanup boom")):
+                        with self.assertRaisesRegex(RuntimeError, "cleanup boom") as caught:
+                            framework_cli.run_acceptance(tmp, task)
+                    self.addCleanup(reap, started[-1].pid, started[-1])
+                    self.assertIsInstance(caught.exception.__cause__, subprocess.TimeoutExpired)
+                    self.assertTrue(pipes_closed(started[-1]))
         finally:
             sys.path.pop(0)
 
