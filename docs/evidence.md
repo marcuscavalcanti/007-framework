@@ -5,7 +5,30 @@
 V1.4 is a usable, dependency-free causal beta with one real-task causal ROI
 contrast, one deterministic selector-mechanism contrast, and package checks.
 
-It is not a claim that the complete bundle is generally superior.
+It is not a claim that the complete bundle is generally superior or replaces
+code review in full. Deterministic conformance alone does not establish causal
+delivery-quality gains. Repeated runs of one task do not add project diversity.
+Initial acceptance does not establish durability; missing observations remain
+unknown.
+
+## V1.5.0-rc.2 candidate boundary
+
+The candidate packages acceptance/cleanup and explicit unavailable-cost support
+already present in source a3012ee. It changes no execution code. The public
+[candidate evidence](../evidence/v1.5.0-rc.2/release-evidence.md) preserves a
+preregistered local mutation contrast for the first-shutdown-signal latch:
+CURRENT passes the target 3/3, the one-line MUTANT fails it 3/3, and an allowed
+control passes in both arms. All 12 cells match with zero retry or model calls.
+The public artifact now includes the exact mutant patch and observed assertion
+messages verified against original log digests. These additions make the narrow
+mechanism reproducible; they are not a new economic experiment or independent
+timestamp attestation of the historical preregistration.
+
+This supports that mechanism in the observed host conditions, not economic
+ROI, cross-platform cleanup, resistance to same-user tampering or universal
+review accuracy. Repeated process-test verdicts are reproducible; scheduler
+timing is not mathematically deterministic. The new candidate is not externally
+reviewed or published, and supported-version CI is not yet observed.
 
 ## Causal ROI result for v1.4.0
 

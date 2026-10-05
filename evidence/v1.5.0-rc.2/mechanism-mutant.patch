@@ -1,0 +1,12 @@
+diff --git a/scripts/framework_cli.py b/scripts/framework_cli.py
+--- a/scripts/framework_cli.py
++++ b/scripts/framework_cli.py
+@@ -810,7 +810,7 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None,
+     shutdown_signal = None
+     def interrupted(signum, frame):
+         nonlocal shutdown_signal
+-        if shutdown_signal is None:
++        if True:
+             shutdown_signal = signum
+             raise SystemExit(128 + signum)
+     completed = None

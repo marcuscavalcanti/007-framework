@@ -3,6 +3,9 @@ import subprocess
 import unittest
 import json
 import hashlib
+import tempfile
+import os
+import sys
 from pathlib import Path
 
 
@@ -13,7 +16,7 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.4\.0$")
+        self.assertRegex(skill, r"(?m)^  version: 1\.5\.0-rc\.2$")
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))
@@ -134,6 +137,94 @@ class PackageContractTests(unittest.TestCase):
             if source.returncode or hashlib.sha256(source.stdout).hexdigest() != digest:
                 mismatches.append(relative)
         self.assertEqual(mismatches, [])
+
+
+    def test_v15_rc_evidence_and_manifest_are_bound(self):
+        directory = ROOT / "evidence/v1.5.0-rc.2"
+        manifest = directory / "manifest.sha256"
+        self.assertTrue(manifest.is_file(), "RC evidence manifest missing")
+        listed = {}
+        for line in manifest.read_text().splitlines():
+            digest, name = line.split("  ", 1)
+            self.assertNotIn(name, listed)
+            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), digest, name)
+            listed[name] = digest
+        self.assertIn("SKILL.md", listed)
+        self.assertIn("scripts/framework_cli.py", listed)
+        self.assertIn("tests/test_package.py", listed)
+        protocol = json.loads((directory / "mechanism-protocol.json").read_text())
+        result = json.loads((directory / "mechanism-result.json").read_text())
+        self.assertEqual(protocol["retries"], 0)
+        self.assertEqual(result["source_protocol_sha256"], protocol["source_protocol_sha256"])
+        self.assertEqual(result["runtime_source_sha256"], listed["scripts/framework_cli.py"])
+        self.assertEqual(result["target_test_sha256"], listed["tests/test_dashboard.py"])
+        self.assertEqual(protocol["test_sha256"], result["target_test_sha256"])
+        self.assertEqual(protocol["replicates"], 3)
+        self.assertEqual(result["total_cells"], 12)
+        self.assertEqual(len(result["cells"]), 12)
+        combinations = set()
+        for cell in result["cells"]:
+            key = (cell["replicate"], cell["arm"], cell["scenario"])
+            self.assertNotIn(key, combinations)
+            combinations.add(key)
+            self.assertEqual(cell["exit"], 1 if key[1:] == ("MUTANT", "target") else 0)
+            self.assertFalse(cell["timeout"])
+            self.assertTrue(cell["matched"])
+        self.assertEqual(combinations, {
+            (replicate, arm, scenario) for replicate in (1, 2, 3)
+            for arm in ("MUTANT", "CURRENT") for scenario in ("target", "control")
+        })
+
+
+    def test_v15_rc_mutation_patch_reproduces_exact_mutant(self):
+        directory = ROOT / "evidence/v1.5.0-rc.2"
+        patch = directory / "mechanism-mutant.patch"
+        self.assertTrue(patch.is_file(), "public causal mutant patch missing")
+        protocol = json.loads((directory / "mechanism-protocol.json").read_text())
+        self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(),
+                         protocol["mutation_patch_sha256"])
+        source = (ROOT / "scripts/framework_cli.py").read_bytes()
+        old = b"        if shutdown_signal is None:\n"
+        self.assertEqual(source.count(old), 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(["git", "init", "-q"], cwd=temporary, capture_output=True, check=True)
+            target = Path(temporary) / "scripts/framework_cli.py"
+            target.parent.mkdir()
+            target.write_bytes(source)
+            for argv in (["git", "apply", "--check", str(patch)],
+                         ["git", "apply", str(patch)]):
+                applied = subprocess.run(argv, cwd=temporary, capture_output=True)
+                self.assertEqual(applied.returncode, 0, applied.stderr.decode())
+            mutated = target.read_bytes()
+        self.assertEqual(mutated, source.replace(old, b"        if True:\n", 1))
+        self.assertEqual(hashlib.sha256(mutated).hexdigest(), protocol["mutant_source_sha256"])
+
+    def test_v15_rc_mutation_patch_does_not_inherit_tmpdir_git_repo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            subprocess.run(["git", "init", "-q"], cwd=temporary,
+                           capture_output=True, check=True)
+            result = subprocess.run(
+                [sys.executable, "-B", str(Path(__file__).resolve()),
+                 "PackageContractTests.test_v15_rc_mutation_patch_reproduces_exact_mutant"],
+                cwd=temporary, env={**os.environ, "TMPDIR": temporary},
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0,
+                             "mutation reproduction inherited an ancestor Git repository:\n"
+                             + result.stderr)
+
+    def test_v15_rc_failures_have_observed_assertion_evidence(self):
+        directory = ROOT / "evidence/v1.5.0-rc.2"
+        result = json.loads((directory / "mechanism-result.json").read_text())
+        for cell in result["cells"]:
+            negative = cell["arm"] == "MUTANT" and cell["scenario"] == "target"
+            self.assertEqual(cell.get("failure_signature"),
+                             "executor survived shutdown cleanup" if negative else None)
+            self.assertEqual(cell.get("assertion_message"),
+                             "AssertionError: ProcessLookupError not raised : executor survived shutdown cleanup"
+                             if negative else None)
+            self.assertEqual(cell.get("failure_count"), 1 if negative else 0)
+            self.assertEqual(cell.get("error_count"), 0)
 
 
 if __name__ == "__main__":

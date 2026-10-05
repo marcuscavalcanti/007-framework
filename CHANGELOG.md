@@ -4,6 +4,45 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+## [1.5.0-rc.2] - Unreleased candidate
+
+### Added
+
+- explicit opt-in for unavailable receipt cost, preserving unknown cost rather
+  than manufacturing zero and excluding unpriced outcomes from economic claims;
+- argv-only acceptance contracts frozen at task start; the controller records
+  actual check results instead of trusting an executor's claimed checks;
+- public first-shutdown-signal latch protocol and 12-cell local mutation/control
+  result, exact reproducible mutant patch and observed assertion signatures,
+  with a package manifest bound to the candidate source.
+
+### Compatibility changes since 1.4.0
+
+- malformed/non-finite receipt metrics are rejected, not silently normalized;
+- after normal executor wait, unconfirmed cleanup returns exit `2`, writes no
+  terminal receipt and leaves the task start open, even if the executor failed;
+  wrappers must not interpret a missing receipt or exit `2` as acceptance;
+- unavailable cost is accepted only with explicit project opt-in and the complete
+  null-cost fields; it remains unaccounted and excluded from economic claims.
+  Priced receipts retain their previous contract. See
+  [receipt semantics](references/receipt-schema.md).
+
+### Fixed
+
+- preserve incomplete token usage and reject malformed/non-finite receipt metrics;
+- confirm process-group cleanup after normal exit, failure or timeout before
+  interpreting acceptance, receipts or replay diagnostics;
+- preserve the first scoped shutdown signal, caller/ignored handlers and original
+  unwind when cleanup diagnostics cannot be written; keep interrupted starts open.
+
+### Evidence boundary
+
+- runtime source is unchanged from the locally qualified a3012ee commit;
+- the mutation contrast supports only the local first-signal latch mechanism;
+- historical v1.4 economic results stay task-local; no new model or ROI claim;
+- this is not a stable release: independent review, supported-version CI, clean
+  committed release evidence and publication/read-back remain pending.
+
 ## [1.4.0] - 2026-08-31
 
 ### Added

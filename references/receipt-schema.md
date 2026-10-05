@@ -40,8 +40,10 @@ provider allowlist.
 of `inspect`, `implement`, `deep`, or `design`. It lets the selector compare like
 with like; receipts without it stay visible but do not train route selection.
 
-`cost_usd` is mandatory, finite, and numeric for every recorded terminal
-outcome. `cost_source`
+By default, `cost_usd` is mandatory, finite, and numeric for every recorded terminal
+outcome. The only exception is the explicit
+[unavailable-cost opt-in](#cost-unavailable-explicit-opt-in) below; it never
+turns unknown cost into zero. `cost_source`
 names how it was obtained, for example `provider-reported`,
 `rate-card-estimate`, `subscription-allocated`, or `local-compute`.
 Custom adapters use the explicit `custom:<name>` namespace; other free-form
