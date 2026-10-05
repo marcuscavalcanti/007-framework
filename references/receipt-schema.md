@@ -77,8 +77,9 @@ Or wrap an arbitrary provider CLI without coupling the core to that provider:
 ```
 
 The command reads `FRAMEWORK_007_TASK_ID`, `FRAMEWORK_007_RECEIPT_PATH`, and
-`FRAMEWORK_007_REPO`, then writes the normalized receipt. `007 run` preserves
-the command's non-zero exit status and leaves a start open when no valid,
+`FRAMEWORK_007_REPO`, then writes the normalized receipt. After confirming
+executor cleanup, `007 run` preserves the command's non-zero exit status and
+leaves a start open when no valid,
 task-matched terminal receipt exists. Raw transcripts are not retained.
 
 To make hard-gate evidence controller-observed, pass an argv-only acceptance
@@ -108,9 +109,32 @@ total up to two seconds, and the OS may keep a group observable beyond that.
 If the group is not confirmed gone (`cleanup-child-unconfirmed` or
 `cleanup-group-observable`), `007 run` fails with an explicit error and exit
 `2`, writes no terminal receipt, and leaves the start open. Services that must
-outlive a command are not supported in these groups. A descendant that starts
-its own session escapes that cleanup, and the coding command wrapped by
-`007 run` itself is not subject to it. Any non-zero hard gate forces a
+outlive a command are not supported in these groups. The wrapped coding command
+also runs in its own session and is cleaned when its wait returns, before
+acceptance or receipt interpretation. After normal wait return, unconfirmed executor cleanup exits
+`2` with no persisted terminal receipt, even if the command returned non-zero.
+No execution timeout is added to that coding command. Only noninteractive
+executors have local test evidence; inherited stdio does not give the new
+session a controlling terminal. Interactive `/dev/tty` access and terminal-signal
+behaviour are unqualified. In the CLI/main thread, SIGTERM, SIGHUP and SIGQUIT
+not inherited as `SIG_IGN` and received during the wrapped executor wait unwind through cleanup, exit with
+`128 + signal`, and do not advance acceptance or terminal receipt persistence.
+Inherited `SIG_IGN` is preserved; sending an ignored signal does not cancel the executor.
+The first scoped shutdown signal is latched; later SIGTERM/SIGHUP/SIGQUIT do not
+interrupt its cleanup body or change its exit code. A non-gone cleanup result on
+this unwind is reported to stderr while preserving `128 + signal`; no receipt is persisted.
+That is a normal exit status, not death by signal for parent wait-status consumers.
+Callable/default caller handlers are restored even on spawn/cleanup exceptions; SIGINT retains
+the KeyboardInterrupt cleanup path. This is forced cleanup, not graceful shutdown.
+Outside the main thread, no handlers are installed; normal execution/cleanup is preserved.
+Unknown C-installed dispositions (`getsignal` returns `None`) are not changed.
+SIGKILL of the controller cannot run cleanup and can leave its executor alive.
+Overlapping delivery before the latch is set, signals during spawn/restoration,
+and a first shutdown signal during cleanup remain unqualified.
+Replay/acceptance commands have no shutdown-signal forwarding. Process-group
+IDs are not pinned against reuse. A descendant that leaves the original group (e.g. via
+`setpgid` or a new session) escapes cleanup.
+Any non-zero hard gate forces a
 persisted `blocked` receipt and CLI exit `4`.
 `acceptance_evidence: "controlled"` is computed by 007 and cannot be supplied
 through manual `record`. This proves only the declared commands ran on that

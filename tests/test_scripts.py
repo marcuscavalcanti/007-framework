@@ -1,6 +1,7 @@
 import json
 import io
 import os
+import signal
 import subprocess
 import sys
 import tarfile
@@ -1048,12 +1049,13 @@ class ScriptContractTests(unittest.TestCase):
             import replay_eval
             with tempfile.TemporaryDirectory() as tmp:
                 pidfile = Path(tmp, "grandchild.pid")
-
-                completed = replay_eval.run([sys.executable, "-c", EXIT0_SPAWNER, str(pidfile)], timeout=10)
-
-                self.addCleanup(reap, int(pidfile.read_text()))
-                self.assertEqual(completed.returncode, 0)
-                self.assertFalse(process_alive(int(pidfile.read_text())), "grandchild survived a normal exit")
+                try:
+                    completed = replay_eval.run([sys.executable, "-c", EXIT0_SPAWNER, str(pidfile)], timeout=10)
+                    self.assertEqual(completed.returncode, 0)
+                    self.assertFalse(process_alive(int(pidfile.read_text())), "grandchild survived a normal exit")
+                finally:
+                    if pidfile.exists():
+                        reap(int(pidfile.read_text()))
         finally:
             sys.path.pop(0)
 
@@ -1106,7 +1108,52 @@ class ScriptContractTests(unittest.TestCase):
                     self.assertEqual(process.waits, [])
                 with self.subTest(module=module.__name__, case="eperm-at-poll"):
                     process = FakeProcess("ok")
-                    with mock.patch.object(os, "killpg", side_effect=[None, PermissionError]):
+                    clock = iter(tick / 4 for tick in range(100))
+                    def denied_poll(group, sig):
+                        if sig == 0:
+                            raise PermissionError
+                    with mock.patch.object(os, "killpg", side_effect=denied_poll), \
+                            mock.patch.object(time, "monotonic", side_effect=lambda: next(clock)), \
+                            mock.patch.object(time, "sleep", return_value=None):
+                        self.assertEqual(module.kill_process_group(process, wait_s=2.0), "cleanup-group-observable")
+                    self.assertLess(next(clock), 10.0)
+                for first_poll in (None, PermissionError()):
+                    with self.subTest(module=module.__name__, case="transient-poll", first_poll=first_poll):
+                        process = FakeProcess("ok")
+                        with mock.patch.object(os, "killpg", side_effect=[None, first_poll, ProcessLookupError()]), \
+                                mock.patch.object(time, "monotonic", return_value=0.0), \
+                                mock.patch.object(time, "sleep", return_value=None) as slept:
+                            self.assertEqual(module.kill_process_group(process, wait_s=2.0), "gone")
+                        slept.assert_called_once_with(0.01)
+                with self.subTest(module=module.__name__, case="deadline-not-reset"):
+                    process = FakeProcess("ok")
+                    # Only 1/256 s remains for sleep; the next observation is past expiry.
+                    clock = iter((0.0, 0.0, 1.99609375, 1.99609375, 2.1))
+                    with mock.patch.object(os, "killpg", side_effect=[None, None, ProcessLookupError()]) as killed, \
+                            mock.patch.object(time, "monotonic", side_effect=lambda: next(clock, 2.1)), \
+                            mock.patch.object(time, "sleep", return_value=None) as slept:
+                        state = module.kill_process_group(process, wait_s=2.0)
+                    self.assertEqual(killed.call_args_list, [mock.call(process.pid, signal.SIGKILL), mock.call(process.pid, 0)])
+                    slept.assert_called_once_with(0.00390625)
+                    self.assertEqual(state, "cleanup-group-observable")
+                with self.subTest(module=module.__name__, case="wait-consumed-deadline"):
+                    process = FakeProcess("ok")
+                    with mock.patch.object(os, "killpg", side_effect=[None, ProcessLookupError()]) as killed, \
+                            mock.patch.object(time, "monotonic", side_effect=[0.0, 0.0, 2.0, 2.1]), \
+                            mock.patch.object(time, "sleep", return_value=None) as slept:
+                        state = module.kill_process_group(process, wait_s=2.0)
+                    killed.assert_called_once_with(process.pid, signal.SIGKILL)
+                    slept.assert_not_called()
+                    self.assertEqual(state, "cleanup-group-observable")
+                with self.subTest(module=module.__name__, case="poll-crossed-deadline"):
+                    process = FakeProcess("ok")
+                    clock = [0.0]
+                    def late_absence(group, sig):
+                        if sig == 0:
+                            clock[0] = 2.1
+                            raise ProcessLookupError
+                    with mock.patch.object(os, "killpg", side_effect=late_absence), \
+                            mock.patch.object(time, "monotonic", side_effect=lambda: clock[0]):
                         self.assertEqual(module.kill_process_group(process, wait_s=2.0), "cleanup-group-observable")
         finally:
             sys.path.pop(0)

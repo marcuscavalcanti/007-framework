@@ -2,6 +2,7 @@ import json
 import hashlib
 import importlib
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -624,6 +625,494 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(stored["task_id"], "wrapped-001")
             self.assertEqual(stored["uncertainty"], str(repo.resolve()))
 
+    def test_run_executor_kills_descendants_before_interpretation(self):
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                self.assertEqual(self.run_cli(
+                    "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
+                ).returncode, 0)
+                adapter, pidfile = Path(tmp, "adapter.py"), Path(tmp, "child.pid")
+                adapter.write_text(
+                    "import json, os, subprocess, sys\nfrom pathlib import Path\n"
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+                    "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                    "Path(sys.argv[2]).write_text(str(child.pid))\n"
+                    "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                    "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                    "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                    "raise SystemExit(int(sys.argv[3]))\n"
+                )
+                acceptance = Path(tmp, "acceptance.json")
+                gate = (
+                    "import os, sys\nfrom pathlib import Path\n"
+                    "Path('acceptance.started').touch()\n"
+                    "try: os.kill(int(Path(sys.argv[1]).read_text()), 0)\n"
+                    "except ProcessLookupError: pass\n"
+                    "else: raise SystemExit(9)\n"
+                )
+                acceptance.write_text(json.dumps({
+                    "schema": "007-framework/acceptance/v1",
+                    "commands": [[sys.executable, "-c", gate, str(pidfile)]],
+                }))
+                try:
+                    result = self.run_cli(
+                        "run", "--repo", str(repo), "--task-id", "executor-orphan",
+                        "--receipt", "task.receipt.json", "--acceptance-file", str(acceptance),
+                        "--", sys.executable, str(adapter),
+                        str(ROOT / "examples/task.receipt.example.json"), str(pidfile), str(exit_code),
+                    )
+                    self.assertEqual(result.returncode, exit_code, result.stderr)
+                    with self.assertRaises(ProcessLookupError, msg="executor child survived"):
+                        os.kill(int(pidfile.read_text()), 0)
+                    self.assertEqual((repo / "acceptance.started").exists(), exit_code == 0)
+                    terminal = repo / ".007/receipts/executor-orphan.receipt.json"
+                    self.assertEqual(terminal.exists(), exit_code == 0)
+                    if exit_code == 0:
+                        stored = json.loads(terminal.read_text())
+                        self.assertEqual(stored["status"], "accepted")
+                        self.assertEqual(stored["checks"][0]["exit"], 0)
+                        self.assertEqual(stored["acceptance_evidence"], "controlled")
+                finally:
+                    reap(pidfile)  # Reap even on RED, before TemporaryDirectory removes the pidfile.
+
+    def test_run_executor_remains_usable_off_main_thread(self):
+        # Unconditional signal installation/restoration breaks the real helper call.
+        cli = self.module("framework_cli")
+        for exit_code in (0, 7):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                self.assertEqual(self.run_cli(
+                    "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
+                ).returncode, 0)
+                code = (
+                    "import json, os, sys\nfrom pathlib import Path\n"
+                    "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                    "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                    "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                    "raise SystemExit(int(sys.argv[2]))\n"
+                )
+                result, errors = [], []
+                def invoke():
+                    try:
+                        result.append(cli.run_task(str(repo), "threaded", "task.receipt.json", [
+                            sys.executable, "-c", code, str(ROOT / "examples/task.receipt.example.json"),
+                            str(exit_code),
+                        ]))
+                    except Exception as error:
+                        errors.append(error)
+                worker = threading.Thread(target=invoke)
+                worker.start()
+                worker.join(timeout=10)
+                self.assertFalse(worker.is_alive(), "run_task worker did not return")
+                self.assertEqual(errors, [], repr(errors))
+                self.assertEqual(result[0][0], exit_code)
+                self.assertTrue((repo / ".007/tasks/threaded.task.json").is_file())
+                self.assertEqual((repo / ".007/receipts/threaded.receipt.json").is_file(), exit_code == 0)
+
+    def test_run_executor_shutdown_cleanup_keeps_first_signal_and_reports_non_gone(self):
+        # A second scoped signal must not abort real group cleanup; missing diagnostics
+        # must fail the two injected non-gone cases, not the gone positive control.
+        for second, state, stderr_mode in (
+            (True, "gone", "normal"), (False, "gone", "normal"),
+            (False, "cleanup-child-unconfirmed", "normal"), (False, "cleanup-group-observable", "normal"),
+            (False, "cleanup-child-unconfirmed", "pipe"), (False, "cleanup-group-observable", "closed"),
+            (False, "cleanup-group-observable", "missing"), (False, "gone", "pipe"),
+        ):
+            with self.subTest(second=second, state=state, stderr_mode=stderr_mode), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                self.assertEqual(self.run_cli(
+                    "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
+                ).returncode, 0)
+                adapter, pidfile, restored = (Path(tmp, name) for name in ("adapter.py", "pids.json", "restored.json"))
+                adapter.write_text(
+                    "import json, os, subprocess, sys, time\nfrom pathlib import Path\n"
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(12)'])\n"
+                    "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                    "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                    "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                    "Path(sys.argv[2]).write_text(json.dumps([os.getpid(), child.pid]))\n"
+                    "time.sleep(12)\n"
+                )
+                authority, acceptance = Path(tmp, "authority.json"), Path(tmp, "acceptance.json")
+                authority.write_text(json.dumps({
+                    "schema": "007-framework/authority/v1", "allow": ["test"], "deny": ["deploy"],
+                }))
+                acceptance.write_text(json.dumps({
+                    "schema": "007-framework/acceptance/v1",
+                    "commands": [[sys.executable, "-c", "from pathlib import Path; Path('gate.ran').touch()"]],
+                }))
+                bootstrap = (
+                    "import json, os, signal, sys\nfrom pathlib import Path\n"
+                    "sys.path.insert(0, sys.argv[1])\nimport framework_cli as cli\n"
+                    "mode = os.environ['TEST_007_STDERR_MODE']\n"
+                    "if mode == 'pipe':\n"
+                    "    reader, writer = os.pipe()\n    os.close(reader)\n"
+                    "    sys.stderr = os.fdopen(writer, 'w', buffering=1)\n"
+                    "elif mode == 'closed':\n"
+                    "    sys.stderr = open(os.devnull, 'w')\n    sys.stderr.close()\n"
+                    "elif mode == 'missing': sys.stderr = None\n"
+                    "signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)\n"
+                    "observed = []\n"
+                    "def caller(signum, frame): observed.append(signum)\n"
+                    "for sig in signals: signal.signal(sig, caller)\n"
+                    "real_cleanup = cli.kill_process_group\n"
+                    "def injected(process, wait_s=2.0):\n"
+                    "    if sys.argv[2] == 'True':\n"
+                    "        for sig in signals: signal.raise_signal(sig)\n"
+                    "    actual = real_cleanup(process, wait_s)\n"
+                    "    return actual if sys.argv[3] == 'gone' else sys.argv[3]\n"
+                    "cli.kill_process_group = injected\n"
+                    "try: cli.main(sys.argv[5:])\n"
+                    "except SystemExit as error:\n"
+                    "    intact = all(signal.getsignal(sig) is caller for sig in signals)\n"
+                    "    if intact:\n"
+                    "        for sig in signals: signal.raise_signal(sig)\n"
+                    "    Path(sys.argv[4]).write_text(json.dumps({'intact': intact, 'observed': observed}))\n"
+                    "    raise\n"
+                )
+                controller = subprocess.Popen(
+                    [sys.executable, "-c", bootstrap, str(SCRIPTS), str(second), state, str(restored),
+                     "run", "--repo", str(repo), "--task-id", "shutdown",
+                     "--receipt", "task.receipt.json", "--authority-file", str(authority),
+                     "--action", "test", "--acceptance-file", str(acceptance), "--",
+                     sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json"), str(pidfile)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+                    env={**os.environ, "TEST_007_STDERR_MODE": stderr_mode},
+                )
+                pids = []
+                try:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        try:
+                            pids = json.loads(pidfile.read_text())
+                            break
+                        except (FileNotFoundError, json.JSONDecodeError):
+                            time.sleep(0.01)
+                    self.assertEqual(len(pids), 2, "executor readiness missing")
+                    os.kill(controller.pid, signal.SIGTERM)
+                    controller.wait(timeout=8)
+                    self.assertEqual(controller.returncode, 143)
+                    for pid in pids:
+                        with self.assertRaises(ProcessLookupError, msg="executor survived shutdown cleanup"):
+                            os.kill(pid, 0)
+                    stdout, stderr = controller.communicate(timeout=8)
+                    self.assertEqual(stdout, "", "shutdown diagnostic leaked to stdout")
+                    self.assertEqual(json.loads(restored.read_text()), {
+                        "intact": True, "observed": [signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT],
+                    })
+                    if state == "gone" or stderr_mode != "normal":
+                        self.assertEqual(stderr, "")
+                    else:
+                        self.assertIn(state, stderr)
+                        self.assertIn(str(pids[0]), stderr)
+                    self.assertFalse((repo / "gate.ran").exists())
+                    self.assertFalse((repo / ".007/events/shutdown.event.json").exists())
+                    self.assertFalse((repo / ".007/receipts/shutdown.receipt.json").exists())
+                    self.assertTrue((repo / ".007/tasks/shutdown.task.json").is_file())
+                finally:
+                    for group in pids[:1] + [controller.pid]:
+                        try:
+                            os.killpg(group, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    controller.communicate(timeout=5)
+                    for pid in pids:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+
+    def test_run_executor_signal_shutdown_kills_group_without_terminal_progression(self):
+        # Removing the scoped shutdown handlers must leave the real executor alive.
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGINT):
+            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                self.assertEqual(self.run_cli(
+                    "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
+                ).returncode, 0)
+                adapter, pidfile = Path(tmp, "adapter.py"), Path(tmp, "pids.json")
+                adapter.write_text(
+                    "import json, os, subprocess, sys, time\nfrom pathlib import Path\n"
+                    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(12)'])\n"
+                    "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                    "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                    "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                    "Path(sys.argv[2]).write_text(json.dumps([os.getpid(), child.pid]))\n"
+                    "time.sleep(12)\n"
+                )
+                authority, acceptance = Path(tmp, "authority.json"), Path(tmp, "acceptance.json")
+                authority.write_text(json.dumps({
+                    "schema": "007-framework/authority/v1", "allow": ["test"], "deny": ["deploy"],
+                }))
+                acceptance.write_text(json.dumps({
+                    "schema": "007-framework/acceptance/v1",
+                    "commands": [[sys.executable, "-c", "from pathlib import Path; Path('gate.ran').touch()"]],
+                }))
+                bootstrap = (
+                    "import resource, signal, sys\nresource.setrlimit(resource.RLIMIT_CORE, (0, 0))\n"
+                    "for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT): signal.signal(sig, signal.SIG_DFL)\n"
+                    "signal.signal(signal.SIGINT, signal.default_int_handler)\n"
+                    "sys.path.insert(0, sys.argv[1])\nimport framework_cli as cli\n"
+                    "raise SystemExit(cli.main(sys.argv[2:]))\n"
+                )
+                controller = subprocess.Popen(
+                    [sys.executable, "-c", bootstrap, str(SCRIPTS),
+                     "run", "--repo", str(repo), "--task-id", "shutdown",
+                     "--receipt", "task.receipt.json", "--authority-file", str(authority),
+                     "--action", "test", "--acceptance-file", str(acceptance), "--",
+                     sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json"), str(pidfile)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                )
+                pids = []
+                try:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        try:
+                            pids = json.loads(pidfile.read_text())
+                            break
+                        except (FileNotFoundError, json.JSONDecodeError):
+                            time.sleep(0.01)
+                    self.assertEqual(len(pids), 2, "executor readiness missing")
+                    self.assertEqual(os.getpgid(pids[0]), pids[0])
+                    if sig == signal.SIGINT:
+                        os.kill(controller.pid, sig)  # Exercise KeyboardInterrupt in wait(), not a normal exit.
+                    else:
+                        os.killpg(controller.pid, sig)
+                    controller.wait(timeout=8)
+                    for pid in pids:
+                        with self.assertRaises(ProcessLookupError, msg=f"executor group member {pid} survived {sig}"):
+                            os.kill(pid, 0)
+                    self.assertNotEqual(controller.returncode, 0)
+                    if sig != signal.SIGINT:
+                        self.assertEqual(controller.returncode, 128 + sig)
+                    self.assertTrue((repo / ".007/tasks/shutdown.task.json").is_file())
+                    self.assertTrue((repo / "task.receipt.json").is_file())  # Raw adapter output is not persistence.
+                    self.assertFalse((repo / "gate.ran").exists())
+                    self.assertFalse((repo / ".007/events/shutdown.event.json").exists())
+                    self.assertFalse((repo / ".007/receipts/shutdown.receipt.json").exists())
+                finally:
+                    for group in (pids[:1] + [controller.pid]):
+                        try:
+                            os.killpg(group, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    controller.wait(timeout=5)
+                    for pid in pids:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+
+    def test_run_executor_preserves_inherited_ignored_shutdown_signals(self):
+        # Unconditional handler installation must fail this ignored-signal control.
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+            for exit_code in (0, 7):
+                with self.subTest(signal=sig, exit_code=exit_code), tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp, "repo")
+                    repo.mkdir()
+                    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                    self.assertEqual(self.run_cli(
+                        "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
+                    ).returncode, 0)
+                    adapter, pidfile, release = (Path(tmp, name) for name in ("adapter.py", "pid", "release"))
+                    adapter.write_text(
+                        "import json, os, sys, time\nfrom pathlib import Path\n"
+                        "Path(sys.argv[2]).write_text(str(os.getpid()))\n"
+                        "deadline = time.monotonic() + 12\n"
+                        "while not Path(sys.argv[3]).exists():\n"
+                        "    if time.monotonic() >= deadline: raise SystemExit(9)\n"
+                        "    time.sleep(0.01)\n"
+                        "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                        "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                        "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                        "raise SystemExit(int(sys.argv[4]))\n"
+                    )
+                    bootstrap = (
+                        "import signal, sys\nsignal.signal(int(sys.argv[2]), signal.SIG_IGN)\n"
+                        "sys.path.insert(0, sys.argv[1])\nimport framework_cli as cli\n"
+                        "raise SystemExit(cli.main(sys.argv[3:]))\n"
+                    )
+                    controller = subprocess.Popen(
+                        [sys.executable, "-c", bootstrap, str(SCRIPTS), str(int(sig)),
+                         "run", "--repo", str(repo), "--task-id", "ignored",
+                         "--receipt", "task.receipt.json", "--", sys.executable, str(adapter),
+                         str(ROOT / "examples/task.receipt.example.json"), str(pidfile), str(release), str(exit_code)],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                    )
+                    executor_pid = None
+                    try:
+                        deadline = time.monotonic() + 5
+                        while time.monotonic() < deadline:
+                            try:
+                                executor_pid = int(pidfile.read_text())
+                                break
+                            except (FileNotFoundError, ValueError):
+                                time.sleep(0.01)
+                        self.assertIsNotNone(executor_pid, "executor readiness missing")
+                        self.assertEqual(os.getpgid(executor_pid), executor_pid)
+                        os.kill(controller.pid, sig)
+                        with self.assertRaises(subprocess.TimeoutExpired, msg="ignored signal interrupted executor"):
+                            controller.wait(timeout=0.1)
+                        release.touch()
+                        controller.wait(timeout=8)
+                        self.assertEqual(controller.returncode, exit_code)
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(executor_pid, 0)
+                        self.assertTrue((repo / ".007/tasks/ignored.task.json").is_file())
+                        terminal = repo / ".007/receipts/ignored.receipt.json"
+                        self.assertEqual(terminal.is_file(), exit_code == 0)
+                        if exit_code == 0:
+                            self.assertEqual(json.loads(terminal.read_text())["status"], "accepted")
+                    finally:
+                        for group in ([executor_pid] if executor_pid else []) + [controller.pid]:
+                            try:
+                                os.killpg(group, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                        controller.wait(timeout=5)
+
+    def test_run_executor_restores_callers_signal_handlers_on_exit_or_exception(self):
+        # A leaked controller handler would swallow the caller's next real signal.
+        cli = self.module("framework_cli")
+        signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+        saved = {sig: signal.getsignal(sig) for sig in (*signals, signal.SIGINT)}
+        observed = []
+        def caller(signum, frame):
+            observed.append(signum)
+        real_cleanup = cli.kill_process_group
+        real_getsignal = signal.getsignal
+        def cleanup_error(process, wait_s=2.0):
+            real_cleanup(process, wait_s)
+            raise RuntimeError("cleanup probe")
+        try:
+            for sig in signals:
+                signal.signal(sig, caller)
+            for outcome in (0, 7, "spawn-error", "cleanup-error", "unknown-handler"):
+                with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as tmp:
+                    repo = Path(tmp, "repo")
+                    repo.mkdir()
+                    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                    self.assertEqual(self.run_cli(
+                        "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
+                    ).returncode, 0)
+                    code = (
+                        "import json, os, sys\nfrom pathlib import Path\n"
+                        "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                        "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                        "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                        "raise SystemExit(int(sys.argv[2]))\n"
+                    )
+                    command = [sys.executable, "-c", code, str(ROOT / "examples/task.receipt.example.json"),
+                               str(outcome if isinstance(outcome, int) else 0)]
+                    if outcome == "spawn-error":
+                        with self.assertRaises(FileNotFoundError):
+                            cli.run_task(str(repo), "restore", "task.receipt.json", [str(Path(tmp, "missing"))])
+                    elif outcome == "cleanup-error":
+                        with mock.patch.object(cli, "kill_process_group", cleanup_error), \
+                                self.assertRaisesRegex(RuntimeError, "cleanup probe"):
+                            cli.run_task(str(repo), "restore", "task.receipt.json", command)
+                    elif outcome == "unknown-handler":
+                        with mock.patch.object(signal, "getsignal", side_effect=lambda sig:
+                                               None if sig == signal.SIGTERM else real_getsignal(sig)):
+                            try:
+                                status, _ = cli.run_task(str(repo), "restore", "task.receipt.json", command)
+                            except TypeError as error:
+                                self.fail(f"unknown caller handler was replaced: {error}")
+                            self.assertEqual(status, 0)
+                    else:
+                        self.assertEqual(cli.run_task(str(repo), "restore", "task.receipt.json", command)[0], outcome)
+                    for sig in signals:
+                        self.assertIs(signal.getsignal(sig), caller)
+                    self.assertIs(signal.getsignal(signal.SIGINT), saved[signal.SIGINT])
+                    observed.clear()
+                    for sig in signals:
+                        signal.raise_signal(sig)
+                    self.assertEqual(observed, list(signals))
+        finally:
+            for sig, handler in saved.items():
+                signal.signal(sig, handler)
+
+    def test_run_executor_cleanup_failure_leaves_start_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            self.assertEqual(self.run_cli(
+                "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
+            ).returncode, 0)
+            adapter = Path(tmp, "adapter.py")
+            adapter.write_text(
+                "import json, os, sys\nfrom pathlib import Path\n"
+                "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
+                "raise SystemExit(int(sys.argv[2]))\n"
+            )
+            authority = Path(tmp, "authority.json")
+            authority.write_text(json.dumps({
+                "schema": "007-framework/authority/v1", "allow": ["test"], "deny": ["deploy"],
+            }))
+            acceptance = Path(tmp, "acceptance.json")
+            acceptance.write_text(json.dumps({
+                "schema": "007-framework/acceptance/v1",
+                "commands": [[sys.executable, "-c", "from pathlib import Path; Path('gate.ran').touch()"]],
+            }))
+            # Run the public CLI entrypoint in a subprocess; inject only the reported
+            # cleanup state after real cleanup, never replace execution or acceptance.
+            bootstrap = (
+                "import sys\nsys.path.insert(0, sys.argv[1])\nimport framework_cli as cli\n"
+                "real_cleanup = cli.kill_process_group\n"
+                "def injected(process, wait_s=2.0):\n"
+                "    actual = real_cleanup(process, wait_s)\n"
+                "    return actual if sys.argv[2] == 'gone' else sys.argv[2]\n"
+                "cli.kill_process_group = injected\nraise SystemExit(cli.main(sys.argv[3:]))\n"
+            )
+            for state in ("gone", "cleanup-child-unconfirmed", "cleanup-group-observable"):
+                for exit_code in (0, 7):
+                    with self.subTest(state=state, exit_code=exit_code):
+                        task_id = f"executor-{state}-{exit_code}"
+                        accepted = state == "gone" and exit_code == 0
+                        try:
+                            result = subprocess.run(
+                                [sys.executable, "-c", bootstrap, str(SCRIPTS), state,
+                                 "run", "--repo", str(repo), "--task-id", task_id,
+                                 "--receipt", "task.receipt.json", "--authority-file", str(authority),
+                                 "--action", "test", "--acceptance-file", str(acceptance), "--",
+                                 sys.executable, str(adapter),
+                                 str(ROOT / "examples/task.receipt.example.json"), str(exit_code)],
+                                capture_output=True, text=True, timeout=30,
+                            )
+                            self.assertEqual(result.returncode, exit_code if state == "gone" else 2, result.stderr)
+                            task = json.loads((repo / f".007/tasks/{task_id}.task.json").read_text())
+                            event = json.loads((repo / f".007/events/{task_id}.event.json").read_text())
+                            self.assertEqual(event["task_id"], task_id)
+                            self.assertEqual(event["action"], "test")
+                            self.assertEqual(event["outcome"], "executed")
+                            self.assertEqual(event["exit_code"], exit_code)
+                            self.assertEqual(event["authority_sha256"], task["authority_sha256"])
+                            terminal = repo / f".007/receipts/{task_id}.receipt.json"
+                            self.assertEqual(terminal.exists(), accepted)
+                            self.assertEqual((repo / "gate.ran").exists(), accepted)
+                            if state != "gone":
+                                self.assertIn(f"executor cleanup incomplete: {state}", result.stderr)
+                            if accepted:
+                                stored = json.loads(terminal.read_text())
+                                self.assertEqual(stored["status"], "accepted")
+                                self.assertEqual(stored["authority_evidence"], "controlled")
+                                self.assertEqual(stored["acceptance_evidence"], "controlled")
+                        finally:
+                            (repo / "task.receipt.json").unlink(missing_ok=True)
+                            (repo / "gate.ran").unlink(missing_ok=True)
+
     def test_run_replaces_claimed_checks_with_controller_observed_acceptance(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")
@@ -848,7 +1337,9 @@ class DashboardTests(unittest.TestCase):
                 with self.subTest(state=state):
                     task_id = f"cleanup-{state}"
                     # the real kill still runs; only the reported state is substituted
-                    stub = lambda process, wait_s=2.0, state=state: (real_cleanup(process, wait_s), state)[1]
+                    def stub(process, wait_s=2.0):
+                        actual = real_cleanup(process, wait_s)
+                        return state if process.args == [sys.executable, "-c", "print('gate-ok')"] else actual
                     with mock.patch.object(cli, "kill_process_group", stub):
                         with self.assertRaisesRegex(
                             ValueError, f"acceptance cleanup incomplete: {state} for process group .*command exit 0, timed_out False",

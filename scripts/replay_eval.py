@@ -72,22 +72,25 @@ def kill_process_group(process, wait_s=2.0):
     except ProcessLookupError:
         return "gone"
     except PermissionError:
-        # EPERM: a member exists but cannot be signalled; observable, nothing more inferred.
+        # Initial signal denied: group absence is unconfirmed.
         return "cleanup-group-observable"
     try:
         process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         return "cleanup-child-unconfirmed"
     while True:
+        if time.monotonic() >= deadline:
+            return "cleanup-group-observable"
         try:
             os.killpg(process.pid, 0)
         except ProcessLookupError:
-            return "gone"
+            return "gone" if time.monotonic() <= deadline else "cleanup-group-observable"
         except PermissionError:
+            pass  # A transient poll denial is not success; await confirmed absence.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             return "cleanup-group-observable"
-        if time.monotonic() >= deadline:
-            return "cleanup-group-observable"
-        time.sleep(0.01)
+        time.sleep(min(0.01, remaining))
 
 
 def run(args, cwd=None, timeout=1800, input_text=None):

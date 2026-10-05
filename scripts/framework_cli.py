@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 import webbrowser
@@ -634,22 +635,25 @@ def kill_process_group(process, wait_s=2.0):
     except ProcessLookupError:
         return "gone"
     except PermissionError:
-        # EPERM: a member exists but cannot be signalled; observable, nothing more inferred.
+        # Initial signal denied: group absence is unconfirmed.
         return "cleanup-group-observable"
     try:
         process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         return "cleanup-child-unconfirmed"
     while True:
+        if time.monotonic() >= deadline:
+            return "cleanup-group-observable"
         try:
             os.killpg(process.pid, 0)
         except ProcessLookupError:
-            return "gone"
+            return "gone" if time.monotonic() <= deadline else "cleanup-group-observable"
         except PermissionError:
+            pass  # A transient poll denial is not success; await confirmed absence.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             return "cleanup-group-observable"
-        if time.monotonic() >= deadline:
-            return "cleanup-group-observable"
-        time.sleep(0.01)
+        time.sleep(min(0.01, remaining))
 
 
 def run_acceptance(root, task):
@@ -797,11 +801,48 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     }
     if task.get("authority_sha256"):
         environment["FRAMEWORK_007_AUTHORITY_SHA256"] = task["authority_sha256"]
-    completed = subprocess.run(command, cwd=root, env=environment)
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+            handler = signal.getsignal(sig)
+            if handler is not None:
+                previous[sig] = handler
+    shutdown_signal = None
+    def interrupted(signum, frame):
+        nonlocal shutdown_signal
+        if shutdown_signal is None:
+            shutdown_signal = signum
+            raise SystemExit(128 + signum)
+    completed = None
+    try:
+        for sig in previous:
+            if previous[sig] != signal.SIG_IGN:
+                signal.signal(sig, interrupted)
+        completed = subprocess.Popen(command, cwd=root, env=environment, start_new_session=True)
+        completed.wait()
+    finally:
+        try:
+            if completed is not None:
+                state = kill_process_group(completed)
+                if shutdown_signal is not None and state != "gone" and sys.stderr is not None:
+                    try:
+                        # Buffered stderr failure can replace the shutdown exit with 120.
+                        os.write(sys.stderr.fileno(),
+                                 f"executor cleanup incomplete: {state} for process group {completed.pid}\n".encode())
+                    except (OSError, ValueError):
+                        pass  # A best-effort diagnostic must not replace the original unwind.
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
     event = (
         write_controller_event(root, task, action, "executed", completed.returncode)
         if action else None
     )
+    if state != "gone":
+        raise ValueError(
+            f"executor cleanup incomplete: {state} for process group {completed.pid} "
+            f"(command exit {completed.returncode})"
+        )
     if completed.returncode:
         return completed.returncode, None
     if not receipt_path.is_file():
