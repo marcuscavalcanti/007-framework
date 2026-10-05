@@ -15,9 +15,13 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Require historical release tree
+        run: git cat-file -e '301b1aa30522e87a486088c79687a93d95d2aa4a^{tree}'
       - run: python -m py_compile scripts/*.py
       - run: python -m unittest discover -s tests -v
       - name: Verify release manifest
