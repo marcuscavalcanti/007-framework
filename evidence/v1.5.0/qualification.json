@@ -1,0 +1,82 @@
+{
+  "ci": {
+    "jobs": [
+      {
+        "attempt": 2,
+        "id": 111962119271,
+        "log_sha256": "8a0d4907e43d4f52969e880b0f43143b03b883fd958959f45bafb68b73c87240",
+        "observed_tests": 148,
+        "python": "3.11"
+      },
+      {
+        "attempt": 3,
+        "id": 111970825389,
+        "log_sha256": "1c50541c59ecfe268d9b4cf3f1e8e07604c256cf2aa2cd5e79d3a940f7e42e59",
+        "observed_tests": 148,
+        "python": "3.12"
+      },
+      {
+        "attempt": 2,
+        "id": 111962119007,
+        "log_sha256": "c01ff0f33806af8378b83b404e479c39dc356b7254e170c3b1a31087b3b528db",
+        "observed_tests": 148,
+        "python": "3.13"
+      }
+    ],
+    "prior_execution_failures": [
+      {
+        "attempt": 1,
+        "classification": "external hosted-runner allocation failure before test execution",
+        "job_id": 111953084580,
+        "python": "3.11",
+        "runner_id": 0,
+        "steps": 0
+      },
+      {
+        "attempt": 1,
+        "classification": "external hosted-runner allocation failure before test execution",
+        "job_id": 111953084593,
+        "python": "3.12",
+        "runner_id": 0,
+        "steps": 0
+      },
+      {
+        "attempt": 1,
+        "classification": "external hosted-runner allocation failure before test execution",
+        "job_id": 111953084302,
+        "python": "3.13",
+        "runner_id": 0,
+        "steps": 0
+      },
+      {
+        "attempt": 2,
+        "classification": "external hosted-runner allocation failure before test execution",
+        "job_id": 111962119251,
+        "python": "3.12",
+        "runner_id": 0,
+        "steps": 0
+      }
+    ],
+    "prior_failure_cause_limit": "Provider infrastructure root cause unknown; no test ran in these jobs.",
+    "release_manifest_step": "skipped",
+    "run_id": 37366568729,
+    "tested_commit": "d2cd9da1b10f3f5a7c90dbafd7bac0a0718e70b8"
+  },
+  "final_candidate_ci_observed": false,
+  "independent_review_verdicts": [
+    "reject",
+    "reject"
+  ],
+  "independent_review_verdicts_scope": "historical RC qualification, not the prepared stable review",
+  "review_record": {
+    "final_overlay_review_observed": false,
+    "path": "evidence/v1.5.0/adversarial-review.json",
+    "prepared_candidate_verdict": "reject",
+    "sha256": "82a4f5a93966e28d085a33e92460857f43415351afc018089a95659d7937846e"
+  },
+  "source_rc_commit": "d2cd9da1b10f3f5a7c90dbafd7bac0a0718e70b8",
+  "source_rc_manifest_sha256": "396331a0bf65c04d3c135be409c09da489bb0b2afd39c988367cf43f09b6e853",
+  "stable_approved": false,
+  "status": "local-candidate",
+  "version": "1.5.0"
+}

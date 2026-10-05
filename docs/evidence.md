@@ -11,7 +11,21 @@ delivery-quality gains. Repeated runs of one task do not add project diversity.
 Initial acceptance does not establish durability; missing observations remain
 unknown.
 
-## V1.5.0-rc.2 candidate boundary
+## V1.5.0 local stable-candidate boundary
+
+The [stable candidate](../evidence/v1.5.0/release-evidence.md) changes only
+packaging metadata, documentation and package checks. Runtime and all historical
+causal artifacts remain unchanged. The RC commit passed 148 tests and compile
+on Linux Python 3.11/3.13 in CI attempt 2 and Python 3.12 in attempt 3.
+That is RC compatibility evidence, not CI on the final stable bytes.
+Two RC reviews and one prepared-stable review returned reject. The public
+[review record](../evidence/v1.5.0/adversarial-review.json) preserves their final
+answers and the hash-bound counterproofs of the key-absence/test-reporting claims;
+no approval is inferred. The subsequent provenance-only overlay is not externally
+reviewed. No stable commit, tag or publication is claimed. Local package checks
+remain separate from historical causal results and establish no economic gain.
+
+## V1.5.0-rc.2 candidate boundary at preparation time
 
 The candidate packages acceptance/cleanup and explicit unavailable-cost support
 already present in source a3012ee. It changes no execution code. The public

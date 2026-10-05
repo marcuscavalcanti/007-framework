@@ -9,14 +9,14 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Status:** v1.5.0-rc.2 is a local release candidate, not a stable release.
-> It packages acceptance/cleanup hardening and hash-bound local mechanism evidence;
-> independent review, supported-version CI and publication remain pending.
+> **Status:** v1.5.0 is a prepared local stable candidate, not a published release.
+> Runtime is unchanged from the qualified RC. Linux CI passed on the RC commit;
+> approval, final-stable CI, commit, tag and publication remain pending.
 > The historical v1.4 real-task result remains narrow: both efforts passed 3/3,
 > with `medium` using 42.6% less estimated USD and 53.9% less wall time.
 > Neither result proves task-class superiority, complete code-review replacement
 > or D7/D30 durability. See [Evidence](docs/evidence.md) and the
-> [candidate gates](evidence/v1.5.0-rc.2/release-evidence.md).
+> [candidate gates](evidence/v1.5.0/release-evidence.md).
 
 ## What it gives you
 

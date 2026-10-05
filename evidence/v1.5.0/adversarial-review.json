@@ -1,0 +1,246 @@
+{
+  "claims": {
+    "counterproof_is_independent_approval": false,
+    "final_overlay_externally_reviewed": false,
+    "full_framework_causality": false,
+    "model_side_receipt_attested": false,
+    "source_hashes_are_independent_timestamps": false
+  },
+  "counterproof": {
+    "decoded_context_source_equal": true,
+    "disposition": "The concrete key-absence and test-reporting claims are refuted locally; original rejects remain unchanged.",
+    "earlier_rc_counterproofs": [
+      {
+        "cited_package_tests": {
+          "exit": 0,
+          "stderr_sha256": "694d004636e8e59a9efaa1135fb42a2c60deead557b15489ab71c0aebc90de66",
+          "tests": 2
+        },
+        "context_sha256": "2ea3dfdb22f82be2e2c211adcb29deaead2addabdf6d91ec047a851013e66564",
+        "context_source_byte_identical": true,
+        "counterproof_source_sha256": "ea51765bb864325f7dd2eeed490232a4ea718193d73eb7c6d879766890b55bd5",
+        "mutant_hash_reproduced": true,
+        "protocol_bytes": 1746,
+        "protocol_keys": 19
+      },
+      {
+        "cited_package_tests": {
+          "exit": 0,
+          "stderr_sha256": "6d60a18669d2ef494cd6f1ca77e9da545c1f614fabcfe9fbf051ef929393aeaa",
+          "tests": 2
+        },
+        "context_sha256": "a977b16e65efe177a23492c4ee80450d4b2bf0337c4899f5a21fd3a2cbb61deb",
+        "context_source_byte_identical": true,
+        "counterproof_source_sha256": "20306d051d427007c4cf9dc7911280f09691c6869223afd7df961b24e0f0fc96",
+        "mutant_hash_reproduced": true,
+        "protocol_bytes": 1746,
+        "protocol_keys": 19
+      }
+    ],
+    "fresh_binding_test": {
+      "exit": 0,
+      "stderr_sha256": "cde3ae5c16510ef01b297b75b6ea3ea0f9e80e4e9390b1d47d23023aa16c04be",
+      "tests": 1,
+      "wall_s": 0.086
+    },
+    "mutant_source_sha256": "6eb7f01fe6872c11f504d6ba76cabf7123a51beb1ec42dee9e9996899a1bed42",
+    "protocol_bytes": 1746,
+    "protocol_keys": 19,
+    "protocol_path": "evidence/v1.5.0-rc.2/mechanism-protocol.json",
+    "protocol_sha256": "dc2a3e6a8ded6ed0db25e9e5769aba479f5aac05e4dea2968e392058d2bd8f18",
+    "realized_pair_order": [
+      {
+        "arm": "CURRENT",
+        "replicate": 1
+      },
+      {
+        "arm": "MUTANT",
+        "replicate": 1
+      },
+      {
+        "arm": "MUTANT",
+        "replicate": 2
+      },
+      {
+        "arm": "CURRENT",
+        "replicate": 2
+      },
+      {
+        "arm": "CURRENT",
+        "replicate": 3
+      },
+      {
+        "arm": "MUTANT",
+        "replicate": 3
+      }
+    ],
+    "reported_local_suites": {
+      "Python 3.13": 148,
+      "Python 3.14": 148,
+      "package_checks": 16
+    },
+    "required_fields_present": {
+      "mutant_source_sha256": true,
+      "realized_pair_order": true,
+      "source_protocol_sha256": true
+    },
+    "source_protocol_sha256": "4c7f29fd0317be901596549f4e33075d047c63a273cb908246ca7094f1853a4d",
+    "verbatim_context_source_equal": true,
+    "verified_prior_local_logs": {
+      "stable-contract-green": {
+        "count": 16,
+        "exit": 0,
+        "stderr_sha256": "d4806a228748ceb3a0e917a0801979eaca485494a6d4a6893dad0e8776bc132d"
+      },
+      "suite-313": {
+        "count": 148,
+        "exit": 0,
+        "stderr_sha256": "24ba3661a2b3acda3943a827a4065a197e17c23a7af39da50f23489096334af7"
+      },
+      "suite-314": {
+        "count": 148,
+        "exit": 0,
+        "stderr_sha256": "967452ab8fed43c62a7e5a2c25f8e9df97c65e22df4e969cb319925b52487a28"
+      }
+    }
+  },
+  "effort": "high",
+  "final": {
+    "actual_charged_usd": "unmeasured",
+    "backend_effort": "unmeasured",
+    "cli_estimated_usd": 1.37022,
+    "context_sha256": "2dd982c34febb9ab3e30e4dcb95c3b184a4e11026451f7b639e059d8e1c78563",
+    "effort_requested": "high",
+    "model_observed": "claude-fable-5-1",
+    "no_fallback_observed": true,
+    "original_verdict": {
+      "blocking_findings": [
+        "B1: tests/test_package.py test_v15_rc_evidence_and_manifest_are_bound (~line 172) reads protocol['source_protocol_sha256'] but supplied evidence/v1.5.0-rc.2/mechanism-protocol.json has no such key -> KeyError on supplied bytes; no unittest run on candidate bytes is reported (archive_suite_executed false, no unittest exit in observations). Remedy: supply faithful protocol bytes or fix the assertion to compare the manifest-listed protocol hash, regenerate evidence/v1.5.0/manifest.sha256, report local test run."
+      ],
+      "declined_to_judge": [
+        "any SHA-256 attestation (cannot compute)",
+        "whether prior reject claims were actually refuted (no artifacts supplied)",
+        "latch/kill_process_group correctness beyond mutant-result consistency (runtime unchanged, out of scope)",
+        "RC->candidate delta of tests/test_package.py (not supplied)",
+        "cross-platform validity of macOS mechanism result vs Linux CI",
+        "wall-time/cost figures and archive reproducibility (reported only)",
+        "historical v1.0-v1.4 evidence contents (unchanged)"
+      ],
+      "nonblocking_findings": [
+        "N1: CHANGELOG.md/docs/evidence.md/evidence/v1.5.0/release-evidence.md assert the two reject verdicts' claim was 'refuted' with no shipped review or refutation artifact; ship a hash-bound record or reword to 'disputed'.",
+        "N2: qualification.json records CI attempts 2/2/3 without attempt-1 outcome/cause; record whether a test flaked.",
+        "N3: manifest binds pre-publication wording in CHANGELOG.md/README.md; publication will require manifest regeneration before the tag sha256sum check.",
+        "N4: cosmetic - stable gate test named *_rc_*; reject verdicts hard-coded in test assertion."
+      ],
+      "scope": "prepared-stable-candidate",
+      "unobserved_release_gates": [
+        "explicit Git author/committer identity",
+        "committed candidate",
+        "final-SHA CI on committed bytes",
+        "tag-only release-manifest CI step",
+        "tag/commit/artifact read-back",
+        "independent approval and human publication authority",
+        "v1.4 historical manifest check (needs commit 301b1aa)",
+        "local unittest run on candidate bytes",
+        "archive test suite execution",
+        "CI log hash verification"
+      ],
+      "verdict": "reject"
+    },
+    "review_text": "# Review: 007 v1.5.0 prepared-stable-candidate\n\n**Scope note.** Tools are disabled per your instructions, so this is pure inspection of the supplied bytes plus the reported local observations. I cannot compute any SHA-256, run any test, or see the RC version of `tests/test_package.py` (the supplied diff covers only the four Markdown/version files; the test file and three new evidence files are given as full candidate bytes without an RC delta).\n\n## What checks out by inspection\n\n- **Internal hash cross-references are consistent** (string equality only, not attested): `mechanism-result.json.runtime_source_sha256` = manifest `scripts/framework_cli.py` (`4ef2e3da\u2026`); `result.target_test_sha256` = `protocol.test_sha256` = manifest `tests/test_dashboard.py` (`a87cb091\u2026`); `protocol.mutation_patch_sha256` = manifest `mechanism-mutant.patch` (`f9469970\u2026`); `qualification.source_rc_manifest_sha256` = manifest entry for `evidence/v1.5.0-rc.2/manifest.sha256` (`396331a0\u2026`); `qualification.ci.tested_commit` = `source_rc_commit` = reported `source_rc_commit`; the job set matches the test's expected `{(3.11,2,148),(3.13,2,148),(3.12,3,148)}`.\n- **Manifest shape**: 78 entries, no duplicates, excludes itself; 78 + 1 = reported `public_files: 79` / `members_verified: 79`. All eight changed files are listed, and none of the listed files embed their own hash (no fixed-point problem).\n- **Mechanism evidence is self-consistent**: 12 cells = 3 replicates \u00d7 {MUTANT,CURRENT} \u00d7 {target,control}, unique; `exit==1` only for MUTANT/target; all `timeout:false`, `matched:true`; `failure_count/error_count/assertion_message` match `test_v15_rc_failures_have_observed_assertion_evidence`; stdout hash is the empty-string SHA-256 in every cell. The mutant (`if shutdown_signal is None:` \u2192 `if True:`) semantically matches the claim: a second scoped signal during `finally` cleanup re-raises `SystemExit` inside `kill_process_group`, aborting it, so the executor survives \u2014 exactly the `ProcessLookupError not raised : executor survived shutdown cleanup` signature in `tests/test_dashboard.py:811-812`. The patch hunk (`@@ -810`) is consistent with `run_task` at `scripts/framework_cli.py:767-857`.\n- **Docs/version delta**: `SKILL.md` `version: 1.5.0` satisfies `test_skill_identity_and_version`; all new `.md` links (`evidence/v1.5.0/release-evidence.md`, `../evidence/v1.5.0/release-evidence.md`, `../v1.5.0-rc.2/release-evidence.md`) resolve to supplied files; README/evidence wording does not match the forbidden `controlled (mechanism|decision|result)` regex; status wording correctly says \"prepared local stable candidate, not a published release\" and does not claim approval, final CI, tag or publication. CI workflow tag step resolves to `evidence/v1.5.0/manifest.sha256` for a `v1.5.0` tag.\n- Reported observations: `runtime_changes: 0`, `new_dependencies: 0`, `historical_evidence_changes: 0`, `compile_exit: 0`, `diff_check_exit: 0`, two builds byte-identical \u2014 consistent with the \"no new runtime complexity\" goal.\n\n## Blocking finding\n\n**B1 \u2014 The stable-candidate binding test, as supplied, cannot pass; and no test execution on candidate bytes is reported.**\n\n- `tests/test_package.py` (`test_v15_rc_evidence_and_manifest_are_bound`, ~line 172):\n  `self.assertEqual(result[\"source_protocol_sha256\"], protocol[\"source_protocol_sha256\"])`\n- The supplied `evidence/v1.5.0-rc.2/mechanism-protocol.json` (both the verbatim block and the \"decoded view\") has keys `claim, control, expected_control_exit, expected_mutant_failure, limits, mutation_patch_sha256, replicates, retries, schema, seed, target, test_sha256` \u2014 **no `source_protocol_sha256`**. On those bytes this line raises `KeyError`, so the one test that binds the new manifest, `qualification.json`, and the mechanism artifacts together errors out.\n- This cannot be reconciled with \"RC CI passed 148 tests\" by inspection: the RC cannot have run this test body as written (it requires `evidence/v1.5.0/manifest.sha256`, which is new in this candidate), so the test was rewritten for the candidate and either (a) this assertion is new and broken, or (b) the supplied protocol JSON is not a faithful rendering of the manifest-bound bytes. Either way the supplied source/evidence is materially inconsistent.\n- The reported observations contain `compile_exit`, `cli_help_exit`, `diff_check_exit` \u2014 but **no unittest exit** on the candidate bytes, and `archive_suite_executed: false`. `docs/evidence.md` and `release-evidence.md` say local package verification is \"captured separately\", but nothing in `evidence/v1.5.0/` or the observations carries it. For a candidate whose entire delta is docs + a test that checks those docs, a reported run of that test on the final bytes is the proportional evidence, and it is absent.\n- **User impact**: proceeding to commit + final-SHA CI would, on supplied bytes, produce a red CI on the stable candidate's own integrity test and force another edit + manifest regeneration \u2014 the exact step this review is gating.\n- **Smallest remedy**: if the real protocol file contains the key, re-supply faithful bytes plus a reported `python -m unittest discover -s tests` exit/summary on the candidate tree. If it does not, replace the assertion with a comparison that the shipped bytes can satisfy (e.g. `hashlib.sha256((directory/\"mechanism-protocol.json\").read_bytes()).hexdigest() == listed[\"evidence/v1.5.0-rc.2/mechanism-protocol.json\"]`), regenerate `evidence/v1.5.0/manifest.sha256` (only the `tests/test_package.py` entry changes), and report the local test run.\n\n## Non-blocking findings\n\n**N1 \u2014 Unbound \"refuted\" claim about the two reject verdicts.** `CHANGELOG.md` (+11), `docs/evidence.md` (+18-19), `evidence/v1.5.0/release-evidence.md` (\"Their sole repeated source claim was refuted by exact bytes and executable checks\") assert a refutation, but neither the reviews nor the refutation artifact ship (v1.4 shipped `adversarial-review.json` with history; v1.5.0 ships only the strings `[\"reject\",\"reject\"]`). Users assessing trust get a self-serving conclusion with nothing to check. Remedy: ship a sanitized hash-bound review record containing the claim and the refuting check, or reword to \"disputed; not re-reviewed\" and drop \"refuted\". Fold into the same re-prep as B1 since the manifest regenerates anyway.\n\n**N2 \u2014 CI re-run attempts are undocumented.** `qualification.json` records attempts 2/2/3 but not why attempt 1 (and attempt 2 for 3.12) did not pass. README's \"Linux CI passed on the RC commit\" is literally true but omits that it needed re-runs. If a process/signal test flaked, that is relevant to the latch claim. Remedy: add `prior_attempt_outcome` (infra vs. test failure, and which test) per job.\n\n**N3 \u2014 Manifest binds pre-publication wording.** `CHANGELOG.md` \"[1.5.0] - Unreleased stable candidate\" and README \"not a published release\" are inside the manifest, so publication will necessarily invalidate `evidence/v1.5.0/manifest.sha256` and require regeneration before the tag's `sha256sum --check` step. Not a defect for this step; note it in the remaining-gates list so nobody tags the current manifest.\n\n**N4 \u2014 Cosmetic.** The test is named `test_v15_rc_evidence\u2026` but is the stable-candidate gate; `qualification.json` hard-codes `[\"reject\",\"reject\"]` into a test assertion, so obtaining approval later requires touching both the record and the test.\n\n## Unobserved release gates (not source bugs)\n\nExplicit Git author/committer identity (`git_identity_explicitly_approved: false`); committed candidate (`candidate_committed: false`); final-SHA CI on committed bytes (`final_candidate_ci_observed: false`); tag-only release-manifest CI step (skipped on RC run); tag/commit/artifact read-back; independent approval and human publication authority; v1.4 historical manifest check (requires commit `301b1aa\u2026`; test early-returns without it); local unittest run on candidate bytes (not reported, see B1); archive test suite (`archive_suite_executed: false`); CI log hashes (external logs, unverifiable here).\n\n## Declined to judge\n\n- Any hash attestation \u2014 I cannot compute SHA-256; all matches above are string comparisons between supplied artifacts.\n- Whether the prior reviewers' claim was in fact refuted \u2014 no review or refutation artifact supplied.\n- Correctness of the first-signal latch and `kill_process_group` beyond mutant/result consistency \u2014 runtime is unchanged and RC-qualified; out of scope.\n- The exact RC\u2192candidate delta of `tests/test_package.py` \u2014 not supplied, so I cannot say whether the B1 assertion is inherited or new.\n- Cross-platform validity of the mechanism result (macOS arm64 / Python 3.14.7) versus Linux CI \u2014 explicitly disclaimed by the candidate.\n- Wall-time/cost figures (`cost_usd: unmeasured`) and the archive reproducibility claim \u2014 reported only.\n- Contents of historical v1.0\u2013v1.4 evidence \u2014 unchanged, out of scope.\n\nRELEASE_REVIEW_JSON: {\"verdict\":\"reject\",\"scope\":\"prepared-stable-candidate\",\"blocking_findings\":[\"B1: tests/test_package.py test_v15_rc_evidence_and_manifest_are_bound (~line 172) reads protocol['source_protocol_sha256'] but supplied evidence/v1.5.0-rc.2/mechanism-protocol.json has no such key -> KeyError on supplied bytes; no unittest run on candidate bytes is reported (archive_suite_executed false, no unittest exit in observations). Remedy: supply faithful protocol bytes or fix the assertion to compare the manifest-listed protocol hash, regenerate evidence/v1.5.0/manifest.sha256, report local test run.\"],\"nonblocking_findings\":[\"N1: CHANGELOG.md/docs/evidence.md/evidence/v1.5.0/release-evidence.md assert the two reject verdicts' claim was 'refuted' with no shipped review or refutation artifact; ship a hash-bound record or reword to 'disputed'.\",\"N2: qualification.json records CI attempts 2/2/3 without attempt-1 outcome/cause; record whether a test flaked.\",\"N3: manifest binds pre-publication wording in CHANGELOG.md/README.md; publication will require manifest regeneration before the tag sha256sum check.\",\"N4: cosmetic - stable gate test named *_rc_*; reject verdicts hard-coded in test assertion.\"],\"unobserved_release_gates\":[\"explicit Git author/committer identity\",\"committed candidate\",\"final-SHA CI on committed bytes\",\"tag-only release-manifest CI step\",\"tag/commit/artifact read-back\",\"independent approval and human publication authority\",\"v1.4 historical manifest check (needs commit 301b1aa)\",\"local unittest run on candidate bytes\",\"archive test suite execution\",\"CI log hash verification\"],\"declined_to_judge\":[\"any SHA-256 attestation (cannot compute)\",\"whether prior reject claims were actually refuted (no artifacts supplied)\",\"latch/kill_process_group correctness beyond mutant-result consistency (runtime unchanged, out of scope)\",\"RC->candidate delta of tests/test_package.py (not supplied)\",\"cross-platform validity of macOS mechanism result vs Linux CI\",\"wall-time/cost figures and archive reproducibility (reported only)\",\"historical v1.0-v1.4 evidence contents (unchanged)\"]}\n",
+    "review_text_sha256": "33c7c09968511f2ef8ec25939af643563297e8aba84c99bdd03b73416e7a1688",
+    "scope": "prepared-stable-candidate",
+    "source_result_sha256": "649742edb03058044cdda4246b67ff396ff9c62aa4ca9c7e11b3e21146f97593",
+    "tools_observed": [],
+    "verdict": "reject"
+  },
+  "history": [
+    {
+      "actual_charged_usd": "unmeasured",
+      "backend_effort": "unmeasured",
+      "cli_estimated_usd": 1.16739,
+      "context_sha256": "2ea3dfdb22f82be2e2c211adcb29deaead2addabdf6d91ec047a851013e66564",
+      "effort_requested": "high",
+      "model_observed": "claude-fable-5-1",
+      "no_fallback_observed": true,
+      "original_verdict": {
+        "blocking_findings": [
+          "tests/test_package.py (~L158, ~L202) reads protocol['source_protocol_sha256'] and protocol['mutant_source_sha256'], but the supplied committed evidence/v1.5.0-rc.2/mechanism-protocol.json contains neither key (nor realized_pair_order cited by release-evidence.md); against these bytes the suite errors, so the reported 148/148 exit-0 captures and the supplied source are mutually inconsistent. Remedy: confirm the committed protocol bytes against manifest digest dc2a3e6a\u2026; either resupply the packet or add the three keys, regenerate that one manifest line, recommit and recapture."
+        ],
+        "nonblocking_findings": [
+          "release-evidence.md reproduce steps omit the ancestor-git-repo hazard (add git init in $MUTANT)",
+          "git commit identity auto-inferred; set/review explicitly before publication",
+          "receipt-schema.md anchor #cost-unavailable-explicit-opt-in is not covered by the link test; confirm heading exists",
+          "two control cells share stderr digest bd9fcf70\u2026; check original logs for timing coincidence vs duplication"
+        ],
+        "scope": "committed-rc-qualification",
+        "unobserved_release_gates": [
+          "Linux CI matrix 3.11/3.12/3.13 on d2cd9da",
+          "independent hash-bound review of rc.2 bytes",
+          "fresh native checks against the exact manifest after remedy",
+          "stable manifest and tag",
+          "explicit publication authorization",
+          "publication and exact tag/commit/artifact read-back",
+          "explicit git identity review"
+        ],
+        "verdict": "reject"
+      },
+      "review_text": "I'm answering directly from the supplied blocks: the task forbids tools, file writes and subagents, and the working directory is an empty non-git scratch dir, so there is nothing to explore or plan around \u2014 the deliverable is the review itself.\n\n# RC.2 committed-candidate qualification \u2014 review\n\n## Verdict: reject (for this step), on an evidence/source inconsistency, not a runtime defect\n\n### Blocking finding\n\n**B1 \u2014 `tests/test_package.py` indexes keys that the supplied committed `mechanism-protocol.json` does not contain; the reported 148/148 exit-0 captures cannot have run against these bytes.**\n\n- `tests/test_package.py:\u2248158` (`test_v15_rc_evidence_and_manifest_are_bound`): `protocol[\"source_protocol_sha256\"]`.\n- `tests/test_package.py:\u2248202` (`test_v15_rc_mutation_patch_reproduces_exact_mutant`): `protocol[\"mutant_source_sha256\"]`.\n- The supplied `evidence/v1.5.0-rc.2/mechanism-protocol.json` (presented as complete, keys sorted) has only: `claim, control, expected_control_exit, expected_mutant_failure, limits, mutation_patch_sha256, replicates, retries, schema, seed, target, test_sha256`. No `source_protocol_sha256`, no `mutant_source_sha256`, no `realized_pair_order`.\n\nConsequences:\n1. Against these bytes both tests raise `KeyError` \u2192 two errors \u2192 suite exit 1. The observed readbacks report `suite-313-host` / `suite-314-host` at exit 0 with 148 tests. One of these is wrong: either the review packet is not the committed tree (manifest line `dc2a3e6a\u2026  evidence/v1.5.0-rc.2/mechanism-protocol.json` would decide this, but I cannot hash), or the captures are not of commit `d2cd9da`.\n2. `release-evidence.md` (\"Observed mechanism and provenance\") states the mutant source SHA is \"now bound in the public protocol\", and (\"Reproduce the focal contrast\") that `realized_pair_order` is in `mechanism-protocol.json`. Neither is true of the supplied file. The result file carries `source_protocol_sha256` and `mutant`-related binding only via the patch hash; the \"resulting mutant source SHA\" is bound nowhere in the supplied evidence.\n\nThis is squarely \"source or evidence has a material blocker\": the commit's acceptance-test integrity rests on hash-binding assertions whose inputs, as supplied, do not exist. I am not inferring a code defect in `framework_cli.py`; the runtime base is untouched and the 12-cell contrast itself remains internally consistent (see below).\n\n**Narrowest remedy:** re-supply the committed `mechanism-protocol.json` bytes and confirm `sha256 == dc2a3e6a\u2026`.\n- If the committed file does contain the three keys, the review packet was wrong; resubmit the packet (no code change) so review is hash-bound, and keep the existing captures.\n- If it does not, add `source_protocol_sha256` (= `4c7f29fd\u2026`, matching `mechanism-result.json`), `mutant_source_sha256` (the SHA of `framework_cli.py` with the one-line mutation) and `realized_pair_order` to the protocol, regenerate the single manifest line for that file, recommit on top of `a3012ee`, and recapture the suite. Nothing else in the 11 paths needs to change.\n\n### What checked out at source level (reported, not verified)\n\n- Cross-file bindings that *are* present agree: protocol `test_sha256` = result `target_test_sha256` = manifest `tests/test_dashboard.py` (`a87cb091\u2026`); result `runtime_source_sha256` = manifest `scripts/framework_cli.py` (`4ef2e3da\u2026`); protocol `mutation_patch_sha256` = manifest `mechanism-mutant.patch` (`f9469970\u2026`); result `head` = parent `a3012ee`; v1.4 manifest digest in `test_v14_release_manifest_matches_public_bytes` (`af18a8d8\u2026`) matches its rc.2 manifest line.\n- Manifest: 75 entries + itself = 76, matching `public_files_including_manifest`; all 11 changed paths that are public are listed, including `tests/test_package.py` (self-binding is intentional and the stated OLD/NEW delta is one test line + that hash).\n- 12 cells: unique `(replicate, arm, scenario)` set is complete; exit 1 only on `MUTANT/target`; `failure_count`/`error_count`/`assertion_message` fields match `test_v15_rc_failures_have_observed_assertion_evidence` exactly; all stdout digests are the empty-string SHA, consistent with unittest writing to stderr. 144 \u2192 148 tests equals the four new `test_v15_rc_*` methods.\n- `mechanism-mutant.patch` hunk (`@@ -810,7 +810,7 @@`) is well-formed, 3/3 context, and matches the test's `source.replace(old, b\"        if True:\\n\", 1)` with the unique 8-space-indented guard. The mutation plausibly causes every subsequent injected signal in `test_dashboard.py:765-771` to re-raise `SystemExit`, interrupting cleanup, which is what the `ProcessLookupError not raised` assertion at `test_dashboard.py:803-804` detects.\n- The new TMPDIR guard (`tests/test_package.py:\u2248204-218`) is sound: child interpreter re-reads `TMPDIR`, `ROOT` is absolute, the inner test's own `git init` makes `git apply` resolve paths at the temp root rather than an ancestor repo's root. Works on `ubuntu-latest` (git present, no identity needed for `init`/`apply`).\n- Claim language in README/docs/evidence.md/CHANGELOG stays within the stated boundaries (local latch mechanism only; no ROI, cross-platform, D7/D30, review-replacement or timestamp-attestation claims; \"not a stable release\" stated).\n\n### Nonblocking findings\n\n- **N1** `release-evidence.md` \"Reproduce the focal contrast\": the operator instructions (`git -C \"$MUTANT\" apply \u2026` on a \"disposable copy\") don't warn about the ancestor-git-repo hazard the new test guards against; if `$MUTANT` sits under an unrelated repo and isn't itself a repo root, `git apply` can silently filter the path. Add `git -C \"$MUTANT\" init -q` (or equivalent) to the steps.\n- **N2** Commit identity was auto-inferred by Git (`git_identity` in readbacks). Must be explicitly set/reviewed before any public publication; not a defect of these bytes.\n- **N3** `references/receipt-schema.md` adds an intra-page anchor `#cost-unavailable-explicit-opt-in`; `test_local_markdown_links_exist` only matches `.md` targets, so the anchor's existence is unchecked. Confirm the heading exists in the unchanged part of the file.\n- **N4** Two cells (replicate 2 `CURRENT/control`, replicate 3 `MUTANT/control`) share stderr digest `bd9fcf70\u2026`. Plausible only if unittest's timing line coincided; harmless if so, but worth a glance at the private logs since it is the one place where \"original hash-verified logs\" would show whether a cell was copied.\n\n### Verification gaps (cannot close without execution)\n\n- No hashing: manifest self-consistency, the `dc2a3e6a\u2026` protocol digest (which decides B1), and the `4c7f29fd\u2026` / `b919d48a\u2026` source-record digests are unverified.\n- Captures `suite-313-host`/`suite-314-host` are macOS/3.14.7 only; nothing on 3.11/3.12/3.13 Linux has been observed for `d2cd9da`.\n- Public log digests do not supply raw logs; the per-cell assertion fields are therefore taken on report.\n\nRELEASE_REVIEW_JSON: {\"verdict\":\"reject\",\"scope\":\"committed-rc-qualification\",\"blocking_findings\":[\"tests/test_package.py (~L158, ~L202) reads protocol['source_protocol_sha256'] and protocol['mutant_source_sha256'], but the supplied committed evidence/v1.5.0-rc.2/mechanism-protocol.json contains neither key (nor realized_pair_order cited by release-evidence.md); against these bytes the suite errors, so the reported 148/148 exit-0 captures and the supplied source are mutually inconsistent. Remedy: confirm the committed protocol bytes against manifest digest dc2a3e6a\u2026; either resupply the packet or add the three keys, regenerate that one manifest line, recommit and recapture.\"],\"nonblocking_findings\":[\"release-evidence.md reproduce steps omit the ancestor-git-repo hazard (add git init in $MUTANT)\",\"git commit identity auto-inferred; set/review explicitly before publication\",\"receipt-schema.md anchor #cost-unavailable-explicit-opt-in is not covered by the link test; confirm heading exists\",\"two control cells share stderr digest bd9fcf70\u2026; check original logs for timing coincidence vs duplication\"],\"unobserved_release_gates\":[\"Linux CI matrix 3.11/3.12/3.13 on d2cd9da\",\"independent hash-bound review of rc.2 bytes\",\"fresh native checks against the exact manifest after remedy\",\"stable manifest and tag\",\"explicit publication authorization\",\"publication and exact tag/commit/artifact read-back\",\"explicit git identity review\"]}\n",
+      "review_text_sha256": "368f63f595a4544a2144bdb5dc88cdfc2ad3ccdf51d91a97aa6cb74e21b780d7",
+      "scope": "committed-rc-qualification",
+      "source_result_sha256": "d3cc456b0b6302dd06f4702ec523a0d6befd61cf181a953c9acc8c3b696c4922",
+      "tools_observed": [],
+      "verdict": "reject"
+    },
+    {
+      "actual_charged_usd": "unmeasured",
+      "backend_effort": "unmeasured",
+      "cli_estimated_usd": 1.044904,
+      "context_sha256": "a977b16e65efe177a23492c4ee80450d4b2bf0337c4899f5a21fd3a2cbb61deb",
+      "effort_requested": "high",
+      "model_observed": "claude-fable-5-1",
+      "no_fallback_observed": true,
+      "original_verdict": {
+        "blocking_findings": [
+          "evidence/v1.5.0-rc.2/mechanism-protocol.json lacks source_protocol_sha256, mutant_source_sha256 and realized_pair_order, which tests/test_package.py:158 and :202 and release-evidence.md require; as supplied the acceptance tests error, contradicting all reported 148-pass captures, so either the supplied bytes are not the commit or the captures are not of this commit"
+        ],
+        "nonblocking_findings": [
+          "auto-inferred Git identity; fixing it changes the SHA and invalidates existing CI/native captures",
+          "CI matrix 3.11-3.13 has no overlap with the Python 3.14.7/macOS host that produced the mechanism result",
+          "three control cells share stderr digest bd9fcf70 while other cells differ; plausible but unverifiable without raw logs",
+          "receipt-schema.md anchor #cost-unavailable-explicit-opt-in is outside the supplied delta and not covered by the link test",
+          "cosmetic stray blank lines in test_package.py and release-evidence.md"
+        ],
+        "scope": "committed-rc-qualification",
+        "unobserved_release_gates": [
+          "Linux CI matrix for candidate SHA (3.12 queued, run not concluded)",
+          "independent hash-bound review of rc.2 bytes",
+          "stable manifest and tag",
+          "explicit publication authorization",
+          "publication and tag/commit/artifact read-back",
+          "explicit Git identity review before publication"
+        ],
+        "verdict": "reject"
+      },
+      "review_text": "# RC.2 committed-candidate qualification review\n\nScope: source-level judgment on the supplied committed bytes plus reported captures. I could not execute or hash anything; where a finding depends on a reported capture I say so.\n\n## Blocking finding\n\n**B1 \u2014 The committed `mechanism-protocol.json` does not contain the fields its own acceptance tests and public evidence document require.**\n\nThe supplied protocol (both the verbatim block and the decoded one-field-per-line view) has exactly these keys: `claim, control, expected_control_exit, expected_mutant_failure, limits, mutation_patch_sha256, replicates, retries, schema, seed, target, test_sha256`. Three required keys are absent:\n\n| Missing key | Consumer in the same commit |\n|---|---|\n| `source_protocol_sha256` | `tests/test_package.py:158` \u2014 `self.assertEqual(result[\"source_protocol_sha256\"], protocol[\"source_protocol_sha256\"])` |\n| `mutant_source_sha256` | `tests/test_package.py:202` \u2014 `self.assertEqual(hashlib.sha256(mutated).hexdigest(), protocol[\"mutant_source_sha256\"])`; also `release-evidence.md` \"Reproduce\" section: \"Compare the resulting mutant source SHA with `mutant_source_sha256`\" and the provenance paragraph \"The exact mutant patch and resulting mutant source SHA are now bound in the public protocol\" |\n| `realized_pair_order` | `release-evidence.md` \"Reproduce\" section: \"The original pair order is in `realized_pair_order` in mechanism-protocol.json\" |\n\nConsequence on the source as supplied: `test_v15_rc_evidence_and_manifest_are_bound` and `test_v15_rc_mutation_patch_reproduces_exact_mutant` raise `KeyError` (test errors, non-zero suite exit), and the isolation target `test_v15_rc_mutation_patch_does_not_inherit_tmpdir_git_repo` (`tests/test_package.py:204-218`) fails too because its child run of `reproduces_exact_mutant` cannot exit 0. That is incompatible with every reported capture (`suite-313-host`/`suite-314-host` exit 0, 148 tests; CI jobs 3.11/3.13 success, 148 tests; 12/12 matched isolation contrast with NEW target exit 0).\n\nSo one of two things is true, and I cannot tell which: (a) the \"byte-identical\" protocol block is not the committed bytes whose manifest digest is `dc2a3e6a\u2026` (`manifest.sha256`, `evidence/v1.5.0-rc.2/mechanism-protocol.json` line), in which case the review package is not reviewing the commit; or (b) the protocol really lacks these fields and the captures are not of commit `d2cd9da\u2026`. Either way the hash-binding story the candidate rests on \u2014 tests \u21c4 protocol \u21c4 result \u21c4 manifest \u2014 is not demonstrated by the supplied material, and the public reproduction instructions point at non-existent fields. This is a material blocker for the next gate, not an unobserved-CI issue.\n\n**Narrowest remedy:** re-supply (or, if genuinely missing, add) the three fields in `evidence/v1.5.0-rc.2/mechanism-protocol.json` with the already-known values where they exist (`source_protocol_sha256` = `4c7f29fd\u2026` from `mechanism-result.json`; `mutant_source_sha256` = the hash of the patched `scripts/framework_cli.py`; `realized_pair_order` = the six `pairs` entries actually run), update the single manifest line for that file, and recapture native + CI. No runtime change, no new scope.\n\n## Nonblocking findings\n\n- **N1** \u2014 Git identity was auto-inferred (readback `git_identity`). Correcting it before publication amends the commit, producing a new SHA; CI run 37366568729 and both native captures then no longer attest the final SHA and must be re-observed. Plan for that rather than discovering it at tag time.\n- **N2** \u2014 `ci.yml` matrix is 3.11/3.12/3.13; the mechanism result and most local qualification are Python 3.14.7/macOS arm64 (`mechanism-result.json` `python`, `host_family`). Documented honestly in `release-evidence.md` and `docs/evidence.md`; just note that the mechanism contrast has no observed run on any CI-supported interpreter.\n- **N3** \u2014 Three control cells (CURRENT r2, MUTANT r2, MUTANT r3) share `stderr_sha256` `bd9fcf70\u2026` while the other nine cells all differ. Identical unittest stderr implies identical `Ran 1 test in \u2026s` timing text. Plausible, but with raw logs not public it cannot be checked; worth a one-line note in `release-evidence.md` so a reproducer isn't puzzled.\n- **N4** \u2014 `references/receipt-schema.md` delta links `#cost-unavailable-explicit-opt-in`; `test_local_markdown_links_exist` (`tests/test_package.py:21-30`) only matches `.md` targets, so an anchor-only link is unchecked and the target section is outside the supplied delta. Confirm the heading exists.\n- **N5** \u2014 Cosmetic: stray blank lines inside the `for argv in (\u2026)` tuple (`tests/test_package.py:194-197`) and inside `subprocess.run(` args (`:208-212`), and around fenced blocks in `release-evidence.md`. Harmless; a formatting pass would churn `test_package.py`'s manifest hash, so defer or fold into the B1 recapture.\n\n## What checks out at source level\n\n- Manifest cross-references are self-consistent where keys exist: `mutation_patch_sha256` `f9469970\u2026` = manifest line for `mechanism-mutant.patch`; `test_sha256`/`target_test_sha256` `a87cb091\u2026` = manifest `tests/test_dashboard.py`; `runtime_source_sha256` `4ef2e3da\u2026` = manifest `scripts/framework_cli.py`; `evidence/v1.4.0/manifest.sha256` `af18a8d8\u2026` = the literal in `test_v14_release_manifest_matches_public_bytes` (`:129`). Manifest correctly excludes itself.\n- `mechanism-result.json` satisfies every assertion in `test_v15_rc_failures_have_observed_assertion_evidence` and the cell-shape checks at `:166-176` (12 unique cells, exit 1 only for MUTANT/target, all `timeout:false`, `matched:true`, error_count 0).\n- Mutant patch: hunk `@@ -810,7 +810,7 @@` has 3+1+3 context lines each side; `-`/`+` lines match the `old`/`if True:` bytes asserted at `:187,201`. The mutation semantically defeats the latch (every repeated signal re-raises `SystemExit` during `kill_process_group`), matching the historical assertion at `tests/test_dashboard.py:803` and the recorded failure message.\n- Isolation fix (`:190`, `git init -q` in the nested tempdir) is the right minimal cause-level remedy: `git apply` inside an ancestor repo resolves patch paths against that repo's root, which explains OLD target exit 1 / NEW exit 0 across 3/3 paired replicates with controls unchanged.\n- Version/doc delta is consistent: `SKILL.md` `1.5.0-rc.2` matches the regex at `:19`; README/CHANGELOG/docs claims stay within the stated boundary (no ROI, no cross-platform, no determinism-of-scheduling claims); `test_current_narrow_result_is_not_called_controlled` is not tripped by the new prose. Runtime delta 0, dependencies 0, parent `a3012ee` matches `result.head`.\n\n## Verification gaps (not defects)\n\nLinux CI 3.12 queued / matrix not qualified for the candidate SHA; independent hash-bound review of rc.2 bytes; stable manifest + tag; explicit publication authorization and tag/commit/artifact read-back; explicit Git identity review. None are waived; none are the reason for the verdict.\n\n## Verdict\n\nReject for this step solely on B1: the supplied committed protocol cannot satisfy the committed tests and documentation that cite it, and the reported green captures therefore cannot be reconciled with the supplied bytes. Resolve B1 (re-supply true bytes or add the three fields + one manifest line), recapture, and this candidate is otherwise well-bounded and ready to proceed.\n\nRELEASE_REVIEW_JSON: {\"verdict\":\"reject\",\"scope\":\"committed-rc-qualification\",\"blocking_findings\":[\"evidence/v1.5.0-rc.2/mechanism-protocol.json lacks source_protocol_sha256, mutant_source_sha256 and realized_pair_order, which tests/test_package.py:158 and :202 and release-evidence.md require; as supplied the acceptance tests error, contradicting all reported 148-pass captures, so either the supplied bytes are not the commit or the captures are not of this commit\"],\"nonblocking_findings\":[\"auto-inferred Git identity; fixing it changes the SHA and invalidates existing CI/native captures\",\"CI matrix 3.11-3.13 has no overlap with the Python 3.14.7/macOS host that produced the mechanism result\",\"three control cells share stderr digest bd9fcf70 while other cells differ; plausible but unverifiable without raw logs\",\"receipt-schema.md anchor #cost-unavailable-explicit-opt-in is outside the supplied delta and not covered by the link test\",\"cosmetic stray blank lines in test_package.py and release-evidence.md\"],\"unobserved_release_gates\":[\"Linux CI matrix for candidate SHA (3.12 queued, run not concluded)\",\"independent hash-bound review of rc.2 bytes\",\"stable manifest and tag\",\"explicit publication authorization\",\"publication and tag/commit/artifact read-back\",\"explicit Git identity review before publication\"]}\n",
+      "review_text_sha256": "c6193baca2ba5298bc6ea16d3a9554a6d594cff286295cb84fb7f937faa5c8b7",
+      "scope": "committed-rc-qualification",
+      "source_result_sha256": "04b4ed9f660c86c4a9f33c9d5c28d62ecbf40beae9397056bfe382b877f30bc5",
+      "tools_observed": [],
+      "verdict": "reject"
+    }
+  ],
+  "independent_approval": "unobserved",
+  "limits": [
+    "The origin of the contradictory model reading is unknown.",
+    "Raw streams and logs remain private; their digests are not independent attestation.",
+    "This public provenance overlay was not reviewed by a model.",
+    "Local mutation/control evidence is mechanism-scoped, not universal review accuracy, ROI or deterministic scheduling.",
+    "Explicit Git identity, committed final-byte CI, independent approval and publication authority/read-back remain gates."
+  ],
+  "reviewed_rc_commit": "d2cd9da1b10f3f5a7c90dbafd7bac0a0718e70b8",
+  "reviewed_stable_manifest_sha256": "1117dfab839ee47963ab456551e77a6cf3af70d21522eea67863779c79b92f29",
+  "reviewer": "anthropic/claude-fable-5-1",
+  "schema": "007-framework/adversarial-review/v1",
+  "tools": false
+}

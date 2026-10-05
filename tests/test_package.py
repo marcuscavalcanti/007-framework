@@ -16,7 +16,7 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.5\.0-rc\.2$")
+        self.assertRegex(skill, r"(?m)^  version: 1\.5\.0$")
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))
@@ -141,8 +141,8 @@ class PackageContractTests(unittest.TestCase):
 
     def test_v15_rc_evidence_and_manifest_are_bound(self):
         directory = ROOT / "evidence/v1.5.0-rc.2"
-        manifest = directory / "manifest.sha256"
-        self.assertTrue(manifest.is_file(), "RC evidence manifest missing")
+        manifest = ROOT / "evidence/v1.5.0/manifest.sha256"
+        self.assertTrue(manifest.is_file(), "stable candidate manifest missing")
         listed = {}
         for line in manifest.read_text().splitlines():
             digest, name = line.split("  ", 1)
@@ -152,6 +152,18 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("SKILL.md", listed)
         self.assertIn("scripts/framework_cli.py", listed)
         self.assertIn("tests/test_package.py", listed)
+        qualification = json.loads((ROOT / "evidence/v1.5.0/qualification.json").read_text())
+        self.assertEqual(qualification["version"], "1.5.0")
+        self.assertEqual(qualification["status"], "local-candidate")
+        self.assertFalse(qualification["stable_approved"])
+        self.assertFalse(qualification["final_candidate_ci_observed"])
+        self.assertEqual(qualification["independent_review_verdicts"], ["reject", "reject"])
+        self.assertEqual(qualification["source_rc_manifest_sha256"],
+                         hashlib.sha256((directory / "manifest.sha256").read_bytes()).hexdigest())
+        self.assertEqual(qualification["ci"]["tested_commit"], qualification["source_rc_commit"])
+        self.assertEqual({(job["python"], job["attempt"], job["observed_tests"])
+                          for job in qualification["ci"]["jobs"]},
+                         {("3.11", 2, 148), ("3.13", 2, 148), ("3.12", 3, 148)})
         protocol = json.loads((directory / "mechanism-protocol.json").read_text())
         result = json.loads((directory / "mechanism-result.json").read_text())
         self.assertEqual(protocol["retries"], 0)

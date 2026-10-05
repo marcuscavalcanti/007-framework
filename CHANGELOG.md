@@ -4,6 +4,17 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+## [1.5.0] - Unreleased stable candidate
+
+- prepare stable version metadata, documentation and a separate public manifest;
+- preserve runtime, dependencies and historical causal artifacts byte-for-byte;
+- record successful RC Linux CI with exact commit/job/attempt provenance;
+- publish the two RC and one prepared-stable reject verdicts with their
+  hash-bound counterproofs; no independent approval or final-stable CI is inferred;
+- distinguish pre-test CI runner-allocation failures from observed test failures;
+- publication still requires explicit identity review, final-byte gates, a clean
+  committed candidate, approval, authorization and tag/artifact read-back.
+
 ## [1.5.0-rc.2] - Unreleased candidate
 
 ### Added
