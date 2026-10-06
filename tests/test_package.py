@@ -13,10 +13,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageContractTests(unittest.TestCase):
+    def test_layout_check_rejects_optimized_python_before_starting_server(self):
+        normal = subprocess.run(
+            [sys.executable, "tests/dashboard_layout.py", "--help"],
+            cwd=ROOT, env={**os.environ, "PYTHONOPTIMIZE": "0"},
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(normal.returncode, 0, normal.stderr)
+        self.assertIn("usage:", normal.stdout)
+        self.assertNotIn("LAYOUT_URL=", normal.stdout)
+        scenarios = ((["-O"], {}), (["-OO"], {}),
+                     ([], {"PYTHONOPTIMIZE": "1"}), ([], {"PYTHONOPTIMIZE": "2"}))
+        for flags, overrides in scenarios:
+            with self.subTest(flags=flags, environment=overrides):
+                result = subprocess.run(
+                    [sys.executable, *flags, "tests/dashboard_layout.py", "--port", "0"],
+                    cwd=ROOT, env={**os.environ, "PYTHONOPTIMIZE": "0", **overrides},
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("optimized Python", result.stderr)
+                self.assertNotIn("LAYOUT_URL=", result.stdout)
+                self.assertNotIn("PASS:", result.stdout)
+
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.5\.1$")
+        self.assertRegex(skill, r"(?m)^  version: 1\.5\.2$")
+        self.assertIn('VERSION = "1.5.2"', (ROOT / "scripts/dashboard.py").read_text())
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))

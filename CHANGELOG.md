@@ -4,6 +4,19 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+## [1.5.2] — local candidate (2026-10-06)
+
+- remove the inherited body minimum width that caused whole-page overflow at
+  320px with a classic scrollbar; sampled wider layouts remain unchanged;
+- add a stdlib browser-assisted selfcheck that rejects hidden/zero-sized causal
+  values and verifies the actual dashboard at four widths; it is separate from
+  unittest discovery and does not claim automatic browser CI coverage;
+- keep the Headroom-inspired information hierarchy, honest unknown telemetry
+  and historical/global causal scope unchanged; no new dependency or schema;
+- preserve 1.5.1 and every historical causal artifact. This local candidate is
+  not publication, exact-commit CI or D7/D30 qualification. See
+  [proof and remaining gates](evidence/v1.5.2/release-evidence.md).
+
 ## [1.5.1] — source changes (2026-10-06)
 
 - prioritize accepted changes, measured repair rounds, terminal cost and open
