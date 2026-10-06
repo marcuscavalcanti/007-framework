@@ -1,6 +1,7 @@
-# 1.5.1 release preparation and evidence
+# 1.5.1 qualification and publication verification
 
-Owner: Codex coordinator. Status: merged preparation, publication pending.
+Owner: Codex coordinator. Source qualification and distribution verification
+are separate; the final tag/Release is the publication reference.
 Base: `36dc86576af0cdf2c49d740a1f6be201c1cf52b1`.
 Scope: backward-compatible dashboard reporting, tests and sanitized evidence.
 No new dependency, receipt schema, model call, database or scheduler.
@@ -259,12 +260,32 @@ paired candidate hashes and frozen protocol/source pins were rechecked without
 rerunning or adding samples. Two cases, shared grader and unmeasured ROI/D7/D30
 remain the evidence boundary. The 320 px whole-page limit remains disclosed.
 
-## Publication gates still open
+## Documentary qualification — 2026-10-06
 
-The [current manifest](manifest.sha256) excludes only itself. The documentary
-diff requires its own review and exact-commit CI; older source approval is not
-silently extended. A published stable 1.5.1 additionally requires explicit
-publication authority, a tag pointing to the final clean commit, successful
-tag-manifest CI and matching tag/artifact read-back. None is inferred from
-PR integration, local tests or the earlier exact-main CI. Historical evidence
-and failed preparation results remain preserved; no tag or publication is claimed.
+[PR #3](https://github.com/marcuscavalcanti/007-framework/pull/3) merged the
+documentation-only candidate `0ed2c1d638589cbf38ccf3edbd21b40ce51c9013` into
+`d4fa0bbc7908c30ea70c048d28c682c062456016`, tree
+`8042c316afb456854d37d927f98616944d4c00c5`. Its
+[actual-main CI](https://github.com/marcuscavalcanti/007-framework/actions/runs/37417693127),
+attempt 1, passed 155 tests per Python 3.11/3.12/3.13 job with no test skips;
+the renderer checks passed. The tag-only manifest step was skipped, not PASS.
+The manifest preserved at this commit has SHA-256
+`484945a82e422e057daaf3d4893818cce6cdb6e974e7ec01c8985d7babe49204`.
+An independent internal read-only review found no material documentary issue;
+it is not a new external source review. Subsequent status-only prose changes
+require their own byte checks and exact-commit CI, without extending old approvals.
+
+## Publication verification contract
+
+The [current manifest](manifest.sha256) lists 94 files and excludes only itself.
+Publication requires explicit authority, a `v1.5.1` tag pointing to the final
+clean commit, successful tag-manifest CI and matching downloaded artifact bytes.
+After publication, inspect the [Release](https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.5.1)
+and tag-triggered [CI](https://github.com/marcuscavalcanti/007-framework/actions)
+for distribution evidence; the historical CI above cannot qualify another commit.
+For publication, include this manifest and all frozen public evidence in the
+source archive and bind that asset with a separate archive SHA-256.
+GitHub-generated archives may have different compression bytes; compare the
+named release asset to its checksum. This record does not assert an asset exists.
+No deploy or active installation change is part of this publication. Historical
+evidence and failed preparation results remain preserved.

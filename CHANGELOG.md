@@ -4,7 +4,7 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
-### 1.5.1 release preparation — publication pending
+## [1.5.1] — source changes (2026-10-06)
 
 - prioritize accepted changes, measured repair rounds, terminal cost and open
   tasks in a Headroom-inspired dashboard; no assets or implementation copied;
@@ -25,8 +25,8 @@ All notable changes are documented here.
   The runtime/dashboard candidate has independent source review and exact-main
   Linux CI on Python 3.11/3.12/3.13: 155 tests per job, no test skips. The
   isolated install/rollback check covers symlinks and CLI startup only.
-  Final documentation is a separate diff; final-commit CI, tag/artifact
-  verification and explicit publication authority remain release gates. See
+  Final documentation is a separate diff; exact-commit CI and tag/artifact
+  verification remain distinct from source qualification. See
   [qualification](evidence/v1.5.1/release-evidence.md).
 
 ## [1.5.0]
