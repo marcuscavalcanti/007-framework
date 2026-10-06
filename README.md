@@ -9,22 +9,23 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-> **Release qualification (v1.5.0):** require Linux CI on the exact release commit,
-> independent approval, explicit publication authority, and matching tag/artifact bytes.
-> Runtime is unchanged from the RC whose Linux CI was observed. RC CI and
-> preparation-time records do not qualify a different commit for release.
+> **1.5.1 status:** the merged runtime and dashboard passed Linux CI on
+> Python 3.11/3.12/3.13 at `e2156d4902d3124bc29bdb3d065e6f1b4e27c9a2`:
+> 155 tests per job, no test skips. Final documentation, tag/artifact verification
+> and explicit publication authority remain separate release gates; earlier CI
+> does not qualify a different final commit. This is not a published stable release.
 > The historical v1.4 real-task result remains narrow: both efforts passed 3/3,
 > with `medium` using 42.6% less estimated USD and 53.9% less wall time.
 > Neither result proves task-class superiority, complete code-review replacement
 > or D7/D30 durability. See [Evidence](docs/evidence.md) and the
-> [historical preparation record](evidence/v1.5.0/release-evidence.md).
+> [1.5.1 qualification and publication gates](evidence/v1.5.1/release-evidence.md).
 
-The **1.5.1 working candidate** makes accepted delivery, repair pressure, terminal
+The **1.5.1 release preparation** makes accepted delivery, repair pressure, terminal
 cost and missing evidence the dashboard's first view. A new deterministic
 comparison prevented false approvals in two sanitized defect-derived cases,
 without rejecting correct controls: 36 cells, zero invalid. This is a narrow
 admission-mechanism result, not model quality or measured financial ROI. See the
-[candidate evidence and remaining release gates](evidence/v1.5.1/release-evidence.md).
+[evidence and remaining publication gates](evidence/v1.5.1/release-evidence.md).
 It is not yet a published stable release.
 
 ## What it gives you
