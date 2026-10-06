@@ -4,7 +4,7 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
-### 1.5.1 candidate — not published
+### 1.5.1 release preparation — publication pending
 
 - prioritize accepted changes, measured repair rounds, terminal cost and open
   tasks in a Headroom-inspired dashboard; no assets or implementation copied;
@@ -22,7 +22,12 @@ All notable changes are documented here.
   Two earlier inconclusive runs are preserved. These repetitions do not prove
   real-world ROI, model quality, general review replacement or D7/D30 durability;
 - no new dependency, receipt contract, provider call, database or scheduler.
-  Independent review, supported-version CI and publication remain pending.
+  The runtime/dashboard candidate has independent source review and exact-main
+  Linux CI on Python 3.11/3.12/3.13: 155 tests per job, no test skips. The
+  isolated install/rollback check covers symlinks and CLI startup only.
+  Final documentation is a separate diff; final-commit CI, tag/artifact
+  verification and explicit publication authority remain release gates. See
+  [qualification](evidence/v1.5.1/release-evidence.md).
 
 ## [1.5.0]
 

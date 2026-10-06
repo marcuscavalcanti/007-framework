@@ -1,9 +1,12 @@
-# 1.5.1 candidate evidence
+# 1.5.1 release preparation and evidence
 
-Owner: Codex coordinator. Status: local working candidate, not published.
+Owner: Codex coordinator. Status: merged preparation, publication pending.
 Base: `36dc86576af0cdf2c49d740a1f6be201c1cf52b1`.
 Scope: backward-compatible dashboard reporting, tests and sanitized evidence.
 No new dependency, receipt schema, model call, database or scheduler.
+
+The preparation chronology below is preserved. Its then-open gates are not
+current results; the post-merge qualification section records later observations.
 
 ## Deterministic causal mechanism
 
@@ -207,11 +210,61 @@ blocked outcomes. Route/project aggregation and the renderer retain accounting
 origin and provisional/final state, including mixed-source routes.
 Internal review is not external approval or publication authority.
 
-## Release gates still open
+## Post-merge qualification — 2026-10-06
 
-The [local candidate manifest](manifest.sha256) excludes only itself. It binds
-working candidate bytes, not an approved commit/tag. Authorized independent review,
-exact-commit CI on Python 3.11/3.12/3.13, clean
-commit, explicit publication authority, tag/artifact read-back and local install
-rollback must be recorded before calling this a published stable 1.5.1.
-Older manifests and evidence remain immutable. Local proof is not remote CI.
+[PR #2](https://github.com/marcuscavalcanti/007-framework/pull/2) merged candidate
+`6278e7fcb82851405b6260a4ff8f16bf2dda0e2e` into
+`e2156d4902d3124bc29bdb3d065e6f1b4e27c9a2`. The actual merge tree is
+`02bae1558cb355416a851ced6c2c4686f4723426`, identical to the candidate tree;
+parents are base `36dc86576af0cdf2c49d740a1f6be201c1cf52b1` and that candidate.
+The 94-entry/95-file source manifest preserved in this commit has SHA-256
+`a118b3f485c29af9f001953313a1efbbd59f2df6e44d2969b1faa041159882f8`.
+
+[Actual-main CI](https://github.com/marcuscavalcanti/007-framework/actions/runs/37416233552),
+attempt 1, tested that exact merge commit. Per-job logs confirmed the checked-out
+SHA, 155 tests, no test skips and the renderer-boundary test passing:
+
+| Python | Job | Tests | Seconds | Result |
+| --- | --- | --- | --- | --- |
+| 3.11 | 112115343035 | 155 | 18.346 | PASS |
+| 3.12 | 112115343124 | 155 | 17.933 | PASS |
+| 3.13 | 112115343140 | 155 | 18.034 | PASS |
+
+Compilation and the historical-tree gate passed. The tag-only manifest step
+was **skipped**, not passed: no release tag was created. Source hashes, exact
+inventory and working-file/Git-blob parity were verified separately.
+
+Fresh Darwin host checks passed 155 tests in 22.067 s before merge and 155 in
+21.540 s from a full-history clean copy of the actual main, without test skips;
+the renderer passed 6/6. The sandbox run had one `EPERM` at the dashboard's
+loopback bind and was recorded as a permission failure, not a passing suite.
+
+The authorized external source review returned `approve/low/local-candidate-only`
+with served model `claude-fable-5-1`, requested effort `high` and served effort
+unmeasured. Context SHA-256:
+`4e1264be5d5333174bc48a8af5aa6ab286cdf31f5f8405eee2ba41fb55cdfd37`.
+Tools, MCP, session persistence and fallback were disabled. That opinion covers
+the earlier source manifest, not this later documentary diff or publication.
+Low recipe/chronology/spacing findings remain nonblocking and deferred.
+
+An isolated installation rehearsal switched temporary skill/bin symlinks from
+1.5.0 to 1.5.1 and back, with `007 --help` exiting 0 at each state and original
+temporary link targets restored. It did not change the live installation and
+does not prove runtime migration, state rollback or rollback of deployed systems.
+
+This documentary finalization changes only README, CHANGELOG, this report and
+the current manifest. Runtime, dashboard, tests, earlier manifests and all
+causal artifacts remain identical to the merged source. The 36-cell matrix,
+paired candidate hashes and frozen protocol/source pins were rechecked without
+rerunning or adding samples. Two cases, shared grader and unmeasured ROI/D7/D30
+remain the evidence boundary. The 320 px whole-page limit remains disclosed.
+
+## Publication gates still open
+
+The [current manifest](manifest.sha256) excludes only itself. The documentary
+diff requires its own review and exact-commit CI; older source approval is not
+silently extended. A published stable 1.5.1 additionally requires explicit
+publication authority, a tag pointing to the final clean commit, successful
+tag-manifest CI and matching tag/artifact read-back. None is inferred from
+PR integration, local tests or the earlier exact-main CI. Historical evidence
+and failed preparation results remain preserved; no tag or publication is claimed.
