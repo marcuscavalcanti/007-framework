@@ -2,6 +2,15 @@
 
 ## Release claim
 
+The 1.5.1 working candidate has a [local deterministic admission-fence
+contrast](../evidence/v1.5.1/release-evidence.md): two sanitized structural cases,
+36 cells, zero invalid. Only the controller acceptance-contract binding changes
+between arms. NEW prevents the six observed false approvals, preserves six
+correct controls and leaves six verifier-unavailable starts unresolved rather
+than verified. Earlier inconclusive runs remain public. This is mechanism
+evidence, not a new model, ROI, portability or durability claim. Stable release
+qualification and publication are still pending.
+
 V1.4 is a usable, dependency-free causal beta with one real-task causal ROI
 contrast, one deterministic selector-mechanism contrast, and package checks.
 

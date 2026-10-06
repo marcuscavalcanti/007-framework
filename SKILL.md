@@ -6,7 +6,7 @@ description: >-
   code when minimal diffs, explicit proof, low rework, and auditable outcomes
   matter.
 metadata:
-  version: 1.5.0
+  version: 1.5.1
 ---
 
 # 007 Framework

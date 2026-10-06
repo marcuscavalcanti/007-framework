@@ -19,6 +19,14 @@ code that looks finished but must be rewritten, repaired, or explained again.
 > or D7/D30 durability. See [Evidence](docs/evidence.md) and the
 > [historical preparation record](evidence/v1.5.0/release-evidence.md).
 
+The **1.5.1 working candidate** makes accepted delivery, repair pressure, terminal
+cost and missing evidence the dashboard's first view. A new deterministic
+comparison prevented false approvals in two sanitized defect-derived cases,
+without rejecting correct controls: 36 cells, zero invalid. This is a narrow
+admission-mechanism result, not model quality or measured financial ROI. See the
+[candidate evidence and remaining release gates](evidence/v1.5.1/release-evidence.md).
+It is not yet a published stable release.
+
 ## What it gives you
 
 - risk-based routing instead of “largest model by default”;
@@ -192,13 +200,21 @@ registered by `007 init`, updates every two seconds, and keeps aggregate totals
 mathematically reconcilable with the project views. It has no login because it
 binds locally; do not expose it on a public interface.
 
-The first viewport answers **on target**, **off target**, or **not yet
-measurable**. Independent gates show the actual value, target, evidence
+The first viewport shows accepted changes (controller-observed versus declared),
+measured repair rounds, accounted terminal USD and unresolved starts. The
+operational verdict remains **on target**, **off target**, or **not yet
+measurable**; it is not a causal verdict. Independent gates show value, target, evidence
 denominator, and next action. A 30-day trend and controlled/declared/unobserved
 provenance panel explain the verdict without hiding missing data in a score.
 Preventive controller blocks remain visible in the authority panel but are not
 classified as failed engineering outcomes in the 30-day quality trend or as
 model-telemetry opportunities when no model was invoked.
+
+Declared D7 follow-up is not independently verified survival. Cost exposes its
+source and provisional/final state; open attempts have no terminal cost yet.
+The historical OLD×NEW panel compares `gpt-5.6-sol@xhigh` with `medium` on one
+task, not “without 007” versus “with 007”, and stays global when a project is
+selected. Unknown identity, cost and durability stay unknown.
 
 The activity lane reads only sanitized session metadata and token counters from
 local Codex, Claude, Kimi Code, and Gemini CLI logs. It maps Git worktrees back

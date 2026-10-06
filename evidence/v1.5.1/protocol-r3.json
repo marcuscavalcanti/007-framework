@@ -1,0 +1,68 @@
+{
+  "question": "Does binding controller acceptance prevent false approval without rejecting correct controls?",
+  "scope": "Two sanitized structural subsets derived from inspected historical engineering defects; not private-project replays",
+  "seed": 5151,
+  "replicates": 3,
+  "retries": 0,
+  "arms": {
+    "OLD": "executor-declared receipt",
+    "NEW": "same executor plus controller acceptance binding"
+  },
+  "pair_order": "Python random.Random(seed).shuffle(case/condition/replicate); OLD then NEW in each pair",
+  "timeout_s_per_cell": 20,
+  "acceptance_timeout_s": 5,
+  "source_sha256": {
+    "scripts/framework_cli.py": "4ef2e3dacc60e17eac911a31a9e2e209a4f242535a6b04c6b10c82ff1e17d7d7",
+    "evidence/v1.5.1/run_acceptance_experiment.py": "28eec06cd4f335b7d0b16bd36645b9ea2c078158efb2f62be6eedb6a2a65d943",
+    "examples/task.receipt.example.json": "cc5217d9a57f2cab2a1bf6823aa7935a76a6ed2735d1b86c2f8572ac9c5295b3"
+  },
+  "cases": {
+    "eligible-row-contract": {
+      "origin": "MoneyMouse eligible early-return rows omitted required provenance/confidence fields; inspected correction 95b92926d6019392f31670f5deee20eabfa7411d",
+      "oracle_scope": "Required-field presence only; not financial calculations or the full private validator",
+      "bad": "{\"eligible\":true,\"status\":\"REVIEW_REQUIRED\"}",
+      "good": "{\"eligible\":true,\"status\":\"REVIEW_REQUIRED\",\"costBasisGenesis\":{},\"calculationConfidence\":\"REVIEW\",\"evidenceCompleteness\":0.0}"
+    },
+    "duplicate-evidence-key": {
+      "origin": "Coliseum evidence input accepted ambiguous duplicate keys; inspected correction e4b6dea61f3d3b7307abc6f19b3ea53d22852e5b",
+      "oracle_scope": "Duplicate-key rejection only; not the full EvidenceSnapshot schema",
+      "bad": "{\"finding\":\"pass\",\"finding\":\"fail\"}",
+      "good": "{\"finding\":\"pass\"}"
+    }
+  },
+  "expected": {
+    "OLD": {
+      "defective": {
+        "exit": 0,
+        "status": "accepted"
+      },
+      "correct": {
+        "exit": 0,
+        "status": "accepted"
+      },
+      "verifier-unavailable": {
+        "exit": 0,
+        "status": "accepted"
+      }
+    },
+    "NEW": {
+      "defective": {
+        "exit": 4,
+        "status": "blocked"
+      },
+      "correct": {
+        "exit": 0,
+        "status": "accepted"
+      },
+      "verifier-unavailable": {
+        "exit": 2,
+        "status": "open"
+      }
+    }
+  },
+  "stop_rule": "No retries or sample reduction; any invalid required cell makes the experiment inconclusive",
+  "success_rule": "OLD false approval in both defects; NEW no false approvals, correct controls accepted, no verified approval with unavailable verification",
+  "boundary": "Deterministic classification and reproducibility in frozen cases, not model quality, USD ROI, general review replacement, D7/D30 or platform portability",
+  "revision": 3,
+  "amendment": "Both initial rounds are preserved as inconclusive. r2 incorrectly used null numeric telemetry. r3 uses the verified unmeasured sentinel, runs the exact receipt through the production validator before any cell, and retains explicit unavailable-verifier attribution. No runtime change to 007 or silent retry."
+}

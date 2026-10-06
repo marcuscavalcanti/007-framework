@@ -1,6 +1,6 @@
 # Next stable backlog
 
-Status: planned, not implemented or release-qualified.
+Status: implemented locally; stable-release qualification pending.
 Owner: Codex coordinator. Target: 1.5.1, subject to final scope and release gates.
 Base: v1.5.0, commit `460e98535752b18d1b4738babf8ad1f7d859d4a1`.
 Scope: the existing dashboard, its tests, sanitized evidence and release docs.
@@ -20,11 +20,11 @@ what remains unknown. Fewer tokens alone are not success.
 
 | Priority | Increment | Acceptance | Status |
 | --- | --- | --- | --- |
-| P0 | Honest operational dashboard | Read existing starts and receipts; distinguish open starts, accepted/blocked outcomes, declared/controlled acceptance and unknown telemetry. Do not turn local sessions into accepted outcomes or missing cost into zero. | Planned |
-| P0 | Correct the audited claims | Do not call an escape declaration verified D7 survival. Expose cost provenance and provisional/final accounting. Make route and aggregate denominators explicit and consistent where they claim the same metric. Distinguish terminal cost coverage from unresolved attempts. Never print verified identity when the artifact does not establish it. | Planned |
-| P0 | Clear product-value presentation | Separate operational outcomes, historical controlled results and unknowns. Show before/after, task, route, sample, pricing status and boundary together. The historical effort experiment must not appear to measure the selected project's current gain. | Planned |
-| P0 | Regression and rendered-UI proof | Preserve positive controls and the audited counterexamples: a just-completed receipt, provisional cost, failed attempts, an open start, missing data and zero verified causal cells. Missing evidence must remain visible. No new economic or durability claim. | Planned |
-| P0 | Focused deterministic mechanism experiment | Freeze the protocol below before execution. Publish actual outcomes, invalid cells and a narrowly scoped conclusion; never an expected-result table presented as observed evidence. | Protocol proposed; not executed |
+| P0 | Honest operational dashboard | Read existing starts and receipts; distinguish open starts, accepted/blocked outcomes, declared/controlled acceptance and unknown telemetry. Do not turn local sessions into accepted outcomes or missing cost into zero. | Implemented; local checks |
+| P0 | Correct the audited claims | Do not call an escape declaration verified D7 survival. Expose cost provenance and provisional/final accounting. Make route and aggregate denominators explicit and consistent where they claim the same metric. Distinguish terminal cost coverage from unresolved attempts. Never print verified identity when the artifact does not establish it. | Implemented; regressions pass |
+| P0 | Clear product-value presentation | Separate operational outcomes, historical controlled results and unknowns. Show before/after, task, route, sample, pricing status and boundary together. The historical effort experiment must not appear to measure the selected project's current gain. | Implemented; desktop/mobile observed |
+| P0 | Regression and rendered-UI proof | Preserve positive controls and the audited counterexamples: a just-completed receipt, provisional cost, failed attempts, an open start, missing data and zero verified causal cells. Missing evidence must remain visible. No new economic or durability claim. | 155 local/clean-source tests; 5 renderer tests; desktop/mobile observed |
+| P0 | Focused deterministic mechanism experiment | Freeze the protocol below before execution. Publish actual outcomes, invalid cells and a narrowly scoped conclusion; never an expected-result table presented as observed evidence. | 36/36 valid; two earlier inconclusive runs preserved |
 | P0 | Stable-release qualification | Complete local suite and UI checks, clean-source checks, an authorized independent review and exact-candidate supported-version CI. Freeze final bytes and manifest, inspect license/privacy, document rollback and obtain separate publication authority. | Pending all preceding gates |
 
 ## Additional proof proposal: prevent false approval without over-rejection
