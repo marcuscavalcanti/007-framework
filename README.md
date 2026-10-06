@@ -9,6 +9,12 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
+> **1.5.2 local candidate:** fixes the inherited 320px page overflow and adds a
+> browser-assisted visibility selfcheck. The source delta has exact-commit CI
+> and a context-only independent review; later documentation is qualified
+> separately. Not a published release; see its
+> [bounded proof and remaining gates](evidence/v1.5.2/release-evidence.md).
+
 > **1.5.1 evidence:** the qualified runtime and dashboard passed Linux CI on
 > Python 3.11/3.12/3.13: 155 tests per job, no test skips. The
 > [qualification record](evidence/v1.5.1/release-evidence.md) binds those results

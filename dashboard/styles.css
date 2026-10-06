@@ -29,7 +29,6 @@
 html { background: var(--bg-deep); }
 
 body {
-  min-width: 320px;
   margin: 0;
   color: var(--text);
   background:
