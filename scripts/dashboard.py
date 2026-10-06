@@ -18,11 +18,12 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/D", "unknown", None}
-VERSION = "1.4.0"
+VERSION = "1.5.1"
 ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
     "tasks", "accepted", "blocked", "no_op",
+    "accepted_controller_observed", "accepted_declared",
     "started_tasks", "matched_terminal_tasks", "active_tasks", "unstarted_terminal_tasks",
     "accepted_first_pass_yes", "reliable_first_pass_yes", "reliable_first_pass_known",
     "first_pass_yes", "first_pass_known",
@@ -63,6 +64,19 @@ def is_preventive_controller_block(receipt):
     return (
         receipt.get("status") == "blocked"
         and receipt.get("proof_reached") == "controller-blocked-before-execution"
+    )
+
+
+def has_controlled_acceptance(receipt):
+    summary = receipt.get("acceptance_summary")
+    digest = receipt.get("acceptance_sha256")
+    return (
+        receipt.get("acceptance_evidence") == "controlled"
+        and isinstance(summary, dict)
+        and type(summary.get("passed")) is int and summary["passed"] >= 1
+        and type(summary.get("failed")) is int and summary["failed"] == 0
+        and isinstance(digest, str) and len(digest) == 64
+        and all(char in "0123456789abcdef" for char in digest)
     )
 
 
@@ -109,6 +123,16 @@ def safe_task(receipt):
         if key in receipt
     }
     delta = receipt.get("delta")
+    summary = receipt.get("acceptance_summary")
+    digest = receipt.get("acceptance_sha256")
+    if (receipt.get("acceptance_evidence") == "controlled" and isinstance(summary, dict)
+            and all(type(summary.get(key)) is int and summary[key] >= 0 for key in ("passed", "failed"))
+            and summary["passed"] + summary["failed"] > 0
+            and (receipt.get("status") != "accepted" or has_controlled_acceptance(receipt))
+            and isinstance(digest, str) and len(digest) == 64
+            and all(char in "0123456789abcdef" for char in digest)):
+        task.update(acceptance_evidence="controlled", acceptance_sha256=digest,
+                    acceptance_summary={key: summary[key] for key in ("passed", "failed")})
     if isinstance(delta, dict):
         task["delta"] = {
             key: delta[key]
@@ -148,13 +172,14 @@ def route_metrics(receipts):
             "tasks": 0, "accepted": 0,
             "reliable": 0, "reliable_known": 0,
             "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0,
+            "cost_sources": Counter(), "cost_provisional_tasks": 0,
             "wall_s_known_sum": 0, "wall_s_known_tasks": 0,
         })
         if row["binding"] != binding:
             row["binding"] = "mixed"
         row["tasks"] += 1
         row["accepted"] += int(receipt.get("status") == "accepted")
-        mature = receipt.get("first_pass") in ("yes", "no") and receipt.get("escape_7d") in (True, False, "yes", "no")
+        mature = receipt.get("status") == "accepted" and receipt.get("first_pass") in ("yes", "no") and receipt.get("escape_7d") in (True, False, "yes", "no")
         row["reliable_known"] += int(mature)
         row["reliable"] += int(
             receipt.get("status") == "accepted"
@@ -164,12 +189,19 @@ def route_metrics(receipts):
         if has_accounted_cost(receipt):
             row["cost_usd_known_sum"] += receipt["cost_usd"]
             row["cost_usd_known_tasks"] += 1
+            row["cost_sources"][receipt["cost_source"]] += 1
+            row["cost_provisional_tasks"] += int(receipt["cost_status"] == "provisional")
         if is_number(receipt.get("wall_s")):
             row["wall_s_known_sum"] += receipt["wall_s"]
             row["wall_s_known_tasks"] += 1
     for row in routes.values():
         row["cost_usd_known_sum"] = round(row["cost_usd_known_sum"], 6)
         row.update({
+            "cost_sources": dict(row["cost_sources"]),
+            "cost_accounting_status": (
+                None if not row["cost_usd_known_tasks"]
+                else "provisional" if row["cost_provisional_tasks"] else "final"
+            ),
             "reliable_rate": ratio(row["reliable"], row["reliable_known"]),
             "cost_usd_per_reliable": (
                 ratio(row["cost_usd_known_sum"], row["reliable"])
@@ -196,6 +228,7 @@ def metrics_from_receipts(receipts):
     accepted_cost = [
         item.get("cost_usd") for item in accepted if has_accounted_cost(item)
     ]
+    controlled_acceptance = sum(has_controlled_acceptance(item) for item in accepted)
 
     escape_yes = 0
     escape_known = 0
@@ -244,6 +277,8 @@ def metrics_from_receipts(receipts):
     result = {
         "tasks": tasks,
         "accepted": statuses["accepted"],
+        "accepted_controller_observed": controlled_acceptance,
+        "accepted_declared": len(accepted) - controlled_acceptance,
         "blocked": statuses["blocked"],
         "no_op": statuses["no-op"],
         "first_pass_yes": first_pass["yes"],
@@ -264,6 +299,7 @@ def metrics_from_receipts(receipts):
         "accepted_cost_usd_known_tasks": len(accepted_cost),
         "cost_final_tasks": sum(has_accounted_cost(item) and item.get("cost_status") == "final" for item in receipts),
         "cost_provisional_tasks": sum(has_accounted_cost(item) and item.get("cost_status") == "provisional" for item in receipts),
+        "cost_sources": dict(Counter(item["cost_source"] for item in receipts if has_accounted_cost(item))),
         "escape_7d_yes": escape_yes,
         "escape_7d_known": escape_known,
         "authority_bound_tasks": authority_totals["authority_bound_tasks"],
@@ -453,10 +489,10 @@ def objective_state(
 ):
     mature = metrics.get("reliable_first_pass_known", 0)
     definitions = (
-        ("mature", "Resultados aceitos maduros", mature, ">= 5", "pass" if mature >= 5 else "wait", mature),
-        ("reliable", "Reliable first-pass em 7 dias", metrics.get("reliable_first_pass_rate"), ">= 70%", None, mature),
+        ("mature", "Aceitos com follow-up D7 declarado", mature, ">= 5", "pass" if mature >= 5 else "wait", mature),
+        ("reliable", "First-pass sem escape D7 declarado", metrics.get("reliable_first_pass_rate"), ">= 70%", None, mature),
         ("repairs", "Média de rodadas de reparo", metrics.get("repair_rounds_mean"), "<= 0.5", None, metrics.get("repair_rounds_known_tasks", 0)),
-        ("escape", "Taxa de escapes em 7 dias", metrics.get("escape_7d_rate"), "<= 5%", None, metrics.get("escape_7d_known", 0)),
+        ("escape", "Taxa de escapes D7 declarados", metrics.get("escape_7d_rate"), "<= 5%", None, metrics.get("escape_7d_known", 0)),
         ("touch", "Toque corretivo em 30 dias", touch.get("30", {}).get("rate"), "<= 15%", None, touch.get("30", {}).get("agent_lines_added", 0)),
         ("cost", "Cobertura de custo terminal", metrics.get("cost_coverage"), "100%", None, metrics.get("tasks", 0)),
         ("telemetry", "Completude da telemetria", metrics.get("telemetry_completeness"), ">= 80%", None, metrics.get("telemetry_possible", 0)),
@@ -500,7 +536,7 @@ def objective_state(
         missing = max(metrics.get("telemetry_possible", 0) - metrics.get("telemetry_known", 0), 0)
         primary = f"Capture {missing} campo(s) de telemetria ausente(s)."
     elif mature < 5:
-        primary = f"Mature mais {5 - mature} resultado(s) aceito(s) por 7 dias."
+        primary = f"Colete follow-up D7 de mais {5 - mature} resultado(s) aceito(s); não infira ausência de escape."
     else:
         failed = next((gate for gate in gates if gate["status"] == "fail"), None)
         primary = (
@@ -518,9 +554,9 @@ def objective_state(
     return {
         "status": status,
         "headline": {
-            "on-target": "YES — on target",
-            "off-target": "NO — off target",
-            "not-measurable": "NOT YET MEASURABLE",
+            "on-target": "METAS OPERACIONAIS ATINGIDAS",
+            "off-target": "FORA DAS METAS OPERACIONAIS",
+            "not-measurable": "AINDA NÃO MENSURÁVEL",
         }[status],
         "primary_action": primary,
         "gates": gates,
@@ -662,6 +698,10 @@ def aggregate_projects(projects, registry_error_count=0):
             result[key] += project.get("metrics", {}).get(key, 0)
     result["cost_usd_known_sum"] = round(result["cost_usd_known_sum"], 6)
     result["accepted_cost_usd_known_sum"] = round(result["accepted_cost_usd_known_sum"], 6)
+    sources = Counter()
+    for project in available:
+        sources.update(project.get("metrics", {}).get("cost_sources", {}))
+    result["cost_sources"] = dict(sources)
     combined_routes = {}
     for project in available:
         for route in project.get("metrics", {}).get("routes", []):
@@ -670,10 +710,13 @@ def aggregate_projects(projects, registry_error_count=0):
             } | {
                 "tasks": 0, "accepted": 0, "reliable": 0, "reliable_known": 0,
                 "cost_usd_known_sum": 0, "cost_usd_known_tasks": 0,
+                "cost_sources": Counter(), "cost_provisional_tasks": 0,
                 "wall_s_known_sum": 0, "wall_s_known_tasks": 0,
             })
             if row["binding"] != route["binding"]:
                 row["binding"] = "mixed"
+            row["cost_sources"].update(route.get("cost_sources", {}))
+            row["cost_provisional_tasks"] += route.get("cost_provisional_tasks", 0)
             for key in (
                 "tasks", "accepted", "reliable", "reliable_known",
                 "cost_usd_known_sum", "cost_usd_known_tasks",
@@ -683,6 +726,11 @@ def aggregate_projects(projects, registry_error_count=0):
     for row in combined_routes.values():
         row["cost_usd_known_sum"] = round(row["cost_usd_known_sum"], 6)
         row.update({
+            "cost_sources": dict(row["cost_sources"]),
+            "cost_accounting_status": (
+                None if not row["cost_usd_known_tasks"]
+                else "provisional" if row["cost_provisional_tasks"] else "final"
+            ),
             "reliable_rate": ratio(row["reliable"], row["reliable_known"]),
             "cost_usd_per_reliable": (
                 ratio(row["cost_usd_known_sum"], row["reliable"])

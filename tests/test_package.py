@@ -16,7 +16,7 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.5\.0$")
+        self.assertRegex(skill, r"(?m)^  version: 1\.5\.1$")
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))
@@ -139,15 +139,27 @@ class PackageContractTests(unittest.TestCase):
         self.assertEqual(mismatches, [])
 
 
+    def test_v15_manifest_matches_historical_release_not_current_runtime(self):
+        release = "460e98535752b18d1b4738babf8ad1f7d859d4a1"
+        if subprocess.run(["git", "cat-file", "-e", f"{release}^{{tree}}"],
+                          cwd=ROOT, capture_output=True).returncode:
+            self.skipTest("Historical v1.5.0 tree requires a full Git checkout")
+        for line in (ROOT / "evidence/v1.5.0/manifest.sha256").read_text().splitlines():
+            digest, name = line.split("  ", 1)
+            source = subprocess.run(["git", "show", f"{release}:{name}"], cwd=ROOT, capture_output=True)
+            self.assertEqual(source.returncode, 0, name)
+            self.assertEqual(hashlib.sha256(source.stdout).hexdigest(), digest, name)
+
     def test_v15_rc_evidence_and_manifest_are_bound(self):
         directory = ROOT / "evidence/v1.5.0-rc.2"
         manifest = ROOT / "evidence/v1.5.0/manifest.sha256"
         self.assertTrue(manifest.is_file(), "stable candidate manifest missing")
         listed = {}
+        self.assertEqual(hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                         "7e5d9f009939c252a5cfe6ab667931bacda7618f7e81e16cd73e970497367951")
         for line in manifest.read_text().splitlines():
             digest, name = line.split("  ", 1)
             self.assertNotIn(name, listed)
-            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), digest, name)
             listed[name] = digest
         self.assertIn("SKILL.md", listed)
         self.assertIn("scripts/framework_cli.py", listed)

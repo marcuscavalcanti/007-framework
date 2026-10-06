@@ -1639,7 +1639,7 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, {"30": {"rate": 0.0}})
 
         self.assertEqual(result["status"], "off-target")
-        self.assertIn("Reliable first-pass", result["primary_action"])
+        self.assertIn("First-pass sem escape D7 declarado", result["primary_action"])
 
     def test_objective_state_surfaces_known_failure_while_prioritizing_missing_cost(self):
         dashboard = self.module("dashboard")
@@ -1947,8 +1947,8 @@ class DashboardTests(unittest.TestCase):
         route = metrics["routes"][0]
         self.assertEqual(route["task_class"], "implement")
         self.assertEqual(route["reliable"], 1)
-        self.assertEqual(route["reliable_known"], 2)
-        self.assertEqual(route["reliable_rate"], 0.5)
+        self.assertEqual(route["reliable_known"], 1)
+        self.assertEqual(route["reliable_rate"], 1.0)
         self.assertEqual(route["cost_usd_per_reliable"], 0.5)
         self.assertEqual(route["wall_s_per_reliable"], 30.0)
 
@@ -2393,7 +2393,7 @@ class DashboardTests(unittest.TestCase):
             'id="causal-cost-delta"', 'id="causal-latency-delta"',
         ):
             self.assertIn(required_id, shell)
-        self.assertIn("O 007 está produzindo mais mudanças confiáveis por dólar", shell)
+        self.assertIn("Entrega, retrabalho e custo: o que a evidência mostra", shell)
         self.assertIn("Atividade local não é outcome verificado", shell)
         self.assertIn("Codex · Claude · Kimi · Gemini", shell)
         self.assertIn("USD terminal observado", shell)

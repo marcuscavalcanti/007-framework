@@ -60,25 +60,25 @@ function statusLabel(status) {
 function reasonLabel(reason) {
   const exact = {
     "no observed task starts": "Nenhuma tarefa iniciou com 007 begin.",
-    "fewer than 5 matured accepted tasks": "Ainda há menos de cinco resultados aceitos com janela de sete dias madura.",
-    "reliable first-pass rate is N/D": "Reliable first-pass ainda não pode ser calculado.",
+    "fewer than 5 matured accepted tasks": "Ainda há menos de cinco aceites com follow-up D7 declarado.",
+    "reliable first-pass rate is N/D": "First-pass com D7 declarado ainda não pode ser calculado.",
     "mean repair rounds is N/D": "Rodadas de reparo ainda não foram medidas.",
-    "7-day escape rate is N/D": "A janela de sete dias ainda não amadureceu.",
+    "7-day escape rate is N/D": "Faltam declarações de follow-up D7; ausência não prova sobrevivência.",
     "telemetry completeness is N/D": "A telemetria ainda não foi registrada.",
     "cost coverage is N/D": "O custo ainda não foi contabilizado.",
-    "reliable first-pass rate below 70%": "Reliable first-pass está abaixo de 70%.",
+    "reliable first-pass rate below 70%": "First-pass com D7 declarado está abaixo de 70%.",
   };
   return exact[reason] || reason || "Sem razão registrada.";
 }
 
 function renderHeader(metrics, project) {
   setText("breadcrumb-view", project ? project.name : "Visão geral");
-  setText("view-title", project ? `${project.name}: confiabilidade por dólar` : "O 007 está produzindo mais mudanças confiáveis por dólar?");
+  setText("view-title", project ? `${project.name}: entrega, retrabalho e custo` : "Entrega, retrabalho e custo: o que a evidência mostra");
   setText("view-subtitle", project
-    ? "Mesma definição do agregado: correto, first-pass e intacto após sete dias."
-    : "Corretas, aceitas na primeira passagem e intactas após sete dias — sem esconder regressões ou retrabalho.");
+    ? "Resultados do projeto selecionado. Aceite observado pelo controlador e declarações do agente são evidências distintas."
+    : "007 orienta a menor mudança segura, verifica o aceite e torna custo e lacunas visíveis. Ganho causal exige comparação controlada.");
   setText("scope-sample", `${metrics.started_tasks || 0} iniciadas · ${metrics.tasks || 0} concluídas · ${metrics.accepted || 0} aceitas`);
-  setText("scope-boundary", "Uso real é evidência operacional; causalidade exige OLD×NEW.");
+  setText("scope-boundary", "Observações locais ≠ ganho causal. Follow-up D7 declarado ≠ sobrevivência verificada.");
 
   const verdict = metrics.objective || { status: "not-measurable", headline: "NOT YET MEASURABLE", primary_action: "Ative a instrumentação." };
   const card = byId("verdict-card");
@@ -116,11 +116,11 @@ function renderRuntimeActivity(activity = {}) {
 
 function renderMetrics(metrics) {
   setText("metric-reliable", percent(metrics.reliable_first_pass_rate));
-  setText("metric-reliable-detail", `${metrics.reliable_first_pass_yes || 0}/${metrics.reliable_first_pass_known || 0} resultados maduros`);
+  setText("metric-reliable-detail", `${metrics.reliable_first_pass_yes || 0}/${metrics.reliable_first_pass_known || 0} aceitos com follow-up declarado; não verificado`);
   setTrack("track-reliable", metrics.reliable_first_pass_rate);
 
   setText("metric-escape", percent(metrics.escape_7d_rate));
-  setText("metric-escape-detail", `${metrics.escape_7d_yes || 0} escapes · ${metrics.escape_7d_pending_tasks || 0} pendentes`);
+  setText("metric-escape-detail", `${metrics.escape_7d_yes || 0}/${metrics.escape_7d_known || 0} declarados · ${metrics.escape_7d_pending_tasks || 0} sem follow-up`);
   setTrack("track-escape", metrics.escape_7d_rate, .1);
 
   setText("metric-repairs", decimal(metrics.repair_rounds_mean));
@@ -128,16 +128,25 @@ function renderMetrics(metrics) {
   setTrack("track-repairs", metrics.repair_rounds_mean, 2);
 
   setText("metric-roi", metrics.reliable_outcomes_per_usd == null ? "N/D" : decimal(metrics.reliable_outcomes_per_usd, 2));
-  setText("metric-roi-detail", `${metrics.reliable_first_pass_yes || 0} confiáveis · cobertura de custo ${percent(metrics.cost_coverage)}`);
+  setText("metric-roi-detail", `Observacional, não economia causal · custo ${metrics.cost_accounting_status === "provisional" ? "provisório" : metrics.cost_accounting_status || "N/D"}`);
   setTrack("track-roi", metrics.reliable_outcomes_per_usd, 2);
 
   setText("metric-reliable-cost", money(metrics.cost_usd_per_reliable));
-  setText("metric-reliable-cost-detail", `Cobertura de custo ${percent(metrics.cost_coverage)} · inclui todas as tentativas`);
+  const sources = Object.keys(metrics.cost_sources || {}).sort().join(", ") || "origem N/D";
+  setText("metric-reliable-cost-detail", `${metrics.cost_usd_known_tasks || 0}/${metrics.tasks || 0} terminais · ${metrics.cost_accounting_status === "provisional" ? "provisório" : metrics.cost_accounting_status || "N/D"} · ${sources} · ${metrics.active_tasks || 0} aberta(s) fora do custo`);
   setTrack("track-cost", metrics.cost_coverage);
 
   setText("metric-reliable-time", metrics.wall_s_per_reliable == null ? "N/D" : `${decimal(metrics.wall_s_per_reliable, 0)}s`);
   setText("metric-reliable-time-detail", `${metrics.wall_s_known_tasks || 0}/${metrics.tasks || 0} outcomes com tempo`);
   setTrack("track-time", metrics.wall_s_per_reliable == null ? null : 1, 1);
+  setText("value-accepted", metrics.accepted || 0);
+  setText("value-acceptance", `${metrics.accepted_controller_observed || 0} com aceite controller-observed · ${metrics.accepted_declared || 0} declaradas`);
+  setText("value-rework", decimal(metrics.repair_rounds_mean));
+  setText("value-rework-detail", `${metrics.repair_rounds_known_tasks || 0}/${metrics.tasks || 0} terminais com medição`);
+  setText("value-cost", metrics.cost_usd_known_tasks ? `${metrics.cost_coverage < 1 ? "≥ " : ""}${money(metrics.cost_usd_known_sum)}` : "N/D");
+  setText("value-cost-detail", `${metrics.cost_usd_known_tasks || 0}/${metrics.tasks || 0} terminais · ${metrics.cost_accounting_status === "provisional" ? "provisório" : metrics.cost_accounting_status || "N/D"} · ${sources}`);
+  setText("value-open", metrics.active_tasks || 0);
+  setText("value-open-detail", `${metrics.blocked || 0} bloqueadas · ${metrics.no_op || 0} sem alteração · abertas sem custo terminal`);
 }
 
 function gateActual(gate) {
@@ -183,13 +192,13 @@ function renderTrend(rows = []) {
     host.append(element("p", "empty-copy", "Ainda não há outcomes concluídos nos últimos 30 dias."));
     return;
   }
-  const svg = svgNode("svg", { viewBox: "0 0 900 240", role: "img", "aria-label": "Proporção diária de resultados confiáveis, aceitos e não aceitos" });
+  const svg = svgNode("svg", { viewBox: "0 0 900 240", role: "img", "aria-label": "Proporção diária de first-pass com D7 declarado, outros aceitos e não aceitos" });
   const left = 34, top = 20, height = 170, width = 840;
   const step = width / rows.length;
   const lineY = top + height * .3;
   svg.append(svgNode("line", { x1: left, y1: lineY, x2: left + width, y2: lineY, class: "trend-target" }));
   const target = svgNode("text", { x: left + 4, y: lineY - 6, class: "trend-label" });
-  target.textContent = "alvo 70% confiável";
+  target.textContent = "alvo 70% first-pass + D7 declarado";
   svg.append(target);
   rows.forEach((row, index) => {
     const daily = row.reliable + row.accepted_other + row.not_accepted;
@@ -206,7 +215,7 @@ function renderTrend(rows = []) {
       y -= segment;
       const rect = svgNode("rect", { x, y, width: barWidth, height: segment, rx: 2, class: className });
       const title = svgNode("title");
-      title.textContent = `${row.date}: ${row.reliable} confiável, ${row.accepted_other} aceito/outro, ${row.not_accepted} não aceito`;
+      title.textContent = `${row.date}: ${row.reliable} first-pass + D7 declarado, ${row.accepted_other} aceito/outro, ${row.not_accepted} não aceito`;
       rect.append(title);
       svg.append(rect);
     });
@@ -239,7 +248,7 @@ function renderFunnel(metrics) {
   setText("funnel-accepted", metrics.accepted || 0);
   setText("funnel-first-pass", metrics.accepted_first_pass_yes || 0);
   setText("funnel-reliable", metrics.reliable_first_pass_yes || 0);
-  setText("funnel-maturity", `${metrics.reliable_first_pass_known || 0} maduras · ${metrics.escape_7d_pending_tasks || 0} pendentes`);
+  setText("funnel-maturity", `${metrics.reliable_first_pass_known || 0} follow-ups declarados · ${metrics.escape_7d_pending_tasks || 0} pendentes`);
 }
 
 function renderNavigation() {
@@ -314,7 +323,8 @@ function renderActivity(tasks) {
     row.append(element("span", `activity-status ${task.status || ""}`));
     const main = element("div", "activity-main");
     main.append(element("strong", "", task.task_id || "tarefa sem ID"), element("span", "", `${task.project_name || ""} · ${task.status || "N/D"} · ${taskRoute(task)}`));
-    const cost = task.cost_usd != null && task.cost_source && task.cost_status ? money(task.cost_usd) : "custo N/D";
+    const cost = task.cost_usd != null && task.cost_source && task.cost_status ? `${money(task.cost_usd)} · ${task.cost_status} · ${task.cost_source}` : "custo N/D";
+    main.append(element("span", "", task.acceptance_evidence === "controlled" && task.acceptance_summary && /^[a-f0-9]{64}$/.test(task.acceptance_sha256 || "") ? `aceitação controller-observed · ${task.acceptance_summary.passed} PASS / ${task.acceptance_summary.failed} FAIL (registro local)` : "aceite declarado / não observado pelo controlador"));
     row.append(main, element("span", "activity-meta", cost));
     list.append(row);
   });
@@ -331,11 +341,12 @@ function renderRoutes(metrics) {
     const main = element("div", "route-main");
     main.append(element("strong", "", `${route.provider}/${route.model}`), element("span", "", verified.length ? `${route.task_class || "unclassified"} · ${route.effort || "effort N/D"} · ${route.binding}` : "atividade local observada"));
     const values = element("div", "route-metrics");
+    const provenance = `${route.cost_accounting_status === "provisional" ? "provisório" : route.cost_accounting_status || "N/D"} · ${Object.keys(route.cost_sources || {}).sort().join(", ") || "origem N/D"}`;
     values.append(
       element("strong", "", verified.length ? `${route.reliable}/${route.reliable_known}` : `${route.sessions}`),
       element("strong", "", money(verified.length ? route.cost_usd_per_reliable : route.cost_usd_estimate)),
-      element("span", "", verified.length ? "confiáveis 7d" : `${integer(route.tokens)} tokens`),
-      element("span", "", verified.length ? "custo / confiável" : "API-equiv. opcional")
+      element("span", "", verified.length ? "aceitos com D7 declarado" : `${integer(route.tokens)} tokens`),
+      element("span", "", verified.length ? `USD / first-pass declarado · ${provenance}` : "API-equiv. opcional")
     );
     row.append(main, values);
     list.append(row);
@@ -350,7 +361,7 @@ function diagnostics(metrics, project) {
   if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} receipt(s) histórico(s) não têm start correspondente; novos records são rejeitados.`);
   if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo ${percent(metrics.cost_coverage)}; o KPI exige 100% dos receipts.`);
   if (metrics.activity?.sessions && metrics.activity.reported_cost_coverage !== 1) values.push(`Custo terminal cobre ${percent(metrics.activity.reported_cost_coverage)} das sessões locais; estimativas externas não fecham esse gate.`);
-  if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) aguardam maturação de sete dias.`);
+  if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) sem follow-up D7; passagem do tempo não prova ausência de escape.`);
   if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Envelope presente em ${percent(metrics.authority_coverage)} dos outcomes; ausência permanece não observada.`);
   if (metrics.friction_blocks) values.push(`${metrics.friction_blocks} ação(ões) permitida(s) foram bloqueadas: atrito de fence a investigar.`);
   if (metrics.unclassified_blocks) values.push(`${metrics.unclassified_blocks} bloqueio(s) ficaram fora do envelope declarado.`);
@@ -380,8 +391,13 @@ function renderEvidence() {
   const newCosts = evidence?.new?.cell_cost_usd || [];
   const oldWall = evidence?.old?.cell_wall_s || [];
   const newWall = evidence?.new?.cell_wall_s || [];
+  const identity = evidence?.served_identity || {};
+  const verifiedIdentity = Number.isInteger(sample.cells) && sample.cells > 0 && identity.total_cells === sample.cells && identity.verified_cells === sample.cells;
   setText("causal-strength", evidence?.status === "supported-task-local" ? "Suporte local" : "Não comprovado");
-  setText("causal-sample", sample.tasks == null ? "Amostra N/D" : `${sample.tasks} tarefa real · ${sample.accepted}/${sample.cells} células aceitas · identidade servida verificada`);
+  setText("causal-sample", sample.tasks == null ? "Amostra N/D" : `${sample.tasks} tarefa real · ${sample.accepted}/${sample.cells} células aceitas · ${verifiedIdentity ? "identidade servida verificada" : `identidade ${identity.verified_cells ?? "N/D"}/${identity.total_cells ?? "N/D"}; verificação incompleta`}`);
+  setText("causal-scope", "Experimento histórico global · não mede o ganho atual do projeto selecionado.");
+  setText("causal-old-route", `${evidence?.old?.policy || "Rota N/D"} · ${evidence?.old?.accepted ?? "N/D"}/${evidence?.old?.cells ?? "N/D"} aceites`);
+  setText("causal-new-route", `${evidence?.new?.policy || "Rota N/D"} · ${evidence?.new?.accepted ?? "N/D"}/${evidence?.new?.cells ?? "N/D"} aceites`);
   setText("causal-pricing", evidence?.pricing?.status?.includes("estimate") ? "USD estimado por rate card; não é faturamento do provider." : "Custo conforme provenance do artefato.");
   setText("causal-claim", evidence?.claim_pt_br || evidence?.claim || "Nenhum experimento causal publicado.");
   setText("causal-boundary", evidence?.boundary_pt_br || evidence?.boundary || "Uso operacional não prova causalidade.");

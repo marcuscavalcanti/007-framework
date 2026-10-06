@@ -4,6 +4,26 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+### 1.5.1 candidate — not published
+
+- prioritize accepted changes, measured repair rounds, terminal cost and open
+  tasks in a Headroom-inspired dashboard; no assets or implementation copied;
+- distinguish controller-observed acceptance from declarations, declared D7
+  follow-up from verified durability, and provisional cost from final accounting;
+- align per-route and aggregate accepted-follow-up denominators and expose
+  cost provenance; open starts remain outside terminal cost;
+- keep the historical effort comparison global and task-local; incomplete served
+  identity is never presented as verified;
+- preserve the v1.5.0 manifest and validate its historical Git blobs rather than
+  requiring future versions to remain byte-identical to that release;
+- add a deterministic admission-fence contrast on two sanitized defect-derived
+  cases: 36 cells, zero invalid; NEW blocked all six defective candidates,
+  accepted all six correct controls and left six unverifiable starts open.
+  Two earlier inconclusive runs are preserved. These repetitions do not prove
+  real-world ROI, model quality, general review replacement or D7/D30 durability;
+- no new dependency, receipt contract, provider call, database or scheduler.
+  Independent review, supported-version CI and publication remain pending.
+
 ## [1.5.0]
 
 - include stable version metadata, documentation and a separate public manifest;

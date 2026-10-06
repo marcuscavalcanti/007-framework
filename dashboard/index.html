@@ -38,12 +38,29 @@
       <div class="content" id="dashboard-content" aria-busy="true">
         <section class="hero-panel" aria-labelledby="view-title">
           <div class="hero-copy">
-            <div class="eyebrow"><span></span> Pergunta decisória</div>
-            <h1 id="view-title">O 007 está produzindo mais mudanças confiáveis por dólar?</h1>
-            <p id="view-subtitle">Corretas, aceitas na primeira passagem e intactas após sete dias — sem esconder regressões ou retrabalho.</p>
+            <div class="eyebrow"><span></span> Engenharia com evidência</div>
+            <h1 id="view-title">Entrega, retrabalho e custo: o que a evidência mostra</h1>
+            <p id="view-subtitle">007 orienta a menor mudança segura, verifica o aceite e torna custo e lacunas visíveis. Ganho causal exige comparação controlada.</p>
             <div class="scope-line"><span id="scope-sample">Aguardando dados</span><span aria-hidden="true">•</span><span id="scope-boundary">Uso real é evidência operacional; causalidade exige OLD×NEW.</span></div>
           </div>
-          <div class="verdict-card" id="verdict-card"><div class="verdict-topline"><span class="status-orbit" aria-hidden="true"><i></i></span><span>Resposta agora</span></div><strong id="verdict-label">Sem dados</strong><p id="verdict-reason">A instrumentação ainda não observou uma tarefa.</p><div class="primary-action"><span>Próxima ação</span><b id="primary-action">Inicie uma tarefa medida.</b></div></div>
+          <div class="verdict-card" id="verdict-card"><div class="verdict-topline"><span class="status-orbit" aria-hidden="true"><i></i></span><span>Metas operacionais · não causalidade</span></div><strong id="verdict-label">Sem dados</strong><p id="verdict-reason">A instrumentação ainda não observou uma tarefa.</p><div class="primary-action"><span>Próxima ação</span><b id="primary-action">Inicie uma tarefa medida.</b></div></div>
+        </section>
+
+        <section class="value-summary" aria-label="Resultados operacionais do escopo selecionado">
+          <article class="metric-card"><div class="metric-heading"><span>Mudanças aceitas</span></div><strong id="value-accepted">0</strong><p id="value-acceptance">0 com aceite controller-observed · 0 declaradas</p></article>
+          <article class="metric-card"><div class="metric-heading"><span>Reparo / tarefa medida</span></div><strong id="value-rework">N/D</strong><p id="value-rework-detail">Rodadas após a primeira entrega</p></article>
+          <article class="metric-card"><div class="metric-heading"><span>USD terminal contabilizado</span></div><strong id="value-cost">N/D</strong><p id="value-cost-detail">Origem e estado de contabilização</p></article>
+          <article class="metric-card"><div class="metric-heading"><span>Tarefas abertas</span></div><strong id="value-open">0</strong><p id="value-open-detail">Starts ainda sem receipt terminal</p></article>
+        </section>
+
+        <section class="panel evidence-panel" aria-labelledby="causal-title">
+          <div class="evidence-icon" aria-hidden="true">Δ</div><div>
+            <div class="panel-heading"><div><p class="panel-kicker">Comparação controlada · OLD × NEW</p><h2 id="causal-title">Onde há ganho demonstrado?</h2></div><span class="sample-pill" id="causal-strength">Carregando</span></div>
+            <p class="evidence-sample" id="causal-scope">Experimento histórico global · não mede o ganho atual do projeto selecionado.</p>
+            <p id="causal-claim">Carregando a comparação OLD×NEW…</p><p class="evidence-sample" id="causal-sample">Amostra N/D</p><p class="evidence-pricing" id="causal-pricing">Custo N/D</p>
+            <div class="causal-grid"><span><small>CONTROL · USD / aceito</small><strong id="causal-old-cost">N/D</strong><small id="causal-old-route">Rota N/D</small></span><span><small>TREATMENT · USD / aceito</small><strong id="causal-new-cost">N/D</strong><small id="causal-new-route">Rota N/D</small></span><span><small>Δ custo estimado</small><strong id="causal-cost-delta">N/D</strong></span><span><small>Δ tempo / aceito</small><strong id="causal-latency-delta">N/D</strong></span></div>
+            <p class="evidence-spread" id="causal-spread">Dispersão N/D</p><div class="evidence-boundary" id="causal-boundary"></div>
+          </div>
         </section>
 
         <section class="instrumentation-panel" id="instrumentation-panel" aria-labelledby="instrumentation-title">
@@ -64,17 +81,17 @@
         </section>
 
         <section class="metric-grid decision-metrics" aria-label="Indicadores que decidem o objetivo">
-          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>Reliable first-pass · 7d</span><i class="metric-signal signal-cyan"></i></div><strong id="metric-reliable">N/D</strong><p id="metric-reliable-detail">Aguardando resultados maduros</p><div class="micro-track"><span id="track-reliable"></span></div></article>
-          <article class="metric-card"><div class="metric-heading"><span>Escapes / regressões · 7d</span><i class="metric-signal signal-red"></i></div><strong id="metric-escape">N/D</strong><p id="metric-escape-detail">Aguardando janela de sete dias</p><div class="micro-track inverse"><span id="track-escape"></span></div></article>
+          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>First-pass sem escape D7 declarado</span><i class="metric-signal signal-cyan"></i></div><strong id="metric-reliable">N/D</strong><p id="metric-reliable-detail">Follow-up declarado; não verificado</p><div class="micro-track"><span id="track-reliable"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>Escapes D7 declarados</span><i class="metric-signal signal-red"></i></div><strong id="metric-escape">N/D</strong><p id="metric-escape-detail">Follow-up ausente permanece N/D</p><div class="micro-track inverse"><span id="track-escape"></span></div></article>
           <article class="metric-card"><div class="metric-heading"><span>Rodadas de reparo</span><i class="metric-signal signal-amber"></i></div><strong id="metric-repairs">N/D</strong><p id="metric-repairs-detail">Correções após a primeira entrega</p><div class="micro-track inverse"><span id="track-repairs"></span></div></article>
-          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>ROI · confiáveis / USD</span><i class="metric-signal signal-green"></i></div><strong id="metric-roi">N/D</strong><p id="metric-roi-detail">Só existe com custo completo e janela madura</p><div class="micro-track"><span id="track-roi"></span></div></article>
-          <article class="metric-card"><div class="metric-heading"><span>Custo / resultado confiável</span><i class="metric-signal signal-violet"></i></div><strong id="metric-reliable-cost">N/D</strong><p id="metric-reliable-cost-detail">Inclui tentativas bloqueadas e falhas</p><div class="micro-track"><span id="track-cost"></span></div></article>
-          <article class="metric-card"><div class="metric-heading"><span>Tempo / resultado confiável</span><i class="metric-signal signal-blue"></i></div><strong id="metric-reliable-time">N/D</strong><p id="metric-reliable-time-detail">Inclui tentativas bloqueadas e falhas</p><div class="micro-track"><span id="track-time"></span></div></article>
+          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>First-pass declarado / USD</span><i class="metric-signal signal-green"></i></div><strong id="metric-roi">N/D</strong><p id="metric-roi-detail">Razão operacional; não economia causada pelo 007</p><div class="micro-track"><span id="track-roi"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>USD / first-pass declarado</span><i class="metric-signal signal-violet"></i></div><strong id="metric-reliable-cost">N/D</strong><p id="metric-reliable-cost-detail">Custos terminais incluindo falhas; abertas fora do custo</p><div class="micro-track"><span id="track-cost"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>Tempo / first-pass declarado</span><i class="metric-signal signal-blue"></i></div><strong id="metric-reliable-time">N/D</strong><p id="metric-reliable-time-detail">Inclui tentativas terminais bloqueadas e falhas</p><div class="micro-track"><span id="track-time"></span></div></article>
         </section>
 
         <section class="analytics-grid decision-grid">
           <article class="panel gate-panel"><div class="panel-heading"><div><p class="panel-kicker">Sem nota composta</p><h2>Por que essa é a resposta?</h2></div><span class="sample-pill">7 gates independentes</span></div><div class="table-scroll"><table class="gate-table"><thead><tr><th>Gate</th><th>Atual</th><th>Alvo</th><th>Evidência</th><th>Estado</th></tr></thead><tbody id="gate-matrix-body"></tbody></table></div></article>
-          <article class="panel chart-panel"><div class="panel-heading"><div><p class="panel-kicker">Últimos 30 dias</p><h2>Qualidade dos resultados ao longo do tempo</h2></div><div class="legend" aria-label="Legenda"><span><i class="legend-reliable"></i>Confiável</span><span><i class="legend-repaired"></i>Aceito/outro</span><span><i class="legend-not-accepted"></i>Não aceito</span></div></div><div class="trend-chart" id="outcome-trend" role="img" aria-label="Tendência diária de resultados"></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><div><p class="panel-kicker">Últimos 30 dias · declarações</p><h2>Resultados ao longo do tempo</h2></div><div class="legend" aria-label="Legenda"><span><i class="legend-reliable"></i>First-pass + D7 declarado</span><span><i class="legend-repaired"></i>Aceito/outro</span><span><i class="legend-not-accepted"></i>Não aceito</span></div></div><div class="trend-chart" id="outcome-trend" role="img" aria-label="Tendência diária de resultados"></div></article>
         </section>
 
         <section class="panel" aria-labelledby="authority-title">
@@ -94,18 +111,18 @@
         </section>
 
         <section class="panel funnel-panel" id="reliability-funnel" aria-labelledby="funnel-title">
-          <div class="panel-heading"><div><p class="panel-kicker">Da atividade ao resultado</p><h2 id="funnel-title">Funil de confiabilidade</h2></div><span class="sample-pill" id="funnel-maturity">0 maduras</span></div>
+          <div class="panel-heading"><div><p class="panel-kicker">Da atividade ao resultado</p><h2 id="funnel-title">Funil de resultados</h2></div><span class="sample-pill" id="funnel-maturity">0 follow-ups declarados</span></div>
           <p class="panel-intro">Cada etapa mostra onde o resultado se perdeu. Contagens, não uma nota composta.</p>
           <div class="funnel-grid">
             <article><span>01</span><strong id="funnel-started">0</strong><b>Iniciadas</b><small>denominador observável</small></article>
             <article><span>02</span><strong id="funnel-terminal">0</strong><b>Concluídas</b><small>receipt terminal válido</small></article>
             <article><span>03</span><strong id="funnel-accepted">0</strong><b>Aceitas</b><small>gate requerido atingido</small></article>
             <article><span>04</span><strong id="funnel-first-pass">0</strong><b>First-pass</b><small>sem rodada de reparo</small></article>
-            <article class="funnel-final"><span>05</span><strong id="funnel-reliable">0</strong><b>Confiáveis · 7d</b><small>sem escape conhecido</small></article>
+            <article class="funnel-final"><span>05</span><strong id="funnel-reliable">0</strong><b>First-pass + D7 declarado</b><small>sem escape declarado; não verificado</small></article>
           </div>
         </section>
 
-        <section class="panel table-panel" aria-labelledby="projects-title"><div class="panel-heading"><div><p class="panel-kicker">Mesmo contrato em todo lugar</p><h2 id="projects-title">Projetos</h2></div><span class="sample-pill" id="projects-summary">0 registrados</span></div><div class="table-scroll"><table><thead><tr><th>Projeto</th><th>Estado</th><th>Sessões 24h</th><th>Tokens 24h</th><th>USD terminal 24h</th><th>Reliable 7d</th><th>Custo / confiável</th><th>Cobertura</th></tr></thead><tbody id="project-table-body"></tbody></table></div></section>
+        <section class="panel table-panel" aria-labelledby="projects-title"><div class="panel-heading"><div><p class="panel-kicker">Mesmo contrato em todo lugar</p><h2 id="projects-title">Projetos</h2></div><span class="sample-pill" id="projects-summary">0 registrados</span></div><div class="table-scroll"><table><thead><tr><th>Projeto</th><th>Estado</th><th>Sessões 24h</th><th>Tokens 24h</th><th>USD terminal 24h</th><th>First-pass D7 declarado</th><th>USD / first-pass declarado</th><th>Cobertura</th></tr></thead><tbody id="project-table-body"></tbody></table></div></section>
 
         <section class="analytics-grid lower-grid">
           <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Ledger operacional</p><h2>Resultados recentes</h2></div><span class="live-tag"><i></i> near real-time</span></div><div class="activity-list" id="activity-list"></div></article>
@@ -113,7 +130,6 @@
         </section>
 
         <section class="boundary-grid">
-          <article class="panel evidence-panel"><div class="evidence-icon" aria-hidden="true">Δ</div><div><div class="panel-heading"><div><p class="panel-kicker">O framework causou melhora?</p><h2>Evidência causal congelada</h2></div><span class="sample-pill" id="causal-strength">Carregando</span></div><p id="causal-claim">Carregando a comparação OLD×NEW…</p><p class="evidence-sample" id="causal-sample">Amostra N/D</p><p class="evidence-pricing" id="causal-pricing">Custo N/D</p><div class="causal-grid"><span><small>CONTROL · custo/aceito</small><strong id="causal-old-cost">N/D</strong></span><span><small>TREATMENT · custo/aceito</small><strong id="causal-new-cost">N/D</strong></span><span><small>Δ custo estimado</small><strong id="causal-cost-delta">N/D</strong></span><span><small>Δ tempo/aceito</small><strong id="causal-latency-delta">N/D</strong></span></div><p class="evidence-spread" id="causal-spread">Dispersão N/D</p><div class="evidence-boundary" id="causal-boundary"></div></div></article>
           <article class="panel diagnostics-panel"><div class="panel-heading"><div><p class="panel-kicker">Podemos confiar no painel?</p><h2>Qualidade dos dados</h2></div><span class="diagnostic-count" id="diagnostic-count">0</span></div><ul id="diagnostic-list"></ul></article>
         </section>
 
