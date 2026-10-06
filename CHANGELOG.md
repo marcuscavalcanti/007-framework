@@ -13,8 +13,10 @@ All notable changes are documented here.
   unittest discovery and does not claim automatic browser CI coverage;
 - keep the Headroom-inspired information hierarchy, honest unknown telemetry
   and historical/global causal scope unchanged; no new dependency or schema;
-- preserve 1.5.1 and every historical causal artifact. This local candidate is
-  not publication, exact-commit CI or D7/D30 qualification. See
+- preserve 1.5.1 and every historical causal artifact. Source commit `31c499ff`
+  passed exact-commit Linux CI and a context-only independent package review;
+  subsequent documentary bytes require separate qualification. This candidate
+  is not publication, new ROI evidence or D7/D30 qualification. See
   [proof and remaining gates](evidence/v1.5.2/release-evidence.md).
 
 ## [1.5.1] — source changes (2026-10-06)

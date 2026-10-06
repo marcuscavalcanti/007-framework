@@ -1,7 +1,9 @@
 # 1.5.2 local candidate: bounded dashboard correction
 
 Base: published 1.5.1 commit `2fa6868a6e88c6dce50e5f110ce7fc094abb7db2`.
-This is local preparation, not a release, new ROI result or CI qualification.
+The source delta has the exact-commit qualification recorded below. This
+documentary finalization is not publication, a new ROI result or qualification
+of later bytes by an earlier CI/review.
 Only product behavior change: remove `body { min-width: 320px; }`.
 Version metadata and documentation identify the separate patch; no dependency,
 receipt schema, routing rule, causal mechanism or dashboard metric is added.
@@ -54,11 +56,52 @@ That approval covers those earlier bytes only, not this follow-up guard/test or
 current metadata/docs/manifest. It does not attest hashes independently and is
 not approval to publish.
 
+## Exact source CI and package review
+
+Source commit: `31c499ff52642730252107870c2deee91cb9fb86`.
+Source tree: `5fcb262279a5298223c9b0b8d6ac0c7753878176`.
+Its parent is the published 1.5.1 base above. On 2026-10-06, the
+[push CI run 37459455969](https://github.com/marcuscavalcanti/007-framework/actions/runs/37459455969)
+completed successfully on that exact source commit:
+
+| Python | Job ID | Tests | Test skips |
+| --- | --- | --- | --- |
+| 3.11 | 112255087867 | 156, OK | 0 |
+| 3.12 | 112255088229 | 156, OK | 0 |
+| 3.13 | 112255088209 | 156, OK | 0 |
+
+Compilation and historical-tree checks also passed. The release-manifest step
+was **skipped**, not passed, because it runs only on version tags. The source
+manifest was verified locally: 97/97. This is not automated DOM coverage.
+
+The exact source delta then received a context-only independent package review:
+Claude CLI 2.1.285, `claude-fable-5-1` observed in CLI model-usage metadata,
+`high` requested; backend effort and actual charged USD unmeasured. One
+invocation/turn, exit 0, 133.687s, no tools, MCP, session persistence or fallback.
+Authorized context SHA-256:
+`c908858b585aaec5114a6f6bb91212a721f462656d87b46c92ff09a5285861a0`.
+Original review text SHA-256:
+`d61cbd2564e412786c9616755b8c88c1703a9d565fd9682a51f5763002afb3f3`.
+Verdict: approve the supplied source delta; coordinator reconciliation found
+no confirmed functional blocker. It is a text-based opinion, not independent
+execution, hash attestation or publication authority. Timeout diagnostics,
+the disclosed local receiver and hygiene-scan boundaries remain unchanged.
+
+This documentation/manifest addendum changes bytes after that commit and review.
+Neither prior CI nor approval is automatically transferred to the new bytes.
+Final-commit CI/review and tag/artifact read-back remain distinct release gates;
+record their observed identities in the release record without rewriting 1.5.1.
+
 The [preserved admission experiment](../v1.5.1/release-evidence.md) still has
 two structural cases, three repetitions, 36 cells. Reproductions add no independent
 cases and establish neither general review replacement nor real-project ROI.
 Actual charged USD, cross-platform DOM behavior and D7/D30 remain unmeasured.
 Two byte-identical same-host archives do not prove cross-host reproducibility.
+
+Local revalidation on 2026-10-06 reproduced the same frozen protocol on
+Darwin/Python 3.14.7: 36 cells, zero invalid, zero source drift and zero model
+calls. No historical protocol/result was overwritten. This checks deterministic
+classification again; it adds no independent case or economic claim.
 
 ## Reproduce and remaining release gates
 
