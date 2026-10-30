@@ -98,7 +98,7 @@ cost: usd=<measured>; source=<provider-reported|rate-card-estimate|subscription-
 uncertainty: <remaining evidence gap or none>
 ```
 
-Missing telemetry stays `unmeasured` or `N/D`; never reconstruct it. Cost is a
+Missing telemetry stays `unmeasured` or `N/A`; never reconstruct it. Cost is a
 hard KPI: use the exact served route and an explicit accounting source. Never
 record missing cost as zero. In an initialized project, the operating contract
 requires `007 begin` before implementation and `007 record` for every terminal

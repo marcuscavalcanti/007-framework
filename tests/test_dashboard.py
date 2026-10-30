@@ -150,6 +150,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("already exists", second.stderr)
             stored = json.loads((repo / ".007/tasks/task-001.task.json").read_text())
             self.assertEqual(stored["schema"], "007-framework/task-start/v1")
+            self.assertEqual(stored["project_id"], json.loads((repo / ".007/project.json").read_text())["project_id"])
             self.assertEqual(stored["task_id"], "task-001")
             self.assertRegex(stored["started_at"], r"Z$")
 
@@ -717,29 +718,33 @@ class DashboardTests(unittest.TestCase):
     def test_run_executor_shutdown_cleanup_keeps_first_signal_and_reports_non_gone(self):
         # A second scoped signal must not abort real group cleanup; missing diagnostics
         # must fail the two injected non-gone cases, not the gone positive control.
-        for second, state, stderr_mode in (
-            (True, "gone", "normal"), (False, "gone", "normal"),
-            (False, "cleanup-child-unconfirmed", "normal"), (False, "cleanup-group-observable", "normal"),
-            (False, "cleanup-child-unconfirmed", "pipe"), (False, "cleanup-group-observable", "closed"),
-            (False, "cleanup-group-observable", "missing"), (False, "gone", "pipe"),
+        for second, state, stderr_mode, native in (
+            (True, "gone", "normal", False), (False, "gone", "normal", False),
+            (False, "cleanup-child-unconfirmed", "normal", False), (False, "cleanup-group-observable", "normal", False),
+            (False, "cleanup-child-unconfirmed", "pipe", False), (False, "cleanup-group-observable", "closed", False),
+            (False, "cleanup-group-observable", "missing", False), (False, "gone", "pipe", False),
+            (True, "gone", "normal", True),
         ):
-            with self.subTest(second=second, state=state, stderr_mode=stderr_mode), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(second=second, state=state, stderr_mode=stderr_mode, native=native), tempfile.TemporaryDirectory() as tmp:
                 repo = Path(tmp, "repo")
                 repo.mkdir()
                 subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
                 self.assertEqual(self.run_cli(
                     "init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json")),
                 ).returncode, 0)
-                adapter, pidfile, restored = (Path(tmp, name) for name in ("adapter.py", "pids.json", "restored.json"))
+                adapter, pidfile, restored = (Path(tmp, name) for name in ("codex" if native else "adapter.py", "pids.json", "restored.json"))
                 adapter.write_text(
-                    "import json, os, subprocess, sys, time\nfrom pathlib import Path\n"
+                    "#!" + sys.executable + "\nimport json, os, subprocess, sys, time\nfrom pathlib import Path\n"
                     "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(12)'])\n"
-                    "value = json.loads(Path(sys.argv[1]).read_text())\n"
+                    "value = json.loads(Path(sys.argv[-2]).read_text())\n"
                     "value['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
                     "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(value))\n"
-                    "Path(sys.argv[2]).write_text(json.dumps([os.getpid(), child.pid]))\n"
-                    "time.sleep(12)\n"
+                    "Path(sys.argv[-1]).write_text(json.dumps([os.getpid(), child.pid]))\n"
+                    + ("print(json.dumps({'type': 'thread.started', 'thread_id': 'synthetic'}), flush=True)\n"
+                       "print(json.dumps({'type': 'turn.started'}), flush=True)\n" if native else "")
+                    + "time.sleep(12)\n"
                 )
+                adapter.chmod(0o700)
                 authority, acceptance = Path(tmp, "authority.json"), Path(tmp, "acceptance.json")
                 authority.write_text(json.dumps({
                     "schema": "007-framework/authority/v1", "allow": ["test"], "deny": ["deploy"],
@@ -781,8 +786,10 @@ class DashboardTests(unittest.TestCase):
                     [sys.executable, "-c", bootstrap, str(SCRIPTS), str(second), state, str(restored),
                      "run", "--repo", str(repo), "--task-id", "shutdown",
                      "--receipt", "task.receipt.json", "--authority-file", str(authority),
-                     "--action", "test", "--acceptance-file", str(acceptance), "--",
-                     sys.executable, str(adapter), str(ROOT / "examples/task.receipt.example.json"), str(pidfile)],
+                     "--action", "test", "--acceptance-file", str(acceptance)]
+                    + (["--native-cli", "codex"] if native else []) + ["--"]
+                    + ([str(adapter), "exec", "--json", "--ephemeral"] if native else [sys.executable, str(adapter)])
+                    + [str(ROOT / "examples/task.receipt.example.json"), str(pidfile)],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
                     env={**os.environ, "TEST_007_STDERR_MODE": stderr_mode},
                 )
@@ -803,7 +810,11 @@ class DashboardTests(unittest.TestCase):
                         with self.assertRaises(ProcessLookupError, msg="executor survived shutdown cleanup"):
                             os.kill(pid, 0)
                     stdout, stderr = controller.communicate(timeout=8)
-                    self.assertEqual(stdout, "", "shutdown diagnostic leaked to stdout")
+                    if native:
+                        self.assertTrue(all(json.loads(line)["type"] in ("thread.started", "turn.started")
+                                            for line in stdout.splitlines()))
+                    else:
+                        self.assertEqual(stdout, "", "shutdown diagnostic leaked to stdout")
                     self.assertEqual(json.loads(restored.read_text()), {
                         "intact": True, "observed": [signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT],
                     })
@@ -1157,6 +1168,12 @@ class DashboardTests(unittest.TestCase):
             self.assertGreaterEqual(stored["checks"][0]["duration_ms"], 0)
             self.assertEqual(task["acceptance_sha256"], stored["acceptance_sha256"])
             self.assertEqual(task["acceptance"]["commands"], [[sys.executable, "-c", "print('gate-ok')"]])
+            before = (repo / ".007/receipts/controlled-gate-pass.receipt.json").read_bytes()
+            projected = self.module("dashboard").safe_task(stored)
+            self.assertEqual(projected["status"], "accepted")
+            self.assertEqual(projected["acceptance_evidence"], "declared")
+            self.assertEqual(projected["acceptance_summary"], {"passed": 1, "failed": 0})
+            self.assertEqual((repo / ".007/receipts/controlled-gate-pass.receipt.json").read_bytes(), before)
 
     def test_run_persists_blocked_receipt_when_controller_acceptance_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1503,7 +1520,8 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["reliable_first_pass_yes"], 1)
         self.assertEqual(result["reliable_first_pass_known"], 2)
         self.assertEqual(result["reliable_first_pass_rate"], 0.5)
-        self.assertEqual(result["cost_usd_per_reliable"], 1.0)
+        self.assertIsNone(result["cost_usd_per_reliable"])
+        self.assertFalse(result["economics"]["cohort_complete"])
 
     def test_roi_uses_all_attempt_cost_and_time_per_reliable_outcome(self):
         dashboard = self.module("dashboard")
@@ -1526,7 +1544,18 @@ class DashboardTests(unittest.TestCase):
             },
         ]
 
-        result = dashboard.metrics_from_observations(receipts, starts)
+        for row in starts:
+            row["started_at"] = "2026-10-01T11:00:00Z"
+            row["project_id"] = "fixture"
+        for row in receipts:
+            row.update(project_id="fixture", completed_at="2026-10-01T12:00:00Z", cost_basis="billed", candidate_sha256="a" * 64)
+        followups = [{"task_id": task, "project_id": "fixture", "candidate_sha256": "a" * 64,
+                      "source_sha256": "b" * 64, "used_at": "2026-10-01T12:00:00Z",
+                      "observed_from": "2026-10-01T12:00:00Z",
+                      "observed_through": "2026-10-09T12:00:00Z", "escape_7d": "no"}
+                     for task in ("stable-a", "stable-b")]
+        result = dashboard.metrics_from_observations(receipts, starts, followups=followups,
+            as_of=datetime(2026, 10, 12, tzinfo=timezone.utc))
 
         self.assertEqual(result["cost_usd_per_reliable"], 0.5)
         self.assertEqual(result["reliable_outcomes_per_usd"], 2.0)
@@ -1615,10 +1644,10 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, touch)
 
         self.assertEqual(result["status"], "not-measurable")
-        self.assertEqual(result["primary_action"], "Registre o custo terminal de 2 resultado(s).")
+        self.assertEqual(result["primary_action"], "Record the terminal cost of 2 outcome(s).")
         self.assertEqual(
             [gate["status"] for gate in result["gates"]],
-            ["pass", "pass", "pass", "pass", "pass", "wait", "pass"],
+            ["pass", "pass", "pass", "pass", "pass", "wait", "pass", "wait"],
         )
 
     def test_objective_state_reports_off_target_only_when_all_gates_are_known(self):
@@ -1634,12 +1663,16 @@ class DashboardTests(unittest.TestCase):
             "cost_coverage": 1.0,
             "cost_usd_known_tasks": 5,
             "telemetry_completeness": 1.0,
+            "economics": {"cohort_complete": True, "cost_coverage": 1,
+                          "cost_scope_complete": True,
+                          "followup_pending": 0, "cohort_tasks": 5, "linked_followups": 5,
+                          "reliable_declared": 3, "escapes_declared": 0},
         }
 
         result = dashboard.objective_state(metrics, {"30": {"rate": 0.0}})
 
         self.assertEqual(result["status"], "off-target")
-        self.assertIn("First-pass sem escape D7 declarado", result["primary_action"])
+        self.assertIn("First-pass with no declared D7 escape", result["primary_action"])
 
     def test_objective_state_surfaces_known_failure_while_prioritizing_missing_cost(self):
         dashboard = self.module("dashboard")
@@ -1660,7 +1693,7 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, {"30": {"rate": 0.0}})
 
         self.assertEqual(result["status"], "off-target")
-        self.assertEqual(result["primary_action"], "Registre o custo terminal de 1 resultado(s).")
+        self.assertEqual(result["primary_action"], "Record the terminal cost of 1 outcome(s).")
 
     def test_objective_state_reaches_on_target_when_all_gates_pass(self):
         dashboard = self.module("dashboard")
@@ -1676,12 +1709,15 @@ class DashboardTests(unittest.TestCase):
             "cost_coverage": 1.0,
             "cost_usd_known_tasks": 5,
             "telemetry_completeness": 1.0,
+            "economics": {"cohort_complete": True, "cost_coverage": 1, "cost_scope_complete": True,
+                          "followup_pending": 0, "cohort_tasks": 5, "linked_followups": 5,
+                          "reliable_declared": 4, "escapes_declared": 0},
         }
 
         result = dashboard.objective_state(metrics, {"30": {"rate": 10.0}})
 
         self.assertEqual(result["status"], "on-target")
-        self.assertEqual(result["primary_action"], "Continue coletando resultados controlados.")
+        self.assertEqual(result["primary_action"], "Keep collecting controlled outcomes.")
 
     def test_invalid_source_keeps_verdict_unmeasurable_without_hiding_gate_failure(self):
         dashboard = self.module("dashboard")
@@ -1698,7 +1734,7 @@ class DashboardTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "not-measurable")
-        self.assertEqual(result["primary_action"], "Corrija 1 fonte(s) de dados inválida(s) ou indisponível(is).")
+        self.assertEqual(result["primary_action"], "Fix 1 invalid or unavailable data source(s).")
         self.assertEqual(next(g for g in result["gates"] if g["key"] == "reliable")["status"], "fail")
 
     def test_objective_state_prioritizes_active_lifecycle_before_empty_cost(self):
@@ -1710,7 +1746,7 @@ class DashboardTests(unittest.TestCase):
         result = dashboard.objective_state(metrics, {"30": {"rate": None}})
 
         self.assertEqual(result["status"], "not-measurable")
-        self.assertEqual(result["primary_action"], "Conclua 3 tarefa(s) ativa(s) com 007 record.")
+        self.assertEqual(result["primary_action"], "Complete 3 active task(s) with 007 record.")
 
     def test_authority_confidence_separates_controlled_and_declared(self):
         dashboard = self.module("dashboard")
@@ -1720,14 +1756,14 @@ class DashboardTests(unittest.TestCase):
             {"status": "accepted"},
         ])
 
-        self.assertEqual(result["authority_controlled_tasks"], 1)
-        self.assertEqual(result["authority_declared_tasks"], 1)
+        self.assertEqual(result["authority_controlled_tasks"], 0)
+        self.assertEqual(result["authority_declared_tasks"], 2)
         self.assertEqual(dashboard.authority_confidence(result), {
-            "controlled": 1,
-            "declared": 1,
+            "controlled": 0,
+            "declared": 2,
             "unobserved": 1,
-            "controlled_coverage": 0.5,
-            "label": "mixed",
+            "controlled_coverage": 0.0,
+            "label": "declared",
         })
 
     def test_outcome_trend_returns_daily_raw_counts(self):
@@ -1799,12 +1835,44 @@ class DashboardTests(unittest.TestCase):
 
         self.assertEqual(today, {"date": day, "reliable": 1, "accepted_other": 1, "not_accepted": 0})
         self.assertEqual(result["authority_confidence"], {
-            "controlled": 1,
-            "declared": 1,
+            "controlled": 0,
+            "declared": 2,
             "unobserved": 1,
-            "controlled_coverage": 0.5,
-            "label": "mixed",
+            "controlled_coverage": 0.0,
+            "label": "declared",
         })
+
+    def test_snapshot_carries_the_effort_trial_readout_from_the_observatory(self):
+        dashboard = self.module("dashboard")
+        trial = {"enabled": True, "trial_id": "t", "verdict": "INCONCLUSIVE", "sessions": {"medium": 0, "xhigh": 0}}
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = Path(tmp, "registry.json")
+            registry.write_text(json.dumps({"schema": "007-framework/registry/v1", "projects": []}))
+            snap = dashboard.build_snapshot(registry, observatory_provider=lambda entries: {"projects": {}, "errors": [], "trial": trial})
+        self.assertEqual(snap["effort_trial"], trial)
+
+    def test_the_snapshot_trial_readout_is_blinded_while_enrollment_is_open(self):
+        from test_effort_trial_analysis import DAY, START, outcome_leaks, trial_rows
+        dashboard = self.module("dashboard")
+        config = {"observatory": {"projects": ["p"], "effort_trial": {"enabled": True, "trial_id": "t",
+                                                                      "arms": {"codex": ["medium", "xhigh"]}}}}
+        view = {"opted_in": True, "available": True, "sessions": trial_rows(60, 95, START)}
+        collector = dashboard.ObservatoryCollector("/nonexistent/config.json", "/nonexistent/sessions.jsonl",
+                                                   now=lambda: START + 40 * DAY)
+        with mock.patch.object(dashboard.observatory_history, "read_config", return_value=config), \
+                mock.patch.object(dashboard.observatory_history, "allowed", return_value={"p"}), \
+                mock.patch.object(dashboard.observatory_history, "view", return_value=view):
+            trial = collector([{"project_id": "p", "path": "/nonexistent"}])["trial"]
+        self.assertEqual((trial["enabled"], trial["trial_id"], trial["verdict"], trial["primary"]), (True, "t", "blinded", "blinded"))
+        self.assertEqual(trial["enrollment"]["per_arm"], {"medium": 12, "xhigh": 12})
+        self.assertEqual(trial["blinded_until"]["30"], "2027-01-20T00:00:00Z")
+        self.assertEqual(outcome_leaks(trial), [])
+
+    def test_missing_markers_accept_na_and_the_legacy_nd_of_older_receipts(self):
+        # the product says N/A; receipts written before the English switch say N/D and must still read as missing, never as data
+        for marker in ("N/A", "N/D", "unmeasured", "pending", ""):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, self.module("dashboard").MISSING)
 
     def test_aggregate_touch_is_unknown_when_any_project_is_missing(self):
         dashboard = self.module("dashboard")
@@ -1873,7 +1941,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result["wall_s_per_accepted"], 10)
         self.assertEqual(result["cost_usd_per_accepted"], 0.5)
 
-    def test_aggregate_roi_recomputes_from_raw_totals_not_project_averages(self):
+    def test_aggregate_keeps_unqualified_projects_separate(self):
         dashboard = self.module("dashboard")
         projects = []
         for cost, wall in ((0.2, 10), (0.8, 30)):
@@ -1893,10 +1961,11 @@ class DashboardTests(unittest.TestCase):
 
         result = dashboard.aggregate_projects(projects)
 
-        self.assertEqual(result["reliable_outcomes_per_usd"], 2.0)
-        self.assertEqual(result["wall_s_per_reliable"], 20.0)
-        self.assertEqual(result["routes"][0]["reliable"], 2)
-        self.assertEqual(result["routes"][0]["cost_usd_per_reliable"], 0.5)
+        self.assertIsNone(result["reliable_outcomes_per_usd"])
+        self.assertIsNone(result["wall_s_per_reliable"])
+        self.assertEqual(len(result["economics_by_project"]), 2)
+        self.assertEqual(result["routes"][0]["reliable"], 0)
+        self.assertIsNone(result["routes"][0]["cost_usd_per_reliable"])
 
     def test_routes_prefer_served_model_and_cost_requires_source(self):
         dashboard = self.module("dashboard")
@@ -1939,16 +2008,24 @@ class DashboardTests(unittest.TestCase):
             "served_model": "gpt-5.6-terra", "served_effort": "medium",
             "cost_source": "rate-card-estimate", "cost_status": "provisional",
         }
-        metrics = dashboard.metrics_from_receipts([
-            {**common, "status": "accepted", "first_pass": "yes", "escape_7d": "no", "cost_usd": 0.2, "wall_s": 10},
-            {**common, "status": "blocked", "first_pass": "no", "escape_7d": "no", "cost_usd": 0.3, "wall_s": 20},
-        ])
+        common.update(project_id="fixture", candidate_sha256="a" * 64,
+                      completed_at="2026-10-01T12:00:00Z")
+        receipts = [
+            {**common, "task_id": "accepted", "status": "accepted", "first_pass": "yes", "cost_usd": 0.2, "wall_s": 10},
+            {**common, "task_id": "blocked", "status": "blocked", "first_pass": "no", "cost_usd": 0.3, "wall_s": 20},
+        ]
+        starts = [{"task_id": r["task_id"], "project_id": "fixture", "started_at": "2026-10-01T11:00:00Z"} for r in receipts]
+        followups = [{"task_id": "accepted", "project_id": "fixture", "candidate_sha256": "a" * 64,
+                      "source_sha256": "b" * 64, "used_at": "2026-10-01T12:00:00Z",
+                      "observed_from": "2026-10-01T12:00:00Z", "observed_through": "2026-10-09T12:00:00Z", "escape_7d": "no"}]
+        metrics = dashboard.metrics_from_observations(receipts, starts, followups=followups,
+                                                     as_of=datetime(2026, 10, 12, tzinfo=timezone.utc))
 
         route = metrics["routes"][0]
         self.assertEqual(route["task_class"], "implement")
         self.assertEqual(route["reliable"], 1)
-        self.assertEqual(route["reliable_known"], 1)
-        self.assertEqual(route["reliable_rate"], 1.0)
+        self.assertEqual(route["reliable_known"], 2)
+        self.assertEqual(route["reliable_rate"], 0.5)
         self.assertEqual(route["cost_usd_per_reliable"], 0.5)
         self.assertEqual(route["wall_s_per_reliable"], 30.0)
 
@@ -2198,6 +2275,53 @@ class DashboardTests(unittest.TestCase):
         self.assertIsNot(second, third)
         self.assertEqual(len(calls), 2)
 
+    def test_snapshot_backpressure_rejects_overlap_and_releases_after_completion(self):
+        dashboard = self.module("dashboard")
+        started, release = threading.Event(), threading.Event()
+        calls, first = [], []
+        def collect(*_args):
+            calls.append(1)
+            if len(calls) == 1:
+                started.set()
+                if not release.wait(3):
+                    raise RuntimeError("fixture release timeout")
+            return {"probe": "fresh"}
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(dashboard, "build_snapshot", collect):
+            server = dashboard.create_server("127.0.0.1", 0, Path(temporary) / "registry.json", ROOT / "dashboard", activity_provider=lambda _: {})
+            serving = threading.Thread(target=server.serve_forever, daemon=True)
+            serving.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            def initial_request():
+                try:
+                    with urlopen(base + "/api/snapshot", timeout=3) as response:
+                        first.append(json.loads(response.read()))
+                except Exception as error:
+                    first.append(type(error).__name__)
+            requester = threading.Thread(target=initial_request)
+            requester.start()
+            try:
+                self.assertTrue(started.wait(3))
+                with self.assertRaises(HTTPError) as blocked:
+                    with urlopen(base + "/api/snapshot", timeout=1):
+                        pass
+                self.assertEqual(blocked.exception.code, 503)
+                blocked.exception.close()
+                with urlopen(base + "/api/health", timeout=1) as response:
+                    self.assertEqual(json.loads(response.read())["status"], "ok")
+                release.set()
+                requester.join(3)
+                self.assertFalse(requester.is_alive())
+                self.assertEqual(first, [{"probe": "fresh"}])
+                with urlopen(base + "/api/snapshot", timeout=1) as response:
+                    self.assertEqual(json.loads(response.read()), {"probe": "fresh"})
+                self.assertEqual(len(calls), 2)
+            finally:
+                release.set()
+                requester.join(3)
+                server.shutdown()
+                server.server_close()
+                serving.join(3)
+
     def test_server_exposes_only_allowlisted_routes(self):
         dashboard = self.module("dashboard")
         with tempfile.TemporaryDirectory() as tmp:
@@ -2249,6 +2373,9 @@ class DashboardTests(unittest.TestCase):
             recorded = self.run_cli("record", "--repo", str(repo), "--file", str(source))
             self.assertEqual(recorded.returncode, 0, recorded.stderr)
 
+            stored_receipt = json.loads((repo / ".007/receipts/e2e-task.receipt.json").read_text())
+            self.assertEqual(stored_receipt["project_id"], json.loads((repo / ".007/project.json").read_text())["project_id"])
+
             snapshot = dashboard.build_snapshot(registry, touch_provider=lambda _repo, days: {
                 "window_days": days, "agent_lines_added": 0, "surviving_lines": 0,
                 "rate": None, "reason": "no attribution",
@@ -2259,7 +2386,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(snapshot["aggregate"]["active_tasks"], 0)
             self.assertEqual(snapshot["aggregate"]["observation_coverage"], 1.0)
             self.assertEqual(snapshot["aggregate"]["reliable_first_pass_rate"], 1.0)
-            self.assertEqual(snapshot["aggregate"]["cost_usd_per_reliable"], receipt["cost_usd"])
+            self.assertIsNone(snapshot["aggregate"]["cost_usd_per_reliable"])
+            self.assertEqual(snapshot["aggregate"]["economics"]["followup_pending"], 1)
             self.assertEqual(snapshot["aggregate"]["cost_coverage"], 1.0)
             self.assertEqual(snapshot["aggregate"]["cost_usd_per_accepted"], receipt["cost_usd"])
             self.assertEqual(snapshot["aggregate"]["routes"][0]["binding"], "served")
@@ -2304,6 +2432,55 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot["aggregate"]["evidence"]["status"], "instrumentation-inactive")
         self.assertEqual(snapshot["activity_errors"], [])
         self.assertEqual(snapshot["measurement_boundary"]["cost_authority"], "terminal-receipt")
+
+    def test_snapshot_answers_the_three_questions_for_opted_in_projects_only_and_caches_them(self):
+        from test_choice_observatory import holdout_analysis
+        dashboard = self.module("dashboard")
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = Path(tmp, "state", "projects.json")
+            ids = []
+            for name in ("opted", "other"):
+                repo = Path(tmp, name)
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                init = self.run_cli("init", "--repo", str(repo), "--registry", str(registry))
+                self.assertEqual(init.returncode, 0, init.stderr)
+                ids.append(json.loads((repo / ".007/project.json").read_text())["project_id"])
+            Path(tmp, "a.json").write_text(json.dumps(holdout_analysis()))
+            config = Path(tmp, "config.json")
+            config.write_text(json.dumps({"observatory": {"projects": [ids[0]], "calibrations": [
+                {"project_id": ids[0], "cli": "codex", "model": "gpt-x", "analysis": "a.json"}]}}))
+            store = Path(tmp, "sessions.jsonl")
+
+            def stored(sid):
+                return json.dumps({"source": "codex", "session_id": sid, "project_id": ids[0], "model": "gpt-x",
+                                   "effort": "xhigh", "started_at": "2026-10-01T10:00:00Z",
+                                   "updated_at": "2026-10-01T10:30:00Z", "total_tokens": 5, "reasoning_output_tokens": 1}) + "\n"
+            store.write_text(stored("s1"))
+            clock = [0.0]
+            observatory = dashboard.ObservatoryCollector(config, store, ttl=300, clock=lambda: clock[0],
+                                                         now=lambda: 1_793_000_000)
+
+            snapshot = dashboard.build_snapshot(
+                registry, touch_provider=lambda _repo, days: {"window_days": days, "rate": None},
+                activity_provider=lambda _entries: {"aggregate": {}, "projects": {}, "errors": []},
+                observatory_provider=observatory)
+
+            json.dumps(snapshot)
+            by_id = {project["project_id"]: project["observatory"] for project in snapshot["projects"]}
+            q1, q2, q3 = by_id[ids[0]]["sessions"][0]["questions"]
+            self.assertEqual((q1["badge"], q3["badge"], q3["verdict"]), ("Observed", "Calibrated", "above-necessary"))
+            self.assertEqual(q2["answer"], "not attributed: no commit in the session's window")
+            self.assertIn("immediate acceptance only", q3["limits"])
+            self.assertFalse(by_id[ids[1]]["opted_in"])
+            self.assertNotIn("sessions", by_id[ids[1]])
+            self.assertEqual(snapshot["observatory_errors"], [])
+            entries = dashboard.registry_entries(registry)[0]
+            with open(store, "a") as handle:
+                handle.write(stored("s2"))
+            self.assertEqual(len(observatory(entries)["projects"][ids[0]]["sessions"]), 1)
+            clock[0] = 301.0
+            self.assertEqual(len(observatory(entries)["projects"][ids[0]]["sessions"]), 2)
 
     def test_causal_evidence_loader_preserves_release_claim_and_boundary(self):
         dashboard = self.module("dashboard")
@@ -2393,10 +2570,10 @@ class DashboardTests(unittest.TestCase):
             'id="causal-cost-delta"', 'id="causal-latency-delta"',
         ):
             self.assertIn(required_id, shell)
-        self.assertIn("Entrega, retrabalho e custo: o que a evidência mostra", shell)
-        self.assertIn("Atividade local não é outcome verificado", shell)
+        self.assertIn("Delivery, rework and cost: what the evidence shows", shell)
+        self.assertIn("Local activity is not a verified outcome", shell)
         self.assertIn("Codex · Claude · Kimi · Gemini", shell)
-        self.assertIn("USD terminal observado", shell)
+        self.assertIn("Observed terminal USD", shell)
         app = (static / "app.js").read_text()
         self.assertIn('setText("authority-friction-detail"', app)
         self.assertIn('setText("causal-pricing"', app)

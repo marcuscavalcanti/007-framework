@@ -20,6 +20,8 @@ USAGE_KEYS = (
     "cache_write_5m_input_tokens", "cache_write_1h_input_tokens",
     "output_tokens", "reasoning_output_tokens", "total_tokens",
 )
+GAP_S = 1800  # observatory.activity_gap_minutes default
+MAX_INTERVALS = 500
 
 
 def iso_datetime(value):
@@ -144,6 +146,26 @@ def json_rows(path, max_bytes=None, from_tail=False):
                 yield value
 
 
+def active_intervals(stamps, gap_s=GAP_S, cap=MAX_INTERVALS):
+    """Sorted [start, end] epoch-second pairs from row timestamps (never content): consecutive stamps at most gap_s apart share an
+    interval; past `cap`, the closest neighbours merge (only the cap - 1 widest pauses split), so the store stays small."""
+    points = sorted({int(stamp) for stamp in stamps})
+    splits = [i for i in range(1, len(points)) if points[i] - points[i - 1] > gap_s]
+    if len(splits) >= cap:
+        splits = sorted(sorted(splits, key=lambda i: points[i - 1] - points[i])[:cap - 1])
+    bounds = [0, *splits, len(points)]
+    return [[points[a], points[b - 1]] for a, b in zip(bounds, bounds[1:])] if points else []
+
+
+def clipped_intervals(stamps, gap_s, started):
+    """Intervals of a log read only from its tail: the unread head (start .. first tail stamp) counts as active, so a clipped log
+    can add ambiguity, never a single owner by guess."""
+    intervals = active_intervals(stamps, gap_s)
+    if intervals and started:
+        intervals[0][0] = min(intervals[0][0], int(started.timestamp()))
+    return intervals
+
+
 def first_matching(path, predicate, max_bytes=262_144):
     for row in json_rows(path, max_bytes=max_bytes):
         if predicate(row):
@@ -151,7 +173,7 @@ def first_matching(path, predicate, max_bytes=262_144):
     return None
 
 
-def parse_codex_session(path, now=None, lookback_hours=24):
+def parse_codex_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=lookback_hours)
     meta = first_matching(path, lambda row: row.get("type") == "session_meta")
@@ -163,15 +185,20 @@ def parse_codex_session(path, now=None, lookback_hours=24):
         return None
     model = effort = None
     usage = empty_usage()
-    usage["usage_complete"] = True
+    usage_limit = 4 * 1024 * 1024
+    usage["usage_complete"] = Path(path).stat().st_size <= usage_limit
     usage["input_includes_cache"] = True
     updated = iso_datetime(meta.get("timestamp") or payload.get("timestamp"))
     last_task_event = None
     snapshots = []
     increments = []
     increment_missing = False
-    for row in json_rows(path, max_bytes=4 * 1024 * 1024, from_tail=True):
+    previous_total = None
+    stamps = []
+    for row in json_rows(path, max_bytes=usage_limit, from_tail=True):
         stamp = iso_datetime(row.get("timestamp"))
+        if stamp:
+            stamps.append(stamp.timestamp())
         if stamp and (updated is None or stamp > updated):
             updated = stamp
         if row.get("type") == "turn_context":
@@ -187,6 +214,9 @@ def parse_codex_session(path, now=None, lookback_hours=24):
                 increment_missing |= bool(stamp and stamp >= cutoff)
                 continue
             total = info.get("total_token_usage", {})
+            if total and total == previous_total:
+                continue
+            previous_total = total
             snapshots.append((stamp, {
                 "input_tokens": int(safe_number(total.get("input_tokens"))),
                 "cached_input_tokens": int(safe_number(total.get("cached_input_tokens"))),
@@ -205,7 +235,7 @@ def parse_codex_session(path, now=None, lookback_hours=24):
     if increments:
         for key in USAGE_KEYS:
             usage[key] = sum(value.get(key, 0) for value in increments)
-        usage["usage_complete"] = not increment_missing
+        usage["usage_complete"] &= not increment_missing
     elif snapshots:
         latest = snapshots[-1][1]
         baseline = None
@@ -222,6 +252,9 @@ def parse_codex_session(path, now=None, lookback_hours=24):
             usage[key] = max(0, latest.get(key, 0) - (baseline or {}).get(key, 0))
     else:
         usage["usage_complete"] = False
+    # shortcut: clipped tails stay partial; qualify a window cursor before pricing them.
+    clipped = Path(path).stat().st_size > usage_limit
+    usage["usage_complete"] &= not clipped
     return {
         "session_id": session_id,
         "source": "codex",
@@ -233,10 +266,11 @@ def parse_codex_session(path, now=None, lookback_hours=24):
         "model": model or "unmeasured",
         "effort": effort or "unmeasured",
         "usage": usage,
+        "active_intervals": clipped_intervals(stamps, gap_s, started) if clipped else active_intervals(stamps, gap_s),
     }
 
 
-def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookback_hours=24):
+def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookback_hours=24, gap_s=GAP_S):
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=lookback_hours)
     meta = first_matching(path, lambda row: row.get("type") in ("user", "assistant"), max_bytes=1024 * 1024)
@@ -250,14 +284,26 @@ def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookb
     usage["usage_complete"] = complete
     usage["input_includes_cache"] = False
     model = effort = None
-    reported_costs = []
+    cost_baseline = 0 if iso_datetime(meta.get("timestamp")) and iso_datetime(meta["timestamp"]) >= cutoff else None
+    latest_cost, cost_inside, cost_valid = None, False, complete
     updated = iso_datetime(meta.get("timestamp"))
     rows = json_rows(path) if complete else json_rows(path, max_bytes=4 * 1024 * 1024, from_tail=True)
+    stamps = []
     for row in rows:
         stamp = iso_datetime(row.get("timestamp"))
+        if stamp:
+            stamps.append(stamp.timestamp())
         cost = row.get("total_cost_usd")
-        if row.get("type") == "result" and stamp and stamp >= cutoff and isinstance(cost, (int, float)) and not isinstance(cost, bool) and math.isfinite(cost) and cost >= 0:
-            reported_costs.append(float(cost))
+        if row.get("type") == "result" and stamp:
+            if type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0:
+                cost_valid = False
+            else:
+                cost_valid &= latest_cost is None or cost >= latest_cost
+                latest_cost = float(cost)
+                if stamp <= cutoff:
+                    cost_baseline = latest_cost
+                else:
+                    cost_inside = True
         if stamp and (updated is None or stamp > updated):
             updated = stamp
         message = row.get("message") if row.get("type") == "assistant" else None
@@ -293,11 +339,15 @@ def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookb
         "model": model or "unmeasured",
         "effort": effort or "unmeasured",
         "usage": usage,
-        "cost_usd_reported": sum(reported_costs) if reported_costs else None,
+        "cost_usd_reported": latest_cost - cost_baseline if cost_valid and cost_inside and cost_baseline is not None else None,
+        "active_intervals": active_intervals(stamps, gap_s) if complete else
+        clipped_intervals(stamps, gap_s, iso_datetime(meta.get("timestamp"))),
+        # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
+        "subagent": "subagents" in Path(path).parts or meta.get("isSidechain") is True,
     }
 
 
-def parse_kimi_session(path, now=None, lookback_hours=24):
+def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
     now = now or datetime.now(timezone.utc)
     cutoff_ms = int((now - timedelta(hours=lookback_hours)).timestamp() * 1000)
     state = json.loads(Path(path).read_text())
@@ -307,8 +357,11 @@ def parse_kimi_session(path, now=None, lookback_hours=24):
     usage = empty_usage()
     usage.update({"usage_complete": True, "input_includes_cache": False})
     model = None
+    stamps = []
     for wire in Path(path).parent.glob("agents/*/wire.jsonl"):
         for row in json_rows(wire):
+            if safe_number(row.get("time")):
+                stamps.append(row["time"] / 1000)
             raw = row.get("usage")
             if row.get("type") != "usage.record" or row.get("time", 0) < cutoff_ms or not isinstance(raw, dict):
                 continue
@@ -331,10 +384,11 @@ def parse_kimi_session(path, now=None, lookback_hours=24):
         "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
         "status": "active" if active else "idle", "model": model or "unmeasured",
         "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
+        "active_intervals": active_intervals(stamps, gap_s),
     }
 
 
-def parse_gemini_session(path, cwd, now=None, lookback_hours=24):
+def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
     if not isinstance(cwd, str):
         return None
     now = now or datetime.now(timezone.utc)
@@ -346,8 +400,11 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24):
     usage.update({"usage_complete": True, "input_includes_cache": True, "output_includes_reasoning": False})
     model = None
     updated = iso_datetime(meta.get("startTime"))
+    stamps = [updated.timestamp()] if updated else []
     for row in json_rows(path):
         stamp = iso_datetime(row.get("timestamp"))
+        if stamp:
+            stamps.append(stamp.timestamp())
         if stamp and (updated is None or stamp > updated):
             updated = stamp
         raw = row.get("tokens")
@@ -366,6 +423,7 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24):
         "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
         "status": "active" if active else "idle", "model": model or "unmeasured",
         "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
+        "active_intervals": active_intervals(stamps, gap_s),
     }
 
 
@@ -388,6 +446,7 @@ def empty_summary(window_hours):
         "sessions": 0,
         "active_sessions": 0,
         "idle_sessions": 0,
+        "usage_incomplete_sessions": 0,
         **usage,
         "tokens_total": 0,
         "cost_usd_known_sum": 0,
@@ -408,6 +467,7 @@ def summarize(sessions, window_hours):
     result["sessions"] = len(sessions)
     result["active_sessions"] = sum(item["status"] == "active" for item in sessions)
     result["idle_sessions"] = len(sessions) - result["active_sessions"]
+    result["usage_incomplete_sessions"] = sum(item["usage"].get("usage_complete") is not True for item in sessions)
     for item in sessions:
         for key in USAGE_KEYS:
             result[key] += int(safe_number(item["usage"].get(key)))
@@ -439,7 +499,8 @@ def summarize(sessions, window_hours):
 
 
 class ActivityCollector:
-    def __init__(self, codex_root=None, claude_root=None, kimi_root=None, gemini_root=None, pricer=None, lookback_hours=24):
+    def __init__(self, codex_root=None, claude_root=None, kimi_root=None, gemini_root=None, pricer=None, lookback_hours=24,
+                 activity_gap_minutes=GAP_S / 60):
         home = Path.home()
         self.codex_root = Path(codex_root or home / ".codex/sessions")
         self.claude_root = Path(claude_root or home / ".claude/projects")
@@ -447,6 +508,7 @@ class ActivityCollector:
         self.gemini_root = Path(gemini_root or home / ".gemini")
         self.pricer = pricer or HeadroomPricer()
         self.lookback_hours = lookback_hours
+        self.gap_s = float(activity_gap_minutes) * 60
         self.cache = {}
         self.identity_cache = {}
 
@@ -475,16 +537,16 @@ class ActivityCollector:
         if cached and cached[0] == key:
             return cached[1]
         if source == "codex":
-            value = parse_codex_session(path, now, self.lookback_hours)
+            value = parse_codex_session(path, now, self.lookback_hours, self.gap_s)
         elif source == "claude":
-            value = parse_claude_session(path, now, lookback_hours=self.lookback_hours)
+            value = parse_claude_session(path, now, lookback_hours=self.lookback_hours, gap_s=self.gap_s)
         elif source == "kimi":
-            value = parse_kimi_session(path, now, self.lookback_hours)
+            value = parse_kimi_session(path, now, self.lookback_hours, self.gap_s)
         else:
             slug = path.parents[1].name
             projects = json.loads((self.gemini_root / "projects.json").read_text()).get("projects", {})
             cwd = next((project for project, key in projects.items() if key == slug), None)
-            value = parse_gemini_session(path, cwd, now, self.lookback_hours)
+            value = parse_gemini_session(path, cwd, now, self.lookback_hours, self.gap_s)
         self.cache[path] = (key, value)
         return value
 

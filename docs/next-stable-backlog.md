@@ -33,7 +33,7 @@ Question: for the same replayed candidate and claimed checks, does requiring
 controller-observed acceptance prevent an incorrect approval while preserving
 correct approvals? Reuse the existing acceptance contract and `007 run`.
 
-1. Select one engineering failure from MoneyMouse and one from Coliseum.
+1. Select one engineering failure from a private finance project and one from a second private product repository.
    Verify each historical snapshot, defect and executable oracle before inclusion.
    Use sanitized domain-derived fixtures where the original contains private
    data; label those fixtures as derived, not as a replay of the private project.
@@ -79,7 +79,7 @@ tests or a larger sample alone do not require a minor version.
 
 ## Historical reuse and exclusions
 
-MoneyMouse receipts can contribute operational history now. Coliseum engineering
+a private finance project receipts can contribute operational history now. a second private product repository engineering
 history can supply defect cases even where normalized receipts are absent.
 Neither source may be backfilled with inferred cost, served model, first-pass
 acceptance or causal gains. Deduplicate copied receipts and identify dependent

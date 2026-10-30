@@ -1,0 +1,10 @@
+{
+  "commands": [
+    [
+      "python3",
+      "oracle.py"
+    ]
+  ],
+  "schema": "007-framework/acceptance/v1",
+  "timeout_s": 10
+}

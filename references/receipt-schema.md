@@ -2,6 +2,13 @@
 
 A receipt records an outcome at gate time. It is not a transcript.
 
+Persisted local records are declarations with contract bindings, not authenticated
+producer attestations. The controller still records what its supported execution
+path observed, but an imported file with `controlled` does not prove who wrote it.
+Dashboard readers preserve accepted status and sanitized check summaries while
+reporting authorship as unqualified, including genuine controller executions.
+Zero authenticated outcomes means no authentication evidence, not no executions.
+
 ```json
 {
   "schema": "007-framework/receipt/v1",
@@ -62,9 +69,27 @@ rate-card, subscription-allocation, or local-compute source. Headroom, RTK, and
 provider CLIs are replaceable adapters, not framework dependencies. An optional
 activity estimate never substitutes for the terminal receipt.
 
+### Declared cost scope (optional, v1-compatible)
+
+`cost_usd` alone does not establish what it includes. Optional
+`cost_components_usd` identifies disjoint USD portions on that same accounting
+basis: `executor`, `review`, `retries`, `verification`, `infrastructure`, and
+`preparation` (including explicitly allocated setup/maintenance). Each supplied
+value is a finite non-negative number, not a boolean; missing/null values stay
+unknown. Unknown categories or malformed values are rejected before recording.
+
+All six portions must be known and sum exactly to `cost_usd` before the cohort
+can report complete declared overhead scope. Components are not added again.
+A known zero must come from an explicit measurement/allocation, never a default
+invented by an adapter. Inclusive-parent reconciliation remains mandatory.
+Records with absent/partial/mismatched scope remain visible and retain their
+original scalar costs; their full-scope ratios are unavailable. This is coherence
+of declarations, not authentication, billing proof or causal ROI. No existing
+receipt is rewritten to add these fields.
+
 `tokens` and `wall_s` are `unmeasured` or finite non-negative numbers; `NaN`
 and `±Infinity` are rejected.
-Use `unmeasured`, `pending`, or `N/D` explicitly for telemetry the host cannot
+Use `unmeasured`, `pending`, or `N/A` (legacy `N/D` is still accepted) explicitly for telemetry the host cannot
 expose. Never infer model, effort, token usage, cost, or human rework from a
 conversation summary. Persist a receipt atomically with:
 
@@ -83,6 +108,91 @@ The command reads `FRAMEWORK_007_TASK_ID`, `FRAMEWORK_007_RECEIPT_PATH`, and
 executor cleanup, `007 run` preserves the command's non-zero exit status and
 leaves a start open when no valid,
 task-matched terminal receipt exists. Raw transcripts are not retained.
+
+## Retained replay inputs
+
+Check that the installed `007 run --help` lists `--capture-config` before using
+this path. A source checkout does not upgrade the installed CLI; receipts from
+a CLI without capture support do not establish retained replay inputs.
+
+An explicit `--capture-config <file>` on `begin` or `run`, or an operator-owned
+`.007/capture-config.json`, opts into retaining the declared inputs before edits.
+The private vault stores bytes, modes, environment and acceptance recipes under
+the existing `007-framework/replay-input/v1` manifest. The start and terminal
+receipt carry the same `replay_ref` (relative manifest path plus SHA-256).
+A hash without retained bytes is rejected. Capture is an explicit file closure,
+not a claim that ignored/unlisted project files were preserved.
+
+`run` executes the frozen captured acceptance contract after executor cleanup
+and checks that its actual argv matches the retained command. Manual `begin`
+and `record` retain declared outcomes; they do not execute the oracle themselves.
+The final sidecar preserves declared output bytes and `deleted_files` separately.
+Missing artifacts, changed sources, unsafe paths, special files, collisions and
+budgets fail closed. Published terminal receipts are never removed if later
+output preservation fails; a missing result sidecar remains an explicit gap.
+
+After confirmed executor cleanup, captured runs also preserve a private
+`execution-incomplete` observation and the declared candidate outputs when the
+executor exits nonzero, omits its receipt, or its receipt is rejected. This is
+not an official terminal receipt: it has no status and its cost is unavailable.
+Unconfirmed cleanup/stream closure, shutdown, publication failures and later
+acceptance failures are not universally covered; an open start remains a gap.
+
+Restore with `python3 scripts/replay_capture.py restore --project-id <id>
+--task-id <id> --manifest <relative-path> --sha256 <hash> --out <new-directory>`.
+Restoration checks bytes and modes and requires a new or empty destination.
+It executes no model or business task. Stored instructions and files stay private;
+retention and structural binding do not authenticate the producer or prove ROI.
+
+## Native command telemetry
+
+Check that the installed `007 run --help` lists `--native-cli`. Local source
+support does not activate telemetry in an older installed CLI. Administrative
+receipts without native observations remain separate from replay/ROI evidence.
+
+`007 run --native-cli codex|claude` observes a fresh non-interactive CLI directly.
+Use `codex exec --json --ephemeral ...`, or `claude --print --verbose
+--output-format stream-json --no-session-persistence ...`. Known resume/continue,
+fork, PR-resume, teleport and cloud-attach options are refused: conversation totals
+cannot safely be assigned to a new task. The native Claude envelope requires
+explicit long options and rejects short forms/clusters. This conservative raw
+argv check can also reject option-like payloads; it is not a full CLI parser.
+The direct argv/basename check refuses
+shell-wrapper shapes; it does not authenticate the executable or provider.
+The executor must still produce the outcome receipt at
+`FRAMEWORK_007_RECEIPT_PATH`; telemetry alone never manufactures acceptance.
+
+007 parses stdout incrementally (1 MiB per line, 32 MiB per stream), forwards
+the original output, and retains only counters, estimates, timings and hashes
+in `.007/tasks/<task-id>.telemetry.json` with owner-only permissions. It uses
+the existing task and cleanup boundary, then enriches the persisted receipt
+without rewriting the executor's source receipt. `native_telemetry` is computed
+by `run`, not accepted by manual `record`. Its stream hash binds observed bytes,
+not authenticated provider authorship or a billing invoice.
+
+Codex completed-turn usage is summed once; cached input and reasoning output
+are not added again. Claude uses one final fresh-session usage/cost result,
+not streamed message fragments. A CLI dollar estimate supersedes declared cost
+in native mode and is always `rate-card-estimate` / `provisional`. Missing USD
+is never zero and still requires the existing unavailable-cost opt-in or a
+separately accounted cost. Requested effort is not relabeled as served effort.
+Codex events with an explicit foreign thread identity invalidate attribution;
+parent/child totals without demonstrated semantics remain outside qualification.
+
+Nonzero commands retain sanitized observations without a terminal receipt.
+For authority-bound actions, the executed event is saved before telemetry so
+a telemetry collision or I/O failure cannot suppress that prior execution record.
+If cleanup is unconfirmed and telemetry persistence also fails, the error keeps
+the cleanup state and the telemetry failure; no terminal receipt advances.
+Malformed, missing, duplicated, oversized or unfinished telemetry cannot publish
+a native-mode receipt. A controller crash, shutdown signal, spawn exception or
+broken stdout can still leave only an open start; this is not universal capture.
+The mode is opt-in and does not retrofit existing interactive sessions.
+
+The passive dashboard reader deduplicates repeated Codex cumulative counters.
+Claude session dollar totals use a window baseline, not a sum of resumed totals;
+missing baselines, decreases or incomplete sources remain unpriced. These are
+client estimates, not subscription charges or proof of causal financial ROI.
 
 To make hard-gate evidence controller-observed, pass an argv-only acceptance
 contract:

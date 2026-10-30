@@ -1,13 +1,24 @@
 "use strict";
 
-const state = { snapshot: null, selectedProject: null, timer: null, loading: false };
+const state = { snapshot: null, selectedProject: null, timer: null, loading: false, transportError: false };
 const byId = (id) => document.getElementById(id);
-const percent = (value, digits = 0) => value == null ? "N/D" : `${(value * 100).toFixed(digits)}%`;
-const decimal = (value, digits = 1) => value == null ? "N/D" : Number(value).toFixed(digits);
-const money = (value) => value == null ? "N/D" : new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 3 : 2 }).format(value);
-const integer = (value) => new Intl.NumberFormat("pt-BR", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
-const equivalentMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/D";
-const terminalMoney = (activity = {}) => activity.reported_cost_sessions ? `${activity.reported_cost_coverage < 1 ? "≥ " : ""}${money(activity.cost_usd_reported_sum)} · ${percent(activity.reported_cost_coverage)}` : "N/D";
+const percent = (value, digits = 0) => value == null ? "N/A" : `${(value * 100).toFixed(digits)}%`;
+const decimal = (value, digits = 1) => value == null ? "N/A" : Number(value).toFixed(digits);
+const money = (value) => value == null ? "N/A" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 3 : 2 }).format(value);
+const integer = (value) => new Intl.NumberFormat("en-US", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
+const equivalentMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/A";
+const terminalMoney = (activity = {}) => activity.reported_cost_sessions ? `${activity.reported_cost_coverage < 1 ? "≥ " : ""}${money(activity.cost_usd_reported_sum)} · ${percent(activity.reported_cost_coverage)}` : "N/A";
+const activityTokens = (activity = {}) => `${integer(activity.tokens_total)}${activity.usage_incomplete_sessions > 0 ? " · partial" : ""}`;
+function localDateTime(value, asOf = state.transportError ? Date.now() : state.snapshot?.generated_at) {
+  const date = typeof value === "string" ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return "N/A";
+  const format = new Intl.DateTimeFormat("en-US", {dateStyle: "medium", timeStyle: "medium", hourCycle: "h23"});
+  const offset = new Intl.DateTimeFormat("en-US", {timeZoneName: "shortOffset"}).formatToParts(date).find(part => part.type === "timeZoneName").value;
+  const seconds = (date - new Date(asOf || Date.now())) / 1000;
+  const [unit, divisor] = Math.abs(seconds) >= 86400 ? ["day", 86400] : Math.abs(seconds) >= 3600 ? ["hour", 3600] : Math.abs(seconds) >= 60 ? ["minute", 60] : ["second", 1];
+  const age = Number.isFinite(seconds) ? new Intl.RelativeTimeFormat("en-US", {numeric: "auto"}).format(Math.trunc(seconds / divisor), unit) : "age N/A";
+  return `${format.format(date)} · ${format.resolvedOptions().timeZone} (${offset}) · ${age}`;
+}
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -22,7 +33,7 @@ function selectedProject() {
 
 function viewMetrics() {
   const project = selectedProject();
-  return project ? {
+  const metrics = project ? {
     ...project.metrics,
     touch: project.touch,
     evidence: project.evidence,
@@ -30,7 +41,22 @@ function viewMetrics() {
     authority_confidence: project.authority_confidence,
     trend_30d: project.trend_30d,
     activity: project.activity,
+    dataset: project.dataset,
+    events_30d: project.events_30d,
+    dataset_history: project.dataset_history,
+    ingested_at: project.ingested_at,
+    stale: project.stale,
+    available: project.available,
   } : state.snapshot.aggregate;
+  return state.transportError || metrics.stale === true || metrics.available === false ? {...metrics, stale:true, available:false,
+    objective:{...metrics.objective, status:"not-measurable", headline:"STALE DATA",
+      primary_action:"Restore the read; last data preserved, no current approval.",
+      gates:(metrics.objective?.gates || []).map(gate => ({...gate,status:"wait"}))},
+    economics:metrics.economics ? {...metrics.economics,cohort_complete:false,
+      cost_usd_per_declared_accepted:null,cost_usd_per_reliable_declared:null,
+      cost_scope_complete:false,cost_usd_per_declared_accepted_with_overhead:null,
+      cost_usd_per_reliable_with_overhead_declared:null,
+      reasons:[...(metrics.economics.reasons || []),"current read unavailable"]} : undefined} : metrics;
 }
 
 function setText(id, value) {
@@ -47,40 +73,40 @@ function setTrack(id, value, max = 1) {
 
 function statusLabel(status) {
   return ({
-    "instrumentation-inactive": "Instrumentação inativa",
-    "collecting": "Coletando evidência",
-    "on-target": "Dentro do alvo",
-    "off-target": "Fora do alvo",
-    "not-measurable": "Ainda não mensurável",
-    "needs-attention": "Requer atenção",
-    "unavailable": "Indisponível",
-  })[status] || "Estado desconhecido";
+    "instrumentation-inactive": "Instrumentation inactive",
+    "collecting": "Collecting evidence",
+    "on-target": "On target",
+    "off-target": "Off target",
+    "not-measurable": "Not yet measurable",
+    "needs-attention": "Needs attention",
+    "unavailable": "Unavailable",
+  })[status] || "Unknown status";
 }
 
 function reasonLabel(reason) {
   const exact = {
-    "no observed task starts": "Nenhuma tarefa iniciou com 007 begin.",
-    "fewer than 5 matured accepted tasks": "Ainda há menos de cinco aceites com follow-up D7 declarado.",
-    "reliable first-pass rate is N/D": "First-pass com D7 declarado ainda não pode ser calculado.",
-    "mean repair rounds is N/D": "Rodadas de reparo ainda não foram medidas.",
-    "7-day escape rate is N/D": "Faltam declarações de follow-up D7; ausência não prova sobrevivência.",
-    "telemetry completeness is N/D": "A telemetria ainda não foi registrada.",
-    "cost coverage is N/D": "O custo ainda não foi contabilizado.",
-    "reliable first-pass rate below 70%": "First-pass com D7 declarado está abaixo de 70%.",
+    "no observed task starts": "No task started with 007 begin.",
+    "fewer than 5 matured accepted tasks": "Fewer than five acceptances have a declared D7 follow-up so far.",
+    "reliable first-pass rate is N/A": "First-pass with declared D7 cannot be calculated yet.",
+    "mean repair rounds is N/A": "Repair rounds have not been measured yet.",
+    "7-day escape rate is N/A": "D7 follow-up declarations are missing; absence does not prove survival.",
+    "telemetry completeness is N/A": "Telemetry has not been recorded yet.",
+    "cost coverage is N/A": "Cost has not been accounted for yet.",
+    "reliable first-pass rate below 70%": "First-pass with declared D7 is below 70%.",
   };
-  return exact[reason] || reason || "Sem razão registrada.";
+  return exact[reason] || reason || "No reason recorded.";
 }
 
 function renderHeader(metrics, project) {
-  setText("breadcrumb-view", project ? project.name : "Visão geral");
-  setText("view-title", project ? `${project.name}: entrega, retrabalho e custo` : "Entrega, retrabalho e custo: o que a evidência mostra");
+  setText("breadcrumb-view", project ? project.name : "Overview");
+  setText("view-title", project ? `${project.name}: delivery, rework and cost` : "Delivery, rework and cost: what the evidence shows");
   setText("view-subtitle", project
-    ? "Resultados do projeto selecionado. Aceite observado pelo controlador e declarações do agente são evidências distintas."
-    : "007 orienta a menor mudança segura, verifica o aceite e torna custo e lacunas visíveis. Ganho causal exige comparação controlada.");
-  setText("scope-sample", `${metrics.started_tasks || 0} iniciadas · ${metrics.tasks || 0} concluídas · ${metrics.accepted || 0} aceitas`);
-  setText("scope-boundary", "Observações locais ≠ ganho causal. Follow-up D7 declarado ≠ sobrevivência verificada.");
+    ? "Results for the selected project. Acceptance observed by the controller and agent declarations are separate kinds of evidence."
+    : "007 steers toward the smallest safe change, verifies acceptance, and makes cost and gaps visible. A causal gain requires a controlled comparison.");
+  setText("scope-sample", `${metrics.started_tasks || 0} started · ${metrics.tasks || 0} completed · ${metrics.accepted || 0} accepted`);
+  setText("scope-boundary", "Local observations ≠ causal gain. Declared D7 follow-up ≠ verified survival.");
 
-  const verdict = metrics.objective || { status: "not-measurable", headline: "NOT YET MEASURABLE", primary_action: "Ative a instrumentação." };
+  const verdict = metrics.objective || { status: "not-measurable", headline: "NOT YET MEASURABLE", primary_action: "Enable instrumentation." };
   const card = byId("verdict-card");
   card.className = `verdict-card ${verdict.status}`;
   setText("verdict-label", verdict.headline);
@@ -97,60 +123,68 @@ function renderInstrumentation(metrics) {
   setText("instrumentation-active", active);
   setText("instrumentation-coverage", percent(metrics.observation_coverage));
   setText("instrumentation-title", started
-    ? `${started} tarefa${started === 1 ? "" : "s"} observada${started === 1 ? "" : "s"}; ${active} ainda ativa${active === 1 ? "" : "s"}`
-    : "Projetos conectados; captura ainda não iniciada");
+    ? `${started} task${started === 1 ? "" : "s"} observed; ${active} still active`
+    : "Projects connected; capture not started yet");
   setText("instrumentation-copy", started
-    ? "Cobertura compara starts com receipts terminais. Tarefas sem begin continuam fora do denominador e aparecem como legado."
-    : "O dashboard só mede tarefas que começam com 007 begin e terminam com um receipt válido.");
+    ? "Coverage compares starts with terminal receipts. Tasks without begin stay outside the denominator and show up as legacy."
+    : "The dashboard only measures tasks that start with 007 begin and end with a valid receipt.");
   byId("instrumentation-panel").classList.toggle("is-active", started > 0);
 }
 
 function renderRuntimeActivity(activity = {}) {
   setText("activity-sessions", activity.sessions || 0);
   setText("activity-active", activity.active_sessions || 0);
-  setText("activity-tokens", integer(activity.tokens_total));
+  setText("activity-tokens", activityTokens(activity));
   setText("activity-cost", terminalMoney(activity));
-  setText("activity-equivalent-cost", `Estimativa opcional: ${equivalentMoney(activity)}`);
+  setText("activity-equivalent-cost", `Optional estimate: ${equivalentMoney(activity)}`);
   byId("runtime-activity-panel").classList.toggle("is-active", (activity.sessions || 0) > 0);
 }
 
 function renderMetrics(metrics) {
+  const economics = metrics.economics;
+  const reliableCost = economics?.cohort_complete === true && economics?.cost_scope_complete === true
+    ? economics.cost_usd_per_reliable_with_overhead_declared ?? null : null;
+  const perUsd = reliableCost > 0 ? 1 / reliableCost : null;
   setText("metric-reliable", percent(metrics.reliable_first_pass_rate));
-  setText("metric-reliable-detail", `${metrics.reliable_first_pass_yes || 0}/${metrics.reliable_first_pass_known || 0} aceitos com follow-up declarado; não verificado`);
+  setText("metric-reliable-detail", `${metrics.reliable_first_pass_yes || 0}/${metrics.reliable_first_pass_known || 0} accepted with declared follow-up; not verified`);
   setTrack("track-reliable", metrics.reliable_first_pass_rate);
 
   setText("metric-escape", percent(metrics.escape_7d_rate));
-  setText("metric-escape-detail", `${metrics.escape_7d_yes || 0}/${metrics.escape_7d_known || 0} declarados · ${metrics.escape_7d_pending_tasks || 0} sem follow-up`);
+  setText("metric-escape-detail", `${metrics.escape_7d_yes || 0}/${metrics.escape_7d_known || 0} declared · ${metrics.escape_7d_pending_tasks || 0} without follow-up`);
   setTrack("track-escape", metrics.escape_7d_rate, .1);
 
   setText("metric-repairs", decimal(metrics.repair_rounds_mean));
-  setText("metric-repairs-detail", `${metrics.repair_rounds_known_tasks || 0} tarefas com medição`);
+  setText("metric-repairs-detail", `${metrics.repair_rounds_known_tasks || 0} tasks measured`);
   setTrack("track-repairs", metrics.repair_rounds_mean, 2);
 
-  setText("metric-roi", metrics.reliable_outcomes_per_usd == null ? "N/D" : decimal(metrics.reliable_outcomes_per_usd, 2));
-  setText("metric-roi-detail", `Observacional, não economia causal · custo ${metrics.cost_accounting_status === "provisional" ? "provisório" : metrics.cost_accounting_status || "N/D"}`);
-  setTrack("track-roi", metrics.reliable_outcomes_per_usd, 2);
+  setText("metric-roi", perUsd == null ? "N/A" : decimal(perUsd, 2));
+  setText("metric-roi-detail", `Observational, not causal savings · cost ${metrics.cost_accounting_status || "N/A"}`);
+  setTrack("track-roi", perUsd, 2);
 
-  setText("metric-reliable-cost", money(metrics.cost_usd_per_reliable));
-  const sources = Object.keys(metrics.cost_sources || {}).sort().join(", ") || "origem N/D";
-  setText("metric-reliable-cost-detail", `${metrics.cost_usd_known_tasks || 0}/${metrics.tasks || 0} terminais · ${metrics.cost_accounting_status === "provisional" ? "provisório" : metrics.cost_accounting_status || "N/D"} · ${sources} · ${metrics.active_tasks || 0} aberta(s) fora do custo`);
-  setTrack("track-cost", metrics.cost_coverage);
+  setText("metric-reliable-cost", money(reliableCost));
+  setText("metric-accepted-cost", money(economics?.cost_usd_per_declared_accepted));
+  const sources = Object.keys(metrics.cost_sources || {}).sort().join(", ") || "source N/A";
+  const costScope = economics?.cost_scope_complete === true ? "overhead included in the declared total" : "overhead N/A; complete total not demonstrated";
+  const costDetail = `${economics?.cost_usd_known_tasks || 0}/${economics?.cohort_tasks || 0} in the cohort · ${economics?.cost_basis || "basis N/A"} · ${metrics.cost_accounting_status || "N/A"} · ${sources} · ${economics?.open_tasks ?? metrics.active_tasks ?? 0} open · ${costScope}`;
+  setText("metric-reliable-cost-detail", costDetail);
+  setText("metric-accepted-cost-detail", `${costDetail} · includes failures; declared acceptances`);
+  setTrack("track-cost", economics?.cost_coverage);
 
-  setText("metric-reliable-time", metrics.wall_s_per_reliable == null ? "N/D" : `${decimal(metrics.wall_s_per_reliable, 0)}s`);
-  setText("metric-reliable-time-detail", `${metrics.wall_s_known_tasks || 0}/${metrics.tasks || 0} outcomes com tempo`);
+  setText("metric-reliable-time", metrics.wall_s_per_reliable == null ? "N/A" : `${decimal(metrics.wall_s_per_reliable, 0)}s`);
+  setText("metric-reliable-time-detail", `${metrics.wall_s_known_tasks || 0}/${metrics.tasks || 0} outcomes with timing`);
   setTrack("track-time", metrics.wall_s_per_reliable == null ? null : 1, 1);
   setText("value-accepted", metrics.accepted || 0);
-  setText("value-acceptance", `${metrics.accepted_controller_observed || 0} com aceite controller-observed · ${metrics.accepted_declared || 0} declaradas`);
+  setText("value-acceptance", `${metrics.accepted || 0} declared · authorship not authenticated`);
   setText("value-rework", decimal(metrics.repair_rounds_mean));
-  setText("value-rework-detail", `${metrics.repair_rounds_known_tasks || 0}/${metrics.tasks || 0} terminais com medição`);
-  setText("value-cost", metrics.cost_usd_known_tasks ? `${metrics.cost_coverage < 1 ? "≥ " : ""}${money(metrics.cost_usd_known_sum)}` : "N/D");
-  setText("value-cost-detail", `${metrics.cost_usd_known_tasks || 0}/${metrics.tasks || 0} terminais · ${metrics.cost_accounting_status === "provisional" ? "provisório" : metrics.cost_accounting_status || "N/D"} · ${sources}`);
+  setText("value-rework-detail", `${metrics.repair_rounds_known_tasks || 0}/${metrics.tasks || 0} terminal tasks measured`);
+  setText("value-cost", economics?.cost_usd_known_tasks && economics.cost_usd_known_sum != null ? `${economics.cost_coverage < 1 || !economics.cohort_complete ? "≥ " : ""}${money(economics.cost_usd_known_sum)}` : "N/A");
+  setText("value-cost-detail", economics ? `${costDetail} · ${economics.reasons.join("; ") || "complete cohort"}` : "No single economic cohort; check each project.");
   setText("value-open", metrics.active_tasks || 0);
-  setText("value-open-detail", `${metrics.blocked || 0} bloqueadas · ${metrics.no_op || 0} sem alteração · abertas sem custo terminal`);
+  setText("value-open-detail", `${metrics.blocked || 0} blocked · ${metrics.no_op || 0} no change · open tasks without terminal cost`);
 }
 
 function gateActual(gate) {
-  if (gate.actual == null) return "N/D";
+  if (gate.actual == null) return "N/A";
   if (gate.key === "mature") return integer(gate.actual);
   if (gate.key === "repairs") return decimal(gate.actual);
   if (gate.key === "touch") return `${decimal(gate.actual)}%`;
@@ -167,7 +201,7 @@ function renderGates(objective = {}) {
       gateActual(gate),
       gate.target,
       `n=${integer(gate.denominator)}`,
-      ({ pass: "PASS", fail: "FAIL", wait: "AGUARDA" })[gate.status] || "N/D",
+      ({ pass: "PASS", fail: "FAIL", wait: "WAIT" })[gate.status] || "N/A",
     ].forEach((value, index) => {
       const cell = document.createElement("td");
       if (index === 4) cell.append(element("span", `gate-status ${gate.status}`, value));
@@ -189,16 +223,16 @@ function renderTrend(rows = []) {
   host.replaceChildren();
   const total = rows.reduce((sum, row) => sum + row.reliable + row.accepted_other + row.not_accepted, 0);
   if (!total) {
-    host.append(element("p", "empty-copy", "Ainda não há outcomes concluídos nos últimos 30 dias."));
+    host.append(element("p", "empty-copy", "No completed outcomes in the last 30 days yet."));
     return;
   }
-  const svg = svgNode("svg", { viewBox: "0 0 900 240", role: "img", "aria-label": "Proporção diária de first-pass com D7 declarado, outros aceitos e não aceitos" });
+  const svg = svgNode("svg", { viewBox: "0 0 900 240", role: "img", "aria-label": "Daily share of first-pass with declared D7, other accepted and not accepted" });
   const left = 34, top = 20, height = 170, width = 840;
   const step = width / rows.length;
   const lineY = top + height * .3;
   svg.append(svgNode("line", { x1: left, y1: lineY, x2: left + width, y2: lineY, class: "trend-target" }));
   const target = svgNode("text", { x: left + 4, y: lineY - 6, class: "trend-label" });
-  target.textContent = "alvo 70% first-pass + D7 declarado";
+  target.textContent = "target 70% first-pass + declared D7";
   svg.append(target);
   rows.forEach((row, index) => {
     const daily = row.reliable + row.accepted_other + row.not_accepted;
@@ -215,7 +249,7 @@ function renderTrend(rows = []) {
       y -= segment;
       const rect = svgNode("rect", { x, y, width: barWidth, height: segment, rx: 2, class: className });
       const title = svgNode("title");
-      title.textContent = `${row.date}: ${row.reliable} first-pass + D7 declarado, ${row.accepted_other} aceito/outro, ${row.not_accepted} não aceito`;
+      title.textContent = `${row.date}: ${row.reliable} first-pass + declared D7, ${row.accepted_other} accepted/other, ${row.not_accepted} not accepted`;
       rect.append(title);
       svg.append(rect);
     });
@@ -229,17 +263,65 @@ function renderTrend(rows = []) {
 }
 
 function renderAuthority(metrics, confidence = {}) {
-  setText("authority-confidence-label", confidence.label || "não observado");
-  setText("authority-controlled", confidence.controlled || 0);
-  setText("authority-controlled-detail", `${percent(confidence.controlled_coverage)} dos outcomes vinculados`);
-  setText("authority-declared", confidence.declared || 0);
+  setText("authority-confidence-label", metrics.authority_bound_tasks ? "bound declarations" : "not observed");
+  setText("authority-controlled", 0);
+  setText("authority-controlled-detail", "Authorship not authenticated by local records");
+  setText("authority-declared", metrics.authority_bound_tasks || 0);
   setText("authority-unobserved", confidence.unobserved || 0);
   setText("authority-coverage", percent(metrics.authority_coverage));
-  setText("authority-coverage-detail", `${metrics.authority_bound_tasks || 0}/${metrics.tasks || 0} outcomes vinculados`);
+  setText("authority-coverage-detail", `${metrics.authority_bound_tasks || 0}/${metrics.tasks || 0} bound outcomes`);
   setText("authority-protected", metrics.protected_blocks || 0);
   setText("authority-friction", percent(metrics.boundary_friction_rate));
-  setText("authority-friction-detail", `${metrics.friction_blocks || 0}/${(metrics.allowed_executions || 0) + (metrics.friction_blocks || 0)} tentativas permitidas`);
+  setText("authority-friction-detail", `${metrics.friction_blocks || 0}/${(metrics.allowed_executions || 0) + (metrics.friction_blocks || 0)} allowed attempts`);
   setText("authority-unclassified", metrics.unclassified_blocks || 0);
+}
+
+function renderCountSeries(id, rows, series, title) {
+  const host = byId(id); host.replaceChildren();
+  const points = rows.map(row => ({at:row.at,time:Date.parse(row.at),data:row.counts === null ? null : row.counts || row})).filter(point => Number.isFinite(point.time));
+  const values = points.flatMap(point => series.map(item => point.data?.[item.key])).filter(value => Number.isInteger(value) && value >= 0);
+  if (!points.length || !values.length) { host.append(element("p", "empty-copy", "Data unavailable; not zero.")); return; }
+  const first = Math.min(...points.map(point => point.time)), last = Math.max(...points.map(point => point.time)), maximum = Math.max(1,...values);
+  const x = time => first === last ? 450 : 40 + 820 * (time-first)/(last-first);
+  const y = value => 190 - 160 * value/maximum;
+  const svg = svgNode("svg", {viewBox:"0 0 900 235",role:"img","aria-label":title});
+  for (const value of [0,maximum]) {
+    const label = svgNode("text", {x:4,y:y(value),class:"count-label"}); label.textContent = integer(value); svg.append(label);
+  }
+  series.forEach(item => {
+    let prior = null;
+    points.forEach(point => {
+      const value = point.data?.[item.key];
+      if (!Number.isInteger(value) || value < 0) { prior = null; return; }
+      if (prior) svg.append(svgNode("path", {d:`M${x(prior.time)},${y(prior.value)}H${x(point.time)}V${y(value)}`,fill:"none",stroke:item.color,"stroke-width":2}));
+      const dot = svgNode("circle", {cx:x(point.time),cy:y(value),r:3,fill:item.color});
+      const text = svgNode("title"); text.textContent = `${point.at}: ${value} ${item.label}`;
+      dot.append(text); svg.append(dot); prior = {time:point.time,value};
+    });
+  });
+  for (const [at,position] of [[first,40],[last,860]]) {
+    const label = svgNode("text", {x:position,y:222,class:"count-label","text-anchor":position === 40 ? "start" : "end"});
+    label.textContent = new Date(at).toISOString().replace("T"," ").slice(5,16) + " UTC"; svg.append(label);
+  }
+  host.append(svg);
+  host.append(element("p", "measurement-note", `Latest observation: ${series.map(item => `${item.label}: ${points.at(-1).data?.[item.key] ?? "N/A"}`).join(" · ")}`));
+}
+
+function renderTemporalCharts(metrics, project) {
+  const events = metrics.events_30d;
+  renderCountSeries("events-chart", events?.rows || [], [
+    {key:"started",label:"declared starts",color:"var(--cyan)"},
+    {key:"terminal",label:"declared terminals",color:"var(--amber)"}], "Declared events per UTC day, last 30 days");
+  setText("events-chart-note", `${metrics.stale ? "Stale data · " : ""}30 days · UTC buckets · starts (cyan) / terminals (amber), absolute counts; not independent samples. ${events ? `${events.excluded} event(s) excluded; ${events.complete ? "complete read" : "partial data"}.` : "Inconclusive read."}`);
+  if (!project) byId("dataset-history-chart").replaceChildren(element("p", "empty-copy", "Select a project to see its evolution."));
+  else renderCountSeries("dataset-history-chart", metrics.dataset_history || [], [
+    {key:"observational",label:"identified tasks",color:"var(--muted-bright)"},
+    {key:"inputs-retained",label:"preserved inputs",color:"var(--cyan)"},
+    {key:"case-retained",label:"preserved candidates",color:"var(--amber)"},
+    {key:"replay-ready",label:"independent replays",color:"var(--green)"},
+    {key:"qualified-comparison",label:"qualified comparisons",color:"var(--violet)"}], "Counts per stage across the observations of this server session");
+  const rows = metrics.dataset_history || [];
+  setText("dataset-history-note", project ? `${metrics.stale ? "Stale data · " : ""}${rows.length} observation(s) in this server session (max 60); the first is the window baseline, and an empty poll adds no point. ${rows.some(row => row.counts === null) ? "Inconclusive gap; no zero or interpolation." : "Stages overlap; no ROI claim."}` : "Select a project; series with different clocks are not aggregated. History of this session, not training or new ROI.");
 }
 
 function renderFunnel(metrics) {
@@ -248,29 +330,119 @@ function renderFunnel(metrics) {
   setText("funnel-accepted", metrics.accepted || 0);
   setText("funnel-first-pass", metrics.accepted_first_pass_yes || 0);
   setText("funnel-reliable", metrics.reliable_first_pass_yes || 0);
-  setText("funnel-maturity", `${metrics.reliable_first_pass_known || 0} follow-ups declarados · ${metrics.escape_7d_pending_tasks || 0} pendentes`);
+  setText("funnel-maturity", `${metrics.reliable_first_pass_known || 0} declared follow-ups · ${metrics.escape_7d_pending_tasks || 0} pending`);
+}
+
+function renderDataset(dataset = {}, stale = false) {
+  const counts = dataset?.counts;
+  for (const stage of ["observational", "inputs-retained", "case-retained", "replay-ready", "qualified-comparison"]) {
+    setText(`dataset-${stage}`, counts?.[stage] == null || (!dataset.complete && counts[stage] === 0) ? "N/A" : `${dataset.complete ? "" : "≥ "}${integer(counts[stage])}`);
+    setTrack(`dataset-track-${stage}`, counts?.[stage], counts?.observational || 1);
+  }
+  setText("dataset-boundary", `${stale ? "Last data preserved, no current check" : dataset?.complete ? "Complete read coverage" : "Partial or incomplete read"} · Results of the latest byte checks, not current integrity. Oldest check: ${localDateTime(dataset?.oldest_checked_at)}; latest: ${localDateTime(dataset?.latest_checked_at)} (date N/A when not checked). The cache does not refresh these dates; admission/replay revalidate the bytes. Not dependency closure, independent replay, holdout or ROI; projection capped at 100 cases per project.`);
+}
+
+function renderFreshness(metrics, readAt) {
+  setText("last-updated", localDateTime(readAt));
+  setText("last-ingested", localDateTime(metrics.ingested_at));
+  setText("source-status", metrics.stale ? "STALE DATA · last data preserved"
+    : metrics.available === false || metrics.projects_unavailable ? "READ UNAVAILABLE OR PARTIAL"
+    : "Current read; ingestion changes only when the data does");
+}
+
+function renderCuration(curation = {}, stale = false) {
+  const preserved = stale || curation.stale || curation.available === false;
+  setText("curation-status", !curation.configured ? "Curation not configured"
+    : preserved ? "Checkpoint stale or unavailable; last data preserved"
+    : "Declared checkpoint · file integrity checked");
+  setText("curation-completed", localDateTime(curation.completed_at));
+  setText("curation-summary", curation.in_scope === false ? "Project outside the scope of this checkpoint; coverage N/A."
+    : curation.counts ? `${integer(curation.counts.retained)} retained case(s) · ${integer(curation.counts.observational)} observational · ${integer(curation.counts.excluded)} excluded · ${integer(curation.counts.followup_sources)} follow-up source(s) · ${integer(curation.counts.corrected_cases_declared)} case(s) with a declared correction · ${integer(curation.counts.escaped_cases_declared)} case(s) with a declared escape · ${integer(curation.counts.gate_hypotheses_declared)} declared gate proposal(s) · ${integer(curation.counts.routing_hypotheses_declared)} declared routing proposal(s) · configured manifest scope`
+    : "Counts N/A; no curation or progress is assumed.");
+  setText("curation-boundary", "Declared checkpoint; authorship not authenticated. Linked corrections/escapes are declarations, not authenticated incidents or D7 maturity. Polling does not rerun admission/oracle. Not training, policy promotion or proof of ROI.");
+  const proposals = curation.in_scope === false || !Array.isArray(curation.proposals) ? [] : curation.proposals.slice(0, 2)
+    .filter(entry => entry && ["gate", "routing"].includes(entry.kind) && typeof entry.source_sha256 === "string" && /^[a-f0-9]{64}$/.test(entry.source_sha256))
+    .map(entry => `${entry.kind} ${entry.source_sha256.slice(0, 8)} (review pending)`);
+  if (proposals.length) byId("curation-boundary").textContent += ` Proposals from the last${preserved ? " preserved" : ""} cycle: ${proposals.join("; ")}.`;
+}
+
+function renderTrial(trial) {
+  const box = byId("observatory-trial");
+  box.replaceChildren();
+  if (!trial) { box.append(element("p", "measurement-note", "Effort trial not configured (observatory.effort_trial).")); return; }
+  const pct = (v) => (typeof v === "number" ? `${Math.round(v * 100)}%` : "N/A");
+  const pp = (v) => `${v >= 0 ? "+" : "−"}${Math.abs(Math.round(v * 100))}`;
+  const band = (b) => (Array.isArray(b) ? `${pp(b[0])} to ${pp(b[1])} pp` : "N/A");
+  const arms = (by) => `medium ${pct(by?.medium)}, xhigh ${pct(by?.xhigh)}`;
+  const e = trial.enrollment || {};
+  box.append(element("h3", null, `Effort trial · ${trial.trial_id} · ${trial.enabled ? "running" : "off"} · verdict: ${trial.verdict}`));
+  const gates = Object.entries(trial.gates || {}).map(([k, v]) => `${k} ${v ? "ok" : "not yet"}`).join(" · ");
+  box.append(element("p", "observatory-answer", `Enrollment ${e.open ? "open" : `closed ${String(e.closed_at || "").slice(0, 10)}`}: sessions with an integrated commit by drawn arm: medium ${integer(e.per_arm?.medium)}, xhigh ${integer(e.per_arm?.xhigh)} (target ${integer(e.target)} per arm or until ${e.deadline || "N/A"}) · all drawn sessions: medium ${integer(trial.sessions?.medium)}, xhigh ${integer(trial.sessions?.xhigh)} · compliance ${pct(trial.compliance)} (needs ${pct(trial.min_compliance)}) · gates: ${gates}.`));
+  const primary = trial.primary, secondary = trial.secondary || {};
+  if (primary === "blinded" || primary == null) {
+    box.append(element("p", "observatory-answer", `Effort trial outcomes blinded until ${String(trial.blinded_until?.["30"] || "N/A").slice(0, 10)} (7-day secondaries: ${String(trial.blinded_until?.["7"] || "N/A").slice(0, 10)}); pre-registered readout if enrollment runs to its deadline, earlier once both arms reach the target. No rates, curves or differences before then.`));
+  } else if (primary === "not-computed") {
+    box.append(element("p", "observatory-answer", "Readout open: line survival is not computed by the dashboard; run python3 scripts/effort_trial_analysis.py."));
+  } else {
+    const s7 = secondary.survival_7d, s14 = secondary.survival_14d, corr = secondary.corrective_share;
+    box.append(element("p", "observatory-answer", `30-day line survival: ${arms(primary.survival_30d)} · medium − xhigh CI 90/95/99%: ${band(primary.intervals?.["90"])} / ${band(primary.intervals?.["95"])} / ${band(primary.intervals?.["99"])} · non-inferiority margin ${pp(trial.margin || 0)} pp on the lower 95% limit.`));
+    box.append(element("p", "observatory-answer", `Line survival at 7 days: ${arms(s7?.by_arm)} · at 14 days: ${arms(s14?.by_arm)} · corrective share of later commits: medium ${pct(corr?.medium?.share)}, xhigh ${pct(corr?.xhigh?.share)}.`));
+  }
+  box.append(element("p", "measurement-note", "Intention to treat: sessions count under the effort drawn before they began, not the effort used. No verdict before the gates pass."));
+}
+
+function renderObservatory(project) {
+  const status = byId("observatory-status"), calibrations = byId("observatory-calibrations"), sessions = byId("observatory-sessions");
+  calibrations.replaceChildren();
+  sessions.replaceChildren();
+  const view = project?.observatory;
+  if (!project) { status.textContent = "Select a repository to see the three questions: what did you run, did it last, could you have spent less."; return; }
+  if (!view) { status.textContent = "No observatory read for this repository."; return; }
+  if (!view.opted_in) { status.textContent = view.answer || "Repository not in the observatory (observatory.projects)."; return; }
+  if (!view.available) { status.textContent = `Observatory unavailable: ${view.error || "N/A"}`; return; }
+  status.textContent = `${integer(view.sessions.length)} recorded session(s) · levels built: ${(view.parameters?.levels_built || []).join(", ")} · each answer carries its badge; no badge = no evidence to judge.`;
+  for (const c of view.calibrations || []) {
+    const box = element("div", "observatory-block");
+    box.append(element("h3", null, `Calibrated on your repository · ${c.cli} · ${c.model}`));
+    if (c.error) box.append(element("p", "measurement-note", `Unreadable analysis: ${c.error}`));
+    for (const [effort, v] of Object.entries(c.by_effort || {})) box.append(element("p", "observatory-answer", `At ${effort}: [${v.badge || "no badge"}] ${v.answer}`));
+    if (c.limits) box.append(element("p", "measurement-note", c.limits));
+    calibrations.append(box);
+  }
+  for (const s of (view.sessions || []).slice(-10).reverse()) {
+    const box = element("div", "observatory-block");
+    box.append(element("h3", null, `Session ${String(s.session_id).slice(0, 8)} · ${s.source || "CLI N/A"} · started ${s.started_at ?? "N/A"}`));
+    for (const q of s.questions || []) {
+      box.append(element("p", "observatory-answer", `${q.question} [${q.badge || "no badge"}] ${q.answer}`));
+      if (q.limits) box.append(element("p", "measurement-note", q.limits));
+    }
+    sessions.append(box);
+  }
 }
 
 function renderNavigation() {
   const snapshot = state.snapshot;
+  const focused = document.activeElement?.id;
   setText("overview-count", snapshot.projects.length);
-  setText("available-count", `${snapshot.aggregate.projects_available} ativos`);
+  setText("available-count", state.transportError ? "Stale read" : `${snapshot.aggregate.projects_available} readable`);
   byId("overview-nav").classList.toggle("is-active", !state.selectedProject);
   const list = byId("project-nav");
   list.replaceChildren();
   snapshot.projects.forEach((project) => {
     const button = element("button", `project-button${project.project_id === state.selectedProject ? " is-active" : ""}`);
     button.type = "button";
-    button.setAttribute("aria-label", `Abrir projeto ${project.name}`);
-    const status = project.available ? project.objective.status : "unavailable";
-    button.append(element("span", `project-dot ${status}`), element("span", "project-name", project.name), element("span", "project-tasks", `${project.activity?.sessions || 0} sessões`));
+    button.id = `project-nav-${project.project_id}`;
+    button.setAttribute("aria-label", `Open project ${project.name}`);
+    const status = projectStatus(project);
+    button.append(element("span", `project-dot ${status}`), element("span", "project-name", project.name), element("span", "project-tasks", `${project.activity?.sessions || 0} sessions`));
     button.addEventListener("click", () => { state.selectedProject = project.project_id; render(); });
     list.append(button);
+    if (button.id === focused) button.focus({preventScroll:true});
   });
 }
 
 function projectStatus(project) {
-  return project.available ? project.objective.status : "unavailable";
+  return !state.transportError && project.available ? project.objective.status : "unavailable";
 }
 
 function renderProjects() {
@@ -284,7 +456,7 @@ function renderProjects() {
       project.name,
       statusLabel(projectStatus(project)),
       activity.sessions || 0,
-      integer(activity.tokens_total),
+      activityTokens(activity),
       terminalMoney(activity),
       percent(metrics.reliable_first_pass_rate),
       money(metrics.cost_usd_per_reliable),
@@ -299,32 +471,34 @@ function renderProjects() {
     row.addEventListener("click", () => { state.selectedProject = project.project_id; render(); });
     body.append(row);
   });
-  setText("projects-summary", `${state.snapshot.projects.length} registrados`);
+  setText("projects-summary", `${state.snapshot.projects.length} registered`);
 }
 
 function recentTasks() {
   const project = selectedProject();
-  const rows = project ? project.recent_tasks : state.snapshot.projects.flatMap((item) => item.recent_tasks.map((task) => ({ ...task, project_name: item.name })));
+  const rows = project ? project.recent_tasks.map((task) => ({...task, stale: state.transportError || project.stale})) : state.snapshot.projects.flatMap((item) => item.recent_tasks.map((task) => ({ ...task, project_name: item.name, stale: state.transportError || item.stale })));
   return rows.sort((a, b) => String(b.completed_at || "").localeCompare(String(a.completed_at || ""))).slice(0, 20);
 }
 
 function taskRoute(task) {
-  const provider = task.served_provider || task.provider || task.requested_provider || "provider N/D";
-  const model = task.served_model || task.model || task.requested_model || "model N/D";
+  const provider = task.served_provider || task.provider || task.requested_provider || "provider N/A";
+  const model = task.served_model || task.model || task.requested_model || "model N/A";
   return `${provider}/${model}`;
 }
 
 function renderActivity(tasks) {
   const list = byId("activity-list");
   list.replaceChildren();
-  if (!tasks.length) { list.append(element("p", "empty-copy", "Nenhum receipt terminal. O funil começará assim que uma tarefa instrumentada terminar.")); return; }
+  if (!tasks.length) { list.append(element("p", "empty-copy", "No terminal receipt. The funnel will start as soon as an instrumented task finishes.")); return; }
   tasks.forEach((task) => {
     const row = element("div", "activity-row");
     row.append(element("span", `activity-status ${task.status || ""}`));
     const main = element("div", "activity-main");
-    main.append(element("strong", "", task.task_id || "tarefa sem ID"), element("span", "", `${task.project_name || ""} · ${task.status || "N/D"} · ${taskRoute(task)}`));
-    const cost = task.cost_usd != null && task.cost_source && task.cost_status ? `${money(task.cost_usd)} · ${task.cost_status} · ${task.cost_source}` : "custo N/D";
-    main.append(element("span", "", task.acceptance_evidence === "controlled" && task.acceptance_summary && /^[a-f0-9]{64}$/.test(task.acceptance_sha256 || "") ? `aceitação controller-observed · ${task.acceptance_summary.passed} PASS / ${task.acceptance_summary.failed} FAIL (registro local)` : "aceite declarado / não observado pelo controlador"));
+    main.append(element("strong", "", task.task_id || "task without ID"), element("span", "", `${task.project_name || ""} · ${task.status || "N/A"} · ${taskRoute(task)}`));
+    const cost = task.cost_usd != null && task.cost_source && task.cost_status ? `${money(task.cost_usd)} · ${task.cost_status} · ${task.cost_source}` : "cost N/A";
+    main.append(element("span", "", task.acceptance_summary && /^[a-f0-9]{64}$/.test(task.acceptance_sha256 || "") ? `declared acceptance · ${task.acceptance_summary.passed} PASS / ${task.acceptance_summary.failed} FAIL · authorship not authenticated` : "declared acceptance / not observed by the controller"));
+    const retained = task.retention;
+    main.append(element("span", "", `${localDateTime(task.completed_at)} · ${task.stale ? "stale data · " : ""}contribution: declared terminal${task.matched_start ? " · closed a recorded start" : ""}${task.cost_usd != null ? " · cost reported" : ""}${retained?.inputs_recoverable === true ? " · input preserved at last check" : task.input_sha256 ? " · input reference" : ""}${retained?.candidate_recoverable === true ? " · candidate preserved at last check" : ""}${retained?.inputs_recoverable === true ? ` (${localDateTime(retained.checked_at)}; not current integrity)` : ""} · replay not qualified · causal gain not attributed`));
     row.append(main, element("span", "activity-meta", cost));
     list.append(row);
   });
@@ -335,18 +509,18 @@ function renderRoutes(metrics) {
   list.replaceChildren();
   const verified = metrics.routes || [];
   const routes = verified.length ? verified : (metrics.activity?.routes || []);
-  if (!routes.length) { list.append(element("p", "empty-copy", "Nenhuma rota observada. Provider e modelo aparecem após o primeiro log ou receipt.")); return; }
+  if (!routes.length) { list.append(element("p", "empty-copy", "No route observed. Provider and model appear after the first log or receipt.")); return; }
   routes.forEach((route) => {
     const row = element("div", "route-row");
     const main = element("div", "route-main");
-    main.append(element("strong", "", `${route.provider}/${route.model}`), element("span", "", verified.length ? `${route.task_class || "unclassified"} · ${route.effort || "effort N/D"} · ${route.binding}` : "atividade local observada"));
+    main.append(element("strong", "", `${route.provider}/${route.model}`), element("span", "", verified.length ? `${route.task_class || "unclassified"} · ${route.effort || "effort N/A"} · ${route.binding}` : "observed local activity"));
     const values = element("div", "route-metrics");
-    const provenance = `${route.cost_accounting_status === "provisional" ? "provisório" : route.cost_accounting_status || "N/D"} · ${Object.keys(route.cost_sources || {}).sort().join(", ") || "origem N/D"}`;
+    const provenance = `${route.cost_accounting_status || "N/A"} · ${Object.keys(route.cost_sources || {}).sort().join(", ") || "source N/A"}`;
     values.append(
       element("strong", "", verified.length ? `${route.reliable}/${route.reliable_known}` : `${route.sessions}`),
       element("strong", "", money(verified.length ? route.cost_usd_per_reliable : route.cost_usd_estimate)),
-      element("span", "", verified.length ? "aceitos com D7 declarado" : `${integer(route.tokens)} tokens`),
-      element("span", "", verified.length ? `USD / first-pass declarado · ${provenance}` : "API-equiv. opcional")
+      element("span", "", verified.length ? "accepted with declared D7" : `${integer(route.tokens)} tokens`),
+      element("span", "", verified.length ? `USD / declared first-pass · ${provenance}` : "optional API-equiv.")
     );
     row.append(main, values);
     list.append(row);
@@ -356,22 +530,22 @@ function renderRoutes(metrics) {
 function diagnostics(metrics, project) {
   const values = [];
   if (metrics.objective?.status !== "on-target" && metrics.objective?.primary_action) values.push(metrics.objective.primary_action);
-  if (!metrics.started_tasks) values.push("Instrumentação inativa: nenhuma tarefa começou com 007 begin.");
-  if (metrics.active_tasks) values.push(`${metrics.active_tasks} tarefa(s) iniciada(s) ainda sem receipt terminal.`);
-  if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} receipt(s) histórico(s) não têm start correspondente; novos records são rejeitados.`);
-  if (metrics.cost_coverage !== 1) values.push(`Cobertura de custo ${percent(metrics.cost_coverage)}; o KPI exige 100% dos receipts.`);
-  if (metrics.activity?.sessions && metrics.activity.reported_cost_coverage !== 1) values.push(`Custo terminal cobre ${percent(metrics.activity.reported_cost_coverage)} das sessões locais; estimativas externas não fecham esse gate.`);
-  if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} tarefa(s) sem follow-up D7; passagem do tempo não prova ausência de escape.`);
-  if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Envelope presente em ${percent(metrics.authority_coverage)} dos outcomes; ausência permanece não observada.`);
-  if (metrics.friction_blocks) values.push(`${metrics.friction_blocks} ação(ões) permitida(s) foram bloqueadas: atrito de fence a investigar.`);
-  if (metrics.unclassified_blocks) values.push(`${metrics.unclassified_blocks} bloqueio(s) ficaram fora do envelope declarado.`);
+  if (!metrics.started_tasks) values.push("Instrumentation inactive: no task started with 007 begin.");
+  if (metrics.active_tasks) values.push(`${metrics.active_tasks} started task(s) still without a terminal receipt.`);
+  if (metrics.unstarted_terminal_tasks) values.push(`${metrics.unstarted_terminal_tasks} historical receipt(s) have no matching start; new records are rejected.`);
+  if (metrics.cost_coverage !== 1) values.push(`Cost coverage ${percent(metrics.cost_coverage)}; the KPI requires 100% of receipts.`);
+  if (metrics.activity?.sessions && metrics.activity.reported_cost_coverage !== 1) values.push(`Terminal cost covers ${percent(metrics.activity.reported_cost_coverage)} of local sessions; external estimates do not close this gate.`);
+  if (metrics.escape_7d_pending_tasks) values.push(`${metrics.escape_7d_pending_tasks} task(s) without a D7 follow-up; the passage of time does not prove there was no escape.`);
+  if (metrics.tasks && metrics.authority_coverage !== 1) values.push(`Envelope present in ${percent(metrics.authority_coverage)} of outcomes; absence stays not observed.`);
+  if (metrics.friction_blocks) values.push(`${metrics.friction_blocks} allowed action(s) were blocked: fence friction to investigate.`);
+  if (metrics.unclassified_blocks) values.push(`${metrics.unclassified_blocks} block(s) fell outside the declared envelope.`);
   const touch = metrics.touch?.["30"];
-  if (!touch || touch.rate == null) values.push(`Touch 30d: ${touch?.reason || "N/D"}.`);
+  if (!touch || touch.rate == null) values.push(`Touch 30d: ${touch?.reason || "N/A"}.`);
   const projects = project ? [project] : state.snapshot.projects;
   const invalidReceipts = projects.reduce((total, item) => total + (item.invalid_receipts?.length || 0), 0);
   const invalidStarts = projects.reduce((total, item) => total + (item.invalid_task_starts?.length || 0), 0);
-  if (invalidReceipts) values.push(`${invalidReceipts} receipt(s) inválido(s) foram excluídos das métricas.`);
-  if (invalidStarts) values.push(`${invalidStarts} start(s) inválido(s) foram excluídos das métricas.`);
+  if (invalidReceipts) values.push(`${invalidReceipts} invalid receipt(s) were excluded from the metrics.`);
+  if (invalidStarts) values.push(`${invalidStarts} invalid start(s) were excluded from the metrics.`);
   return values;
 }
 
@@ -380,12 +554,41 @@ function renderDiagnostics(metrics, project) {
   setText("diagnostic-count", values.length);
   const list = byId("diagnostic-list");
   list.replaceChildren();
-  if (!values.length) values.push("Nenhuma lacuna de dados conhecida neste escopo.");
+  if (!values.length) values.push("No known data gaps in this scope.");
   values.forEach((value) => list.append(element("li", "", value)));
+}
+
+function renderComparisonChart(evidence) {
+  const host = byId("comparison-chart"); host.replaceChildren();
+  const arms = [evidence?.old,evidence?.new];
+  const valid = evidence?.status === "supported-task-local" && typeof evidence?.experiment_id === "string"
+    && Number.isInteger(evidence?.sample?.cells) && evidence.sample.cells > 0
+    && evidence?.served_identity?.total_cells === evidence.sample.cells
+    && evidence?.served_identity?.verified_cells === evidence.sample.cells
+    && evidence?.pricing?.source?.startsWith("rate-card-estimate:")
+    && arms.every(arm => Number.isInteger(arm?.accepted) && arm.accepted > 0
+      && Number.isInteger(arm.cells) && arm.cells >= arm.accepted
+      && Number.isFinite(arm.cost_usd_total) && arm.cost_usd_total >= 0
+      && Number.isFinite(arm.cost_usd_per_accepted) && arm.cost_usd_per_accepted >= 0
+      && Math.abs(arm.cost_usd_total/arm.accepted-arm.cost_usd_per_accepted) < 1e-9);
+  setText("comparison-chart-note", valid ? `${evidence.experiment_id} · global history, not the project's current result · estimated API-equivalent USD per acceptance, ${arms[0].accepted}/${arms[1].accepted} acceptances; source ${evidence.pricing.source}. Not billing, and not a new v2 ROI.` : "Comparison/cost/basis unavailable or inconsistent; N/A, never zero.");
+  if (!valid) { host.append(element("p", "empty-copy", "USD comparison N/A.")); return; }
+  const maximum = Math.max(1,...arms.map(arm => arm.cost_usd_per_accepted));
+  const svg = svgNode("svg", {viewBox:"0 0 900 190",role:"img","aria-label":"OLD and NEW from the historical experiment, estimated API-equivalent USD per acceptance"});
+  arms.forEach((arm,index) => {
+    const label = svgNode("text", {x:8,y:40+index*70,class:"count-label"});
+    label.textContent = `${index ? "NEW" : "OLD"} · ${money(arm.cost_usd_per_accepted)}`;
+    const bar = svgNode("rect", {x:180,y:20+index*70,width:660*arm.cost_usd_per_accepted/maximum,height:30,fill:index ? "var(--cyan)" : "var(--amber)"});
+    const title = svgNode("title"); title.textContent = `${arm.policy}: ${money(arm.cost_usd_total)} / ${arm.accepted} acceptances per the artifact`;
+    bar.append(title); svg.append(label,bar);
+  });
+  host.append(svg);
+  host.append(element("p", "measurement-note", `OLD ${money(arms[0].cost_usd_per_accepted)} / acceptance · NEW ${money(arms[1].cost_usd_per_accepted)} / acceptance · estimated API-equivalent USD.`));
 }
 
 function renderEvidence() {
   const evidence = state.snapshot.causal_evidence;
+  renderComparisonChart(evidence);
   const sample = evidence?.sample || {};
   const oldCosts = evidence?.old?.cell_cost_usd || [];
   const newCosts = evidence?.new?.cell_cost_usd || [];
@@ -393,21 +596,21 @@ function renderEvidence() {
   const newWall = evidence?.new?.cell_wall_s || [];
   const identity = evidence?.served_identity || {};
   const verifiedIdentity = Number.isInteger(sample.cells) && sample.cells > 0 && identity.total_cells === sample.cells && identity.verified_cells === sample.cells;
-  setText("causal-strength", evidence?.status === "supported-task-local" ? "Suporte local" : "Não comprovado");
-  setText("causal-sample", sample.tasks == null ? "Amostra N/D" : `${sample.tasks} tarefa real · ${sample.accepted}/${sample.cells} células aceitas · ${verifiedIdentity ? "identidade servida verificada" : `identidade ${identity.verified_cells ?? "N/D"}/${identity.total_cells ?? "N/D"}; verificação incompleta`}`);
-  setText("causal-scope", "Experimento histórico global · não mede o ganho atual do projeto selecionado.");
-  setText("causal-old-route", `${evidence?.old?.policy || "Rota N/D"} · ${evidence?.old?.accepted ?? "N/D"}/${evidence?.old?.cells ?? "N/D"} aceites`);
-  setText("causal-new-route", `${evidence?.new?.policy || "Rota N/D"} · ${evidence?.new?.accepted ?? "N/D"}/${evidence?.new?.cells ?? "N/D"} aceites`);
-  setText("causal-pricing", evidence?.pricing?.status?.includes("estimate") ? "USD estimado por rate card; não é faturamento do provider." : "Custo conforme provenance do artefato.");
-  setText("causal-claim", evidence?.claim_pt_br || evidence?.claim || "Nenhum experimento causal publicado.");
-  setText("causal-boundary", evidence?.boundary_pt_br || evidence?.boundary || "Uso operacional não prova causalidade.");
+  setText("causal-strength", evidence?.status === "supported-task-local" ? "Local support" : "Not proven");
+  setText("causal-sample", sample.tasks == null ? "Sample N/A" : `${sample.tasks} real task(s) · ${sample.accepted}/${sample.cells} accepted cells · ${verifiedIdentity ? "served identity verified" : `identity ${identity.verified_cells ?? "N/A"}/${identity.total_cells ?? "N/A"}; verification incomplete`}`);
+  setText("causal-scope", "Global historical experiment · does not measure the selected project's current gain.");
+  setText("causal-old-route", `${evidence?.old?.policy || "Route N/A"} · ${evidence?.old?.accepted ?? "N/A"}/${evidence?.old?.cells ?? "N/A"} accepted`);
+  setText("causal-new-route", `${evidence?.new?.policy || "Route N/A"} · ${evidence?.new?.accepted ?? "N/A"}/${evidence?.new?.cells ?? "N/A"} accepted`);
+  setText("causal-pricing", evidence?.pricing?.status?.includes("estimate") ? "USD estimated from a rate card; not provider billing." : "Cost as per the artifact's provenance.");
+  setText("causal-claim", evidence?.claim || "No causal experiment published.");
+  setText("causal-boundary", evidence?.boundary || "Operational use does not prove causality.");
   setText("causal-old-cost", money(evidence?.old?.cost_usd_per_accepted));
   setText("causal-new-cost", money(evidence?.new?.cost_usd_per_accepted));
-  setText("causal-cost-delta", evidence?.delta?.cost_pct == null ? "N/D" : `${decimal(evidence.delta.cost_pct, 1)}%`);
-  setText("causal-latency-delta", evidence?.delta?.wall_per_accepted_pct == null ? "N/D" : `${decimal(evidence.delta.wall_per_accepted_pct, 1)}%`);
+  setText("causal-cost-delta", evidence?.delta?.cost_pct == null ? "N/A" : `${decimal(evidence.delta.cost_pct, 1)}%`);
+  setText("causal-latency-delta", evidence?.delta?.wall_per_accepted_pct == null ? "N/A" : `${decimal(evidence.delta.wall_per_accepted_pct, 1)}%`);
   setText("causal-spread", oldCosts.length && newCosts.length && oldWall.length && newWall.length
-    ? `Faixa das 3 réplicas · custo/célula CONTROL ${money(Math.min(...oldCosts))}–${money(Math.max(...oldCosts))} · TREATMENT ${money(Math.min(...newCosts))}–${money(Math.max(...newCosts))} · tempo CONTROL ${integer(Math.min(...oldWall))}–${integer(Math.max(...oldWall))}s · TREATMENT ${integer(Math.min(...newWall))}–${integer(Math.max(...newWall))}s`
-    : "Dispersão N/D");
+    ? `Range across the 3 replicas · cost/cell CONTROL ${money(Math.min(...oldCosts))}–${money(Math.max(...oldCosts))} · TREATMENT ${money(Math.min(...newCosts))}–${money(Math.max(...newCosts))} · time CONTROL ${integer(Math.min(...oldWall))}–${integer(Math.max(...oldWall))}s · TREATMENT ${integer(Math.min(...newWall))}–${integer(Math.max(...newWall))}s`
+    : "Spread N/A");
 }
 
 function render() {
@@ -425,33 +628,58 @@ function render() {
   renderTrend(metrics.trend_30d);
   renderAuthority(metrics, metrics.authority_confidence);
   renderFunnel(metrics);
+  renderDataset(metrics.dataset, metrics.stale || metrics.available === false || metrics.projects_unavailable > 0);
+  renderCuration(project?.curation || state.snapshot.curation, state.transportError);
+  renderObservatory(project);
+  renderTrial(state.snapshot.effort_trial);
+  renderTemporalCharts(metrics, project);
   renderProjects();
   renderActivity(recentTasks());
   renderRoutes(metrics);
   renderEvidence();
   renderDiagnostics(metrics, project);
   setText("framework-version", `v${state.snapshot.framework_version}`);
-  setText("last-updated", new Date(state.snapshot.generated_at).toLocaleTimeString("pt-BR"));
-  setText("server-status", "Atualização a cada 2 segundos");
+  renderFreshness(metrics, state.snapshot.generated_at);
+  setText("last-event", localDateTime(metrics.latest_event_at));
+  setText("server-status", state.transportError ? "No current read · last data preserved" : "Polling every 2 seconds · one read at a time");
+  byId("dashboard-content").hidden = false;
   byId("dashboard-content").setAttribute("aria-busy", "false");
 }
 
 async function loadSnapshot() {
   if (state.loading) return;
   state.loading = true;
+  const previous = state.snapshot;
+  let selectedAtApply, focusedAtApply;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 10000);
   byId("refresh-button").classList.add("is-loading");
   try {
-    const response = await fetch("/api/snapshot", { cache: "no-store" });
+    const response = await fetch("/api/snapshot", { cache: "no-store", signal:controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    state.snapshot = await response.json();
+    const next = await response.json();
+    if (next?.schema !== "007-framework/dashboard-snapshot/v1" || !Array.isArray(next.projects)
+        || !next.aggregate || typeof next.generated_at !== "string" || !/(?:Z|[+-]\d{2}:\d{2})$/.test(next.generated_at)
+        || !Number.isFinite(Date.parse(next.generated_at)) || previous && Date.parse(next.generated_at) < Date.parse(previous.generated_at)) throw Error("Invalid snapshot, or older than the last valid read.");
+    selectedAtApply = state.selectedProject;
+    focusedAtApply = document.activeElement?.id;
+    state.snapshot = next;
+    state.transportError = false;
     if (state.selectedProject && !state.snapshot.projects.some((item) => item.project_id === state.selectedProject)) state.selectedProject = null;
     byId("error-banner").hidden = true;
     render();
   } catch (error) {
+    if (state.snapshot !== previous) state.selectedProject = selectedAtApply;
+    state.snapshot = previous;
+    state.transportError = true;
+    if (previous) render();
+    else byId("dashboard-content").hidden = true;
+    if (focusedAtApply) byId(focusedAtApply)?.focus({preventScroll:true});
     byId("error-banner").hidden = false;
-    setText("error-banner", `Não foi possível atualizar o cockpit: ${error.message}`);
-    setText("server-status", "Sem conexão");
+    setText("error-banner", "Read unavailable or invalid; last data preserved, no current progress or approval.");
+    setText("server-status", "No current valid read");
   } finally {
+    window.clearTimeout(timeout);
     state.loading = false;
     byId("refresh-button").classList.remove("is-loading");
   }

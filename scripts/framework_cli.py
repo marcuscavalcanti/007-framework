@@ -16,6 +16,9 @@ import threading
 import time
 import uuid
 import webbrowser
+from cli_telemetry import NativeTelemetry, drain, enrich, validate_command
+import replay_capture
+import harness_report
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -191,7 +194,7 @@ def validate_route_config(value):
     return value
 
 
-def route_performance(candidate, receipts, task_class):
+def route_performance(candidate, receipts, task_class, *, starts=None, followups=None, as_of=None):
     matching = [
         receipt for receipt in receipts
         if receipt.get("task_class") == task_class
@@ -199,54 +202,42 @@ def route_performance(candidate, receipts, task_class):
         and (receipt.get("served_model") or receipt.get("model")) == candidate["model"]
         and (receipt.get("served_effort") or receipt.get("effort")) == candidate["effort"]
     ]
-    reliable = [
-        receipt for receipt in matching
-        if receipt.get("status") == "accepted"
-        and receipt.get("first_pass") == "yes"
-        and receipt.get("escape_7d") in (False, "no")
-    ]
-    mature = [
-        receipt for receipt in matching
-        if receipt.get("first_pass") in ("yes", "no")
-        and receipt.get("escape_7d") in (True, False, "yes", "no")
-    ]
+    matched_ids = {harness_report._identity(r) for r in matching}
+    terminal_ids = {harness_report._identity(r) for r in receipts}
+    cohort_starts = [r for r in (starts or [])
+                     if harness_report._identity(r) in matched_ids or harness_report._identity(r) not in terminal_ids]
+    events = followups if followups is not None else [r["followup_7d"] for r in matching if isinstance(r.get("followup_7d"), dict)]
+    economics = harness_report.summarize_economics(matching, starts=cohort_starts,
+        followups=events, cost_basis=None, as_of=as_of or datetime.now(timezone.utc))
+    if any((r.get("task_class") == task_class or r.get("task_class") not in TASK_CLASSES) and harness_report.route_identity_unavailable(r)
+            for r in receipts):
+        economics["cohort_complete"] = False
+        economics["cost_scope_complete"] = False
+        economics["cost_usd_per_declared_accepted_with_overhead"] = None
+        economics["cost_usd_per_reliable_with_overhead_declared"] = None
+        economics["reasons"] = sorted(set(economics["reasons"]) | {"terminal route scope unavailable"})
+        economics["cost_usd_per_reliable_declared"] = None
+        economics["wall_s_per_reliable_declared"] = None
+    reliable, mature = economics["reliable_declared"], economics["quality_known_declared"]
     repairs = [receipt.get("repair_rounds") for receipt in matching]
-    costs_known = all(
-        isinstance(receipt.get("cost_usd"), (int, float))
-        and not isinstance(receipt.get("cost_usd"), bool)
-        and math.isfinite(receipt["cost_usd"])
-        and isinstance(receipt.get("cost_source"), str)
-        and receipt.get("cost_status") in ("final", "provisional")
-        for receipt in matching
-    )
-    wall_known = all(
-        isinstance(receipt.get("wall_s"), (int, float))
-        and not isinstance(receipt.get("wall_s"), bool)
-        and math.isfinite(receipt["wall_s"])
-        for receipt in matching
-    )
-    reliable_rate = len(reliable) / len(mature) if mature else None
-    escape_rate = sum(receipt.get("escape_7d") in (True, "yes") for receipt in mature) / len(mature) if mature else None
+    reliable_rate = reliable / mature if mature else None
+    escape_rate = economics["escapes_declared"] / economics["linked_followups"] if economics["linked_followups"] else None
     repairs_mean = sum(repairs) / len(repairs) if matching and all(isinstance(value, int) and not isinstance(value, bool) for value in repairs) else None
     return {
         "tasks": len(matching),
-        "mature": len(mature),
-        "reliable": len(reliable),
+        "mature": mature,
+        "reliable": reliable,
+        "economics": economics,
         "reliable_rate": reliable_rate,
         "escape_rate": escape_rate,
         "repair_rounds_mean": repairs_mean,
-        "cost_usd_per_reliable": (
-            round(sum(receipt["cost_usd"] for receipt in matching) / len(reliable), 6)
-            if matching and reliable and costs_known else None
-        ),
-        "wall_s_per_reliable": (
-            round(sum(receipt["wall_s"] for receipt in matching) / len(reliable), 3)
-            if matching and reliable and wall_known else None
-        ),
+        "cost_usd_per_reliable": economics["cost_usd_per_reliable_declared"],
+        "wall_s_per_reliable": economics["wall_s_per_reliable_declared"],
     }
 
 
-def select_route(candidates, receipts, task_class, which=shutil.which):
+def select_route(candidates, receipts, task_class, which=shutil.which, *, starts=None, followups=None, as_of=None):
+    as_of = as_of or datetime.now(timezone.utc)
     if task_class not in TASK_CLASSES:
         raise ValueError(f"task_class must be one of: {', '.join(sorted(TASK_CLASSES))}")
     available = [
@@ -255,7 +246,8 @@ def select_route(candidates, receipts, task_class, which=shutil.which):
     ]
     measured, rejected = [], {}
     for candidate in available:
-        performance = route_performance(candidate, receipts, task_class)
+        performance = route_performance(candidate, receipts, task_class,
+                                        starts=starts, followups=followups, as_of=as_of)
         reasons = []
         if performance["mature"] < 5:
             reasons.append("fewer than 5 mature outcomes")
@@ -267,12 +259,18 @@ def select_route(candidates, receipts, task_class, which=shutil.which):
             reasons.append("repair rounds above 0.5")
         if performance["cost_usd_per_reliable"] is None:
             reasons.append("cost coverage incomplete")
+        if not performance["economics"]["cost_scope_complete"]:
+            reasons.append("overhead cost scope incomplete")
         if performance["wall_s_per_reliable"] is None:
             reasons.append("latency coverage incomplete")
         if reasons:
             rejected[candidate["id"]] = reasons
         else:
             measured.append({**candidate, **performance})
+    if len({(row["economics"]["project_id"], row["economics"]["cost_basis"]) for row in measured}) > 1:
+        for row in measured:
+            rejected[row["id"]] = ["non-comparable project or USD basis"]
+        measured = []
     measured.sort(key=lambda item: (item["cost_usd_per_reliable"], item["wall_s_per_reliable"], item["id"]))
     selected = measured[0] if measured else next((item for item in available if item.get("fallback")), None)
     return {
@@ -297,8 +295,15 @@ def load_route_receipts(repo):
         value = read_json(path)
         if not isinstance(value, dict):
             raise ValueError(f"invalid route receipt: {path}")
-        receipts.append(value)
+        receipts.extend(harness_report.scope_project([value], marker["project_id"]))
     return receipts
+
+
+def load_route_starts(repo):
+    root = git_root(repo)
+    marker = validate_marker(read_json(root / ".007/project.json"))
+    return harness_report.scope_project([validate_task_start(read_json(path))
+        for path in sorted((root / ".007/tasks").glob("*.task.json"))], marker["project_id"])
 
 
 def validate_authority(value):
@@ -322,6 +327,8 @@ def read_authority(path):
 
 
 def validate_task_start(value):
+    if isinstance(value, dict) and "project_id" in value and (not isinstance(value["project_id"], str) or not value["project_id"]):
+        raise ValueError("task start project identity must be a non-empty string")
     if not isinstance(value, dict) or value.get("schema") != TASK_START_SCHEMA:
         raise ValueError(f"task start schema must be {TASK_START_SCHEMA}")
     validate_task_id(value.get("task_id"))
@@ -422,12 +429,13 @@ def unregister_project(project, registry_path):
     return removed[0]
 
 
-def begin_task(repo, task_id=None, now=None, authority_file=None, acceptance_file=None):
+def begin_task(repo, task_id=None, now=None, authority_file=None, acceptance_file=None,
+               capture_config_file=None, vault_root=None):
     root = git_root(repo)
     marker_path = root / ".007" / "project.json"
     if not marker_path.exists():
         raise ValueError("project is not initialized; run 007 init first")
-    validate_marker(read_json(marker_path))
+    marker = validate_marker(read_json(marker_path))
     instant = now or datetime.now(timezone.utc)
     if task_id is None:
         stamp = instant.strftime("%Y%m%dT%H%M%SZ")
@@ -435,9 +443,22 @@ def begin_task(repo, task_id=None, now=None, authority_file=None, acceptance_fil
     validate_task_id(task_id)
     task = {
         "schema": TASK_START_SCHEMA,
+        "project_id": marker["project_id"],
         "task_id": task_id,
         "started_at": instant.isoformat().replace("+00:00", "Z"),
     }
+    capture_file = Path(capture_config_file) if capture_config_file else marker_path.parent / "capture-config.json"
+    if capture_config_file or capture_file.exists():
+        config = replay_capture.load_capture_config(capture_file, root)
+        if config["schema"] == replay_capture.CONFIG_SCHEMA_V2:
+            raise ValueError("v2-execution-unqualified")
+        if acceptance_file and Path(acceptance_file).resolve() != (root / config["acceptance_file"]).resolve():
+            raise ValueError("acceptance file must match captured contract")
+        vault = Path(vault_root) if vault_root is not None else replay_capture.default_vault()
+        task["replay_ref"] = replay_capture.capture_input(
+            root, marker["project_id"], task_id, config, vault_root=vault)
+        if acceptance_file:
+            acceptance_file = vault / Path(task["replay_ref"]["manifest"]).parent / "inputs" / config["acceptance_file"]
     if authority_file:
         task["authority"], task["authority_sha256"] = read_authority(authority_file)
     if acceptance_file:
@@ -451,6 +472,8 @@ def begin_task(repo, task_id=None, now=None, authority_file=None, acceptance_fil
 def validate_receipt(value, allow_cost_unavailable=False):
     if not isinstance(value, dict) or value.get("schema") != RECEIPT_SCHEMA:
         raise ValueError(f"receipt schema must be {RECEIPT_SCHEMA}")
+    if "native_telemetry" in value:
+        raise ValueError("native telemetry is computed by 007 run")
     if "authority_summary" in value:
         raise ValueError("authority_summary is computed by 007 record")
     if "authority_evidence" in value:
@@ -487,6 +510,7 @@ def validate_receipt(value, allow_cost_unavailable=False):
             raise ValueError("cost_source must be documented or use custom:<name>")
         if value.get("cost_status") not in ("final", "provisional"):
             raise ValueError("cost_status must be final or provisional")
+    harness_report.validate_cost_components(value)
     required_strings = (
         "proof_required", "proof_reached", "first_pass", "corrective_lines",
         "escape_7d", "requested_provider", "requested_model", "requested_effort",
@@ -728,7 +752,8 @@ def bind_acceptance(receipt, task, checks=None):
 
 
 def record_receipt(
-    repo, source, now=None, controller_event=None, acceptance_results=None, cost_policy=None,
+    repo, source, now=None, controller_event=None, acceptance_results=None, cost_policy=None, native_telemetry=None,
+    vault_root=None,
 ):
     root = git_root(repo)
     marker_path = root / ".007" / "project.json"
@@ -741,11 +766,34 @@ def record_receipt(
         value = json.load(sys.stdin)
     else:
         value = read_json(Path(source).expanduser())
-    receipt = validate_receipt(value, allow_cost_unavailable=cost_policy)
+    if native_telemetry is not None:
+        if native_telemetry.get("project_id") != marker["project_id"]:
+            raise ValueError("native telemetry project identity changed during execution")
+        if not isinstance(value, dict):
+            raise ValueError("receipt must be an object")
+        if native_telemetry.get("task_id") != value.get("task_id"):
+            raise ValueError("native telemetry task identity does not match receipt")
+        validate_task_id(value.get("task_id"))
+        telemetry_path = marker_path.parent / "tasks" / f"{value.get('task_id')}.telemetry.json"
+        if not telemetry_path.is_file() or read_json(telemetry_path) != native_telemetry:
+            raise ValueError("native telemetry requires matching persisted observation")
+        value = enrich(value, native_telemetry)
+    receipt = harness_report.scope_project([validate_receipt(value, allow_cost_unavailable=cost_policy)], marker["project_id"])[0]
+    if native_telemetry is not None:
+        receipt["native_telemetry"] = native_telemetry
     task_path = marker_path.parent / "tasks" / f"{receipt['task_id']}.task.json"
     if not task_path.exists():
         raise ValueError("receipt requires a matching task start")
-    task = validate_task_start(read_json(task_path))
+    task = harness_report.scope_project([validate_task_start(read_json(task_path))], marker["project_id"])[0]
+    ref = task.get("replay_ref")
+    if "replay_ref" in receipt and receipt["replay_ref"] != ref:
+        raise ValueError("terminal replay reference does not match task start")
+    vault = Path(vault_root) if vault_root is not None else replay_capture.default_vault()
+    if ref is not None:
+        metadata = replay_capture.validate_replay_ref(vault, marker["project_id"], task["task_id"], ref)
+        if metadata["schema"] == replay_capture.INPUT_SCHEMA_V2:
+            raise ValueError("v2-execution-unqualified")
+        receipt["replay_ref"] = ref
     if task["task_id"] != receipt["task_id"]:
         raise ValueError("task start task_id does not match receipt")
     if controller_event is not None:
@@ -761,14 +809,19 @@ def record_receipt(
         raise ValueError("completed_at must be a timestamp string")
     destination = receipt_directory(marker_path, marker) / f"{receipt['task_id']}.receipt.json"
     write_json_no_replace(destination, receipt)
+    if ref is not None:
+        replay_capture.finalize_case(root, marker["project_id"], task, destination, vault_root=vault)
     return destination
 
 
-def run_task(repo, task_id, receipt, command, authority_file=None, action=None, acceptance_file=None):
+def run_task(repo, task_id, receipt, command, authority_file=None, action=None, acceptance_file=None, native_cli=None,
+             capture_config_file=None, vault_root=None):
     root = git_root(repo)
     command = command[1:] if command[:1] == ["--"] else command
     if not command:
         raise ValueError("run requires a command after --")
+    if native_cli:
+        validate_command(native_cli, command)
     if authority_file and not action:
         raise ValueError("authority-bound run requires --action")
     if action and not authority_file:
@@ -784,11 +837,28 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     marker_path = root / ".007" / "project.json"
     if not marker_path.exists():
         raise ValueError("project is not initialized; run 007 init first")
-    allow = validate_marker(read_json(marker_path)).get("cost_unavailable_opt_in", False)
+    marker = validate_marker(read_json(marker_path))
+    allow = marker.get("cost_unavailable_opt_in", False)
+    if native_cli and (root / ".007/tasks").resolve() != root / ".007/tasks":
+        raise ValueError("native telemetry requires project-local task state")
+
+    capture_file = Path(capture_config_file) if capture_config_file else marker_path.parent / "capture-config.json"
+    if not acceptance_file and (capture_config_file or capture_file.exists()):
+        config = replay_capture.load_capture_config(capture_file, root)
+        acceptance_file = root / config["acceptance_file"]
 
     task = begin_task(
         root, task_id, authority_file=authority_file, acceptance_file=acceptance_file,
+        capture_config_file=capture_config_file, vault_root=vault_root,
     )
+    if "replay_ref" in task:
+        vault = Path(vault_root) if vault_root is not None else replay_capture.default_vault()
+        captured = replay_capture.validate_replay_ref(vault, marker["project_id"], task["task_id"], task["replay_ref"])
+        if captured["config"]["command"] != command:
+            raise ValueError("executor command must match retained input")
+    telemetry_path = root / ".007/tasks" / f"{task['task_id']}.telemetry.json"
+    if native_cli and (telemetry_path.parent.resolve() != root / ".007/tasks" or telemetry_path.exists() or telemetry_path.is_symlink()):
+        raise ValueError("native telemetry destination must be new and project-local")
     if action and action not in set(task["authority"]["allow"]):
         event = write_controller_event(root, task, action, "blocked")
         write_json_atomic(receipt_path, blocked_receipt(task, action))
@@ -814,11 +884,17 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
             shutdown_signal = signum
             raise SystemExit(128 + signum)
     completed = None
+    native = NativeTelemetry(native_cli) if native_cli else None
+    stream_closed = False
+    started_at = time.monotonic()
     try:
         for sig in previous:
             if previous[sig] != signal.SIG_IGN:
                 signal.signal(sig, interrupted)
-        completed = subprocess.Popen(command, cwd=root, env=environment, start_new_session=True)
+        completed = subprocess.Popen(command, cwd=root, env=environment, start_new_session=True,
+                                     **({"stdout": subprocess.PIPE} if native else {}))
+        if native:
+            stream_closed = drain(completed, native, wait=True)
         completed.wait()
     finally:
         try:
@@ -832,27 +908,68 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
                     except (OSError, ValueError):
                         pass  # A best-effort diagnostic must not replace the original unwind.
         finally:
-            for sig, handler in previous.items():
-                signal.signal(sig, handler)
+            try:
+                if native and completed is not None and completed.stdout is not None:
+                    try:
+                        stream_closed = drain(completed, native, echo=sys.exc_info()[0] is None) or stream_closed
+                    finally:
+                        completed.stdout.close()
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
     event = (
         write_controller_event(root, task, action, "executed", completed.returncode)
         if action else None
     )
+    telemetry = None
+    def preserve(reason):
+        if "replay_ref" in task and state == "gone" and (not native or stream_closed):
+            replay_capture.preserve_incomplete_case(root, marker["project_id"], task, reason, completed.returncode,
+                vault_root=vault, wall_s=time.monotonic() - started_at, telemetry=telemetry)
+    if native:
+        telemetry = {**native.finish(), "task_id": task["task_id"],
+                     "project_id": marker["project_id"],
+                     "command_exit": completed.returncode, "wall_s": time.monotonic() - started_at,
+                     "command_sha256": hashlib.sha256(json.dumps(command).encode()).hexdigest(),
+                     "cleanup_state": state, "stream_closed": stream_closed}
+        if state != "gone" or not stream_closed:
+            telemetry.update(status="incomplete", problem="cleanup-or-stream-unconfirmed")
+        try:
+            if telemetry_path.parent.resolve() != root / ".007/tasks":
+                raise ValueError("native telemetry destination moved during execution")
+            write_json_no_replace(telemetry_path, telemetry, "native telemetry")
+        except (OSError, ValueError) as exc:
+            if state != "gone":
+                raise ValueError(f"executor cleanup incomplete: {state} for process group {completed.pid}; "
+                                 f"native telemetry unavailable: {exc}") from exc
+            preserve("native-telemetry-publication-failed")
+            raise
     if state != "gone":
         raise ValueError(
             f"executor cleanup incomplete: {state} for process group {completed.pid} "
             f"(command exit {completed.returncode})"
         )
     if completed.returncode:
+        preserve("executor-exit")
         return completed.returncode, None
     if not receipt_path.is_file():
+        preserve("missing-receipt")
         raise ValueError(f"command did not produce terminal receipt: {receipt_path}")
-    receipt_value = validate_receipt(read_json(receipt_path), allow_cost_unavailable=allow)
-    if receipt_value["task_id"] != task["task_id"]:
-        raise ValueError("terminal receipt task_id does not match the observed task")
-    checks = run_acceptance(root, task) if acceptance_file else None
+    try:
+        receipt_value = read_json(receipt_path)
+        if telemetry:
+            receipt_value = enrich(receipt_value, telemetry)
+        receipt_value = validate_receipt(receipt_value, allow_cost_unavailable=allow)
+        if receipt_value["task_id"] != task["task_id"]:
+            raise ValueError("terminal receipt task_id does not match the observed task")
+    except (OSError, ValueError):
+        preserve("receipt-rejected")
+        raise
+    checks = run_acceptance(root, task) if task.get("acceptance") else None
     destination = record_receipt(
         root, receipt_path, controller_event=event, acceptance_results=checks, cost_policy=allow,
+        native_telemetry=telemetry,
+        vault_root=vault_root,
     )
     return (4 if checks and any(check["exit"] != 0 for check in checks) else 0), destination
 
@@ -867,6 +984,7 @@ def parser():
     begin.add_argument("--repo", default=".")
     begin.add_argument("--task-id")
     begin.add_argument("--authority-file", type=Path)
+    begin.add_argument("--capture-config", type=Path, help="retain replay input before implementation")
     record = commands.add_parser("record", help="validate and persist one terminal task receipt")
     record.add_argument("--repo", default=".")
     record.add_argument("--file", required=True, help="receipt JSON path, or - for stdin")
@@ -877,6 +995,8 @@ def parser():
     run.add_argument("--authority-file", type=Path)
     run.add_argument("--action")
     run.add_argument("--acceptance-file", type=Path)
+    run.add_argument("--native-cli", choices=("codex", "claude"), help="capture a fresh CLI JSON stream")
+    run.add_argument("--capture-config", type=Path, help="retain replay input before execution")
     run.add_argument("argv", nargs=argparse.REMAINDER, help="command after --")
     route = commands.add_parser("route", help="select the cheapest measured eligible executor")
     route.add_argument("--task-class", required=True, choices=sorted(TASK_CLASSES))
@@ -891,14 +1011,16 @@ def parser():
     dashboard.add_argument("--port", type=int, default=7007)
     dashboard.add_argument("--registry", type=Path, default=default_registry_path())
     dashboard.add_argument("--no-open", action="store_true")
+    dashboard.add_argument("--curation-checkpoint", type=Path, help="explicit private read-only curation checkpoint")
+    dashboard.add_argument("--curation-vault", type=Path, help="vault scope of the configured curation checkpoint")
     return result
 
 
-def run_dashboard(host, port, registry, open_browser=True):
+def run_dashboard(host, port, registry, open_browser=True, *, curation_checkpoint=None, curation_vault=None):
     import dashboard
 
     static_dir = Path(__file__).resolve().parents[1] / "dashboard"
-    server = dashboard.create_server(host, port, registry, static_dir)
+    server = dashboard.create_server(host, port, registry, static_dir, curation_checkpoint=curation_checkpoint, curation_vault=curation_vault)
     url = f"http://{host}:{server.server_port}"
     print(f"007 dashboard: {url}")
     if open_browser:
@@ -921,7 +1043,8 @@ def main(argv=None):
             print(f"receipts: {Path(entry['path']) / '.007' / 'receipts'}")
             return 0
         if args.command == "begin":
-            task = begin_task(args.repo, args.task_id, authority_file=args.authority_file)
+            task = begin_task(args.repo, args.task_id, authority_file=args.authority_file,
+                              capture_config_file=args.capture_config)
             print(f"started: {task['task_id']}")
             return 0
         if args.command == "record":
@@ -931,7 +1054,8 @@ def main(argv=None):
         if args.command == "run":
             status, destination = run_task(
                 args.repo, args.task_id, args.receipt, args.argv,
-                args.authority_file, args.action, args.acceptance_file,
+                args.authority_file, args.action, args.acceptance_file, args.native_cli,
+                capture_config_file=args.capture_config,
             )
             if destination:
                 print(f"recorded: {destination}")
@@ -940,6 +1064,7 @@ def main(argv=None):
             config = validate_route_config(read_json(args.config.expanduser()))
             decision = select_route(
                 config["candidates"], load_route_receipts(args.repo), args.task_class,
+                starts=load_route_starts(args.repo),
             )
             decision["evidence_scope"] = "repository-local"
             if args.format == "json":
@@ -955,7 +1080,10 @@ def main(argv=None):
             print(f"unregistered: {entry['name']} ({entry['path']})")
             return 0
         if args.command == "dashboard":
-            return run_dashboard(args.host, args.port, args.registry, not args.no_open)
+            if args.curation_vault is not None and args.curation_checkpoint is None:
+                raise ValueError("--curation-vault requires --curation-checkpoint")
+            return run_dashboard(args.host, args.port, args.registry, not args.no_open,
+                                 curation_checkpoint=args.curation_checkpoint, curation_vault=args.curation_vault)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

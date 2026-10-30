@@ -28,6 +28,17 @@ routes, choose the lowest all-attempt cost per reliable outcome; use wall time
 and then route ID as deterministic tie-breakers. If none qualifies, use the
 explicit available fallback. The returned JSON includes every rejection reason.
 
+Economic eligibility uses the common cohort helper described in [metrics](metrics.md).
+Matching starts must close at the cutoff, costs must have one explicit or
+unambiguous USD basis, and accepted candidates need linked seven-day observations.
+Unknown terminal route attribution cannot be discarded to make a route cheaper.
+Measured selection additionally requires complete declared overhead scope on
+the same USD basis. Scalar-only legacy records remain visible but no longer
+qualify that economic gate; an explicitly configured fallback remains available.
+The evidence scope remains supplied declarations; selection is not a causal
+promotion of the route. Legacy frozen experiments keep their original evaluator
+and do not qualify this changed selector automatically.
+
 Selection happens once at task start. Switching providers during one attempt
 destroys attribution and repays context, so escalation starts a new attempt and
 receipt.

@@ -1,0 +1,429 @@
+import importlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+
+class NativeTelemetryTests(unittest.TestCase):
+    def test_codex_fork_cannot_be_assigned_as_fresh_task_usage(self):
+        with self.assertRaises(ValueError):
+            self.module().validate_command("codex", [
+                "codex", "exec", "fork", "--json", "--ephemeral", "old-session"])
+
+    def test_parent_inclusive_usage_is_not_summed_twice(self):
+        result = self.parse("codex", [
+            {"type": "thread.started", "thread_id": "parent"},
+            {"type": "turn.started", "thread_id": "parent"},
+            {"type": "turn.completed", "thread_id": "child",
+             "usage": {"input_tokens": 10, "output_tokens": 2}},
+        ])
+        self.assertEqual(result["status"], "incomplete")
+        self.assertIsNone(result["usage"])
+
+    def test_reported_parent_identity_preserves_legitimate_usage(self):
+        result = self.parse("codex", [
+            {"type": "thread.started", "thread_id": "parent"},
+            {"type": "turn.started", "thread_id": "parent"},
+            {"type": "turn.completed", "thread_id": "parent",
+             "usage": {"input_tokens": 10, "output_tokens": 2}},
+        ])
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["usage"]["total_tokens"], 12)
+
+    def module(self):
+        try:
+            return importlib.import_module("cli_telemetry")
+        except ModuleNotFoundError:
+            self.fail("native command telemetry is not implemented")
+
+    def parse(self, provider, rows):
+        reader = self.module().NativeTelemetry(provider)
+        data = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+        for index in range(0, len(data), 7):
+            reader.feed(data[index:index + 7])
+        return reader.finish()
+
+    def test_codex_counts_completed_turns_not_cached_or_reasoning_twice(self):
+        result = self.parse("codex", [
+            {"type": "thread.started", "thread_id": "session-1"},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {"text": "PRIVATE_OUTPUT"}},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 100, "cached_input_tokens": 80,
+                "output_tokens": 20, "reasoning_output_tokens": 10}},
+            {"type": "turn.started"},
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 50, "cached_input_tokens": 40, "output_tokens": 5}},
+        ])
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["usage"]["total_tokens"], 175)
+        self.assertEqual(result["usage"]["cached_input_tokens"], 120)
+        self.assertEqual(result["completed_turns"], 2)
+        self.assertIsNone(result["estimated_cost_usd"])
+        self.assertNotIn("PRIVATE_OUTPUT", json.dumps(result))
+        self.assertNotIn("session-1", json.dumps(result))
+
+    def test_codex_duplicate_terminal_cannot_inflate_usage(self):
+        result = self.parse("codex", [
+            {"type": "thread.started", "thread_id": "session-1"},
+            {"type": "turn.started"},
+            {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}},
+            {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}},
+        ])
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(result["usage"]["total_tokens"], 12)
+
+    def test_absent_optional_counters_remain_unknown_not_zero(self):
+        result = self.parse("codex", [
+            {"type": "thread.started", "thread_id": "s"}, {"type": "turn.started"},
+            {"type": "turn.completed", "usage": {"input_tokens": 2, "output_tokens": 1}},
+        ])
+        self.assertEqual(result["usage"], {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3})
+
+    def test_inconsistent_reported_total_cannot_qualify(self):
+        result = self.parse("codex", [
+            {"type": "thread.started", "thread_id": "s"}, {"type": "turn.started"},
+            {"type": "turn.completed", "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 99}},
+        ])
+        self.assertEqual(result["status"], "incomplete")
+
+    def test_claude_uses_one_final_total_not_partial_message_usage(self):
+        result = self.parse("claude", [
+            {"type": "system", "subtype": "init", "session_id": "session-2"},
+            {"type": "assistant", "message": {"content": "PRIVATE_OUTPUT", "usage": {"input_tokens": 999}}},
+            {"type": "result", "session_id": "session-2", "subtype": "success",
+             "is_error": False, "num_turns": 2, "total_cost_usd": 1.25,
+             "usage": {"input_tokens": 10, "output_tokens": 5,
+                       "cache_read_input_tokens": 20, "cache_creation_input_tokens": 3},
+             "modelUsage": {"claude-opus-5-5": {"costUSD": 1.25}}},
+        ])
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["usage"]["total_tokens"], 38)
+        self.assertEqual(result["estimated_cost_usd"], 1.25)
+        self.assertEqual(result["completed_turns"], 2)
+        self.assertEqual(result["reported_model"], "claude-opus-5-5")
+        self.assertNotIn("PRIVATE_OUTPUT", json.dumps(result))
+
+    def test_claude_thinking_tokens_are_reported_as_reasoning(self):
+        reader = self.module().NativeTelemetry("claude")
+        for row in ({"type": "system", "subtype": "init", "session_id": "s1"},
+                    {"type": "result", "subtype": "success", "is_error": False, "session_id": "s1", "num_turns": 1,
+                     "usage": {"input_tokens": 10, "output_tokens": 50, "cache_read_input_tokens": 0,
+                               "cache_creation_input_tokens": 0, "output_tokens_details": {"thinking_tokens": 20}},
+                     "total_cost_usd": 0.01,
+                     "modelUsage": {"claude-x": {"inputTokens": 10, "outputTokens": 50, "costUSD": 0.01}}}):
+            reader.feed(json.dumps(row).encode() + b"\n")
+        result = reader.finish()
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["usage"]["reasoning_output_tokens"], 20)
+
+    def test_missing_invalid_mixed_or_truncated_streams_are_incomplete(self):
+        cases = [[], [{"type": "turn.completed", "usage": {"input_tokens": True, "output_tokens": 2}}],
+                 [{"type": "thread.started", "thread_id": "a"}, {"type": "thread.started", "thread_id": "b"}]]
+        for rows in cases:
+            self.assertEqual(self.parse("codex", rows)["status"], "incomplete")
+        reader = self.module().NativeTelemetry("codex")
+        reader.feed(b'{"type":"thread.started"')
+        self.assertEqual(reader.finish()["status"], "incomplete")
+        reader = self.module().NativeTelemetry("codex")
+        reader.feed(b"x" * (1024 * 1024 + 1))
+        self.assertEqual(reader.finish()["status"], "incomplete")
+
+    def test_claude_duplicate_result_and_nonfinite_cost_are_incomplete(self):
+        rows = [{"type": "system", "subtype": "init", "session_id": "s"},
+                {"type": "result", "session_id": "s", "subtype": "success", "is_error": False,
+                 "usage": {"input_tokens": 1, "output_tokens": 1}, "total_cost_usd": 0.2}]
+        self.assertEqual(self.parse("claude", rows + rows[1:])["status"], "incomplete")
+        for cost in (True, -1, float("nan"), float("inf")):
+            rows[-1]["total_cost_usd"] = cost
+            self.assertEqual(self.parse("claude", rows)["status"], "incomplete")
+
+    def test_command_boundary_enriches_receipt_without_rewriting_source(self):
+        self.run_fixture("codex", exit_code=0)
+        self.run_fixture("claude", exit_code=0)
+        self.run_fixture("claude", exit_code=0, declared_cost=999)
+
+    def test_native_error_class_keeps_the_most_severe_whatever_the_chunking(self):
+        # Review r42 D2: a later rate-limit row must not be lost behind an earlier transient one, nor overwritten by one.
+        import cli_telemetry
+        rows = [json.dumps(r).encode() + b"\n" for r in (
+            {"type": "thread.started", "thread_id": "t1"}, {"type": "turn.started"},
+            {"type": "error", "message": "Reconnecting... 1/5"}, {"type": "error", "message": "Rate limit reached (429)"},
+            {"type": "error", "message": "Reconnecting... 2/5"})]
+        for chunks in ([b"".join(rows)], rows):
+            telemetry = cli_telemetry.NativeTelemetry("codex")
+            for chunk in chunks:
+                telemetry.feed(chunk)
+            self.assertEqual(telemetry.finish()["problem"], "native-error-rate-limit")
+
+    def test_post_exit_drain_is_time_bounded_when_a_descendant_keeps_writing(self):
+        # Review r42 T1: reading what is left after the child exits must not follow a descendant that writes forever.
+        import time
+        import cli_telemetry
+        script = ("import os, sys, time\nif os.fork() == 0:\n    os.setsid()\n    t = time.time()\n"
+                  "    while time.time() - t < 30:\n        os.write(1, b'x' * 512)\n    os._exit(0)\ntime.sleep(0.5)\nos._exit(0)")
+        process = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE)
+        started = time.monotonic()
+        cli_telemetry.drain(process, cli_telemetry.NativeTelemetry("codex"), wait=True, echo=False)
+        process.stdout.close()
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_wait_drain_reads_what_is_still_in_the_pipe_after_the_child_exited(self):
+        # Review r40 T1: the wait loop stopped on child exit before reading buffered stdout (empty or partial telemetry).
+        import cli_telemetry
+        rows = [{"type": "thread.started", "thread_id": "t1"}, {"type": "turn.started"},
+                {"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 4, "output_tokens": 2}}]
+        script = "import json\nfor r in %r: print(json.dumps(r))" % rows
+        process = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE)
+        process.wait()  # the child is gone before the first poll; all its bytes sit in the pipe
+        telemetry = cli_telemetry.NativeTelemetry("codex")
+        cli_telemetry.drain(process, telemetry, wait=True, echo=False)
+        process.stdout.close()
+        result = telemetry.finish()
+        self.assertEqual((result["status"], result["usage"]["input_tokens"]), ("complete", 10))
+
+    def test_native_pipe_is_drained_after_descendant_cleanup_not_before(self):
+        self.run_fixture("codex", hold_stdout=True)
+
+    def test_failed_command_keeps_usage_without_manufacturing_receipt(self):
+        self.run_fixture("codex", exit_code=7)
+
+    def test_invalid_stream_cannot_publish_terminal_receipt(self):
+        self.run_fixture("codex", invalid=True)
+
+    def test_telemetry_collision_preserves_executed_event_without_overwrite(self):
+        self.run_fixture("codex", authority_bound=True)
+        self.run_fixture("codex", authority_bound=True, telemetry_collision=True)
+
+    def test_non_object_outcome_is_rejected_with_contract_exit(self):
+        self.run_fixture("codex", authority_bound=True, acceptance_bound=True)
+        self.run_fixture("codex", authority_bound=True, acceptance_bound=True, malformed_receipt=True)
+
+    def test_cleanup_diagnostic_survives_telemetry_collision(self):
+        for collision in (False, True):
+            with self.subTest(collision=collision):
+                self.run_fixture("codex", authority_bound=True, acceptance_bound=True,
+                                 telemetry_collision=collision, cleanup_state="cleanup-group-observable")
+
+    def test_line_limit_does_not_depend_on_read_chunk_boundaries(self):
+        header = b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+        row = json.dumps({"type": "item.completed", "text": "x" * (1024 * 1024 - 80)},
+                         separators=(",", ":")).encode() + b"\n"
+        terminal = b'{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":1}}\n'
+        wire = header + row + terminal + b"\n" * 65536
+        for width in (65536, 65521):
+            with self.subTest(chunk_bytes=width):
+                reader = self.module().NativeTelemetry("codex")
+                for offset in range(0, len(wire), width):
+                    reader.feed(wire[offset:offset + width])
+                result = reader.finish()
+                self.assertEqual(result["status"], "complete")
+                self.assertEqual(result["usage"]["total_tokens"], 11)
+
+    def test_oversize_complete_and_partial_rows_remain_rejected(self):
+        for newline in (b"", b"\n"):
+            reader = self.module().NativeTelemetry("codex")
+            reader.feed(b"x" * (1024 * 1024 + 1) + newline)
+            self.assertEqual(reader.finish()["problem"], "stream-limit")
+
+    def test_oversize_content_rows_are_skipped_and_counted_but_never_terminal_ones(self):
+        # r48: a real Go repository made one Codex tool-output row exceed 1 MiB and the whole cell lost its usage. A row whose own
+        # prefix declares agent CONTENT (Codex item.*, Claude user/assistant) is skipped and counted; identity, usage and terminal
+        # rows are never skipped, so an oversize one still rejects the stream.
+        big = "x" * (1024 * 1024 + 10)
+        codex = [b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n',
+                 json.dumps({"type": "item.completed", "item": {"aggregated_output": big}}, separators=(",", ":")).encode() + b"\n",
+                 b'{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":1}}\n']
+        claude = [b'{"type":"system","subtype":"init","session_id":"s"}\n',
+                  json.dumps({"type": "user", "message": {"content": big}}, separators=(",", ":")).encode() + b"\n",
+                  b'{"type":"result","subtype":"success","is_error":false,"session_id":"s","num_turns":1,'
+                  b'"usage":{"input_tokens":3,"output_tokens":2}}\n']
+        for provider, rows, total in (("codex", codex, 11), ("claude", claude, 5)):
+            wire = b"".join(rows)
+            for width in (65536, 65521, len(wire)):
+                with self.subTest(provider=provider, chunk_bytes=width):
+                    reader = self.module().NativeTelemetry(provider)
+                    for offset in range(0, len(wire), width):
+                        reader.feed(wire[offset:offset + width])
+                    result = reader.finish()
+                    self.assertEqual((result["status"], result["problem"]), ("complete", None))
+                    self.assertEqual((result["usage"]["total_tokens"], result["oversized_content_rows"]), (total, 1))
+        terminal = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}, "pad": big},
+                              separators=(",", ":")).encode() + b"\n"
+        reader = self.module().NativeTelemetry("codex")
+        reader.feed(codex[0] + terminal)
+        self.assertEqual(reader.finish()["problem"], "stream-limit")
+
+    def test_aggregate_stream_limit_has_an_exact_positive_boundary(self):
+        limit = self.module().MAX_STREAM_BYTES
+        reader = self.module().NativeTelemetry("codex")
+        header = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                  b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n')
+        prefix, suffix = b'{"type":"ignored","padding":"', b'"}\n'
+        row = prefix + b"x" * (65536 - len(prefix) - len(suffix)) + suffix
+        reader.feed(header)
+        remaining = limit - len(header)
+        while remaining >= len(row):
+            reader.feed(row)
+            remaining -= len(row)
+        reader.feed(b" " * (remaining - 1) + b"\n")
+        boundary = reader.finish()
+        self.assertEqual(boundary["status"], "complete")
+        self.assertEqual(boundary["stream_bytes"], limit)
+        self.assertEqual(boundary["usage"]["total_tokens"], 2)
+        reader.feed(b"\n")
+        over = reader.finish()
+        self.assertEqual(over["stream_bytes"], limit + 1)
+        self.assertEqual(over["status"], "incomplete")
+        self.assertEqual(over["problem"], "stream-limit")
+
+    def test_claude_other_resume_forms_cannot_claim_a_fresh_command(self):
+        base = ["claude", "--print", "--verbose", "--no-session-persistence",
+                "--output-format", "stream-json"]
+        self.module().validate_command("claude", base + ["synthetic"])
+        for option in ("--from-pr", "--teleport", "--cloud", "-rSESSION", "-cvalue"):
+            for argument in (option, option + "=synthetic"):
+                with self.subTest(argument=argument), self.assertRaises(ValueError):
+                    self.module().validate_command("claude", base + [argument, "synthetic"])
+
+    def test_claude_stream_requires_verbose_before_execution(self):
+        with self.assertRaises(ValueError):
+            self.module().validate_command("claude", ["claude", "--print", "--no-session-persistence",
+                                                      "--output-format", "stream-json", "synthetic"])
+
+    def test_claude_native_envelope_refuses_short_options_and_clusters(self):
+        base = ["claude", "--print", "--verbose", "--no-session-persistence",
+                "--output-format", "stream-json"]
+        self.module().validate_command("claude", base + ["--model", "synthetic", "--effort", "high", "-"])
+        for option in ("-pc", "-prSESSION", "-pcrSESSION", "-p", "-v"):
+            with self.subTest(option=option), self.assertRaises(ValueError):
+                self.module().validate_command("claude", base + [option, "synthetic"])
+
+    def run_fixture(self, provider, exit_code=0, invalid=False, declared_cost=None, hold_stdout=False,
+                    authority_bound=False, telemetry_collision=False, malformed_receipt=False,
+                    acceptance_bound=False, cleanup_state=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "project")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            cli = [sys.executable, "-B", str(ROOT / "scripts/framework_cli.py")]
+            subprocess.run(cli + ["init", "--repo", str(repo), "--registry", str(Path(tmp, "registry.json"))],
+                           capture_output=True, check=True)
+            base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+            base.update({"tokens": "unmeasured", "wall_s": "unmeasured"})
+            authority = Path(tmp, "authority.json")
+            if authority_bound:
+                authority.write_text(json.dumps({"schema": "007-framework/authority/v1",
+                                                 "allow": ["test"], "deny": ["deploy"]}))
+            acceptance = Path(tmp, "acceptance.json")
+            if acceptance_bound:
+                acceptance.write_text(json.dumps({"schema": "007-framework/acceptance/v1", "timeout_s": 5,
+                    "commands": [[sys.executable, "-c", "from pathlib import Path; Path('gate.ran').touch()"]]}))
+            if provider == "claude":
+                if declared_cost is None:
+                    for key in ("cost_usd", "cost_source", "cost_status"):
+                        base.pop(key)
+                else:
+                    base["cost_usd"] = declared_cost
+            rows = ([{"type": "thread.started", "thread_id": "native-1"}, {"type": "turn.started"},
+                     {"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 8, "output_tokens": 2}}]
+                    if provider == "codex" else
+                    [{"type": "system", "subtype": "init", "session_id": "native-2"},
+                     {"type": "result", "session_id": "native-2", "subtype": "success", "is_error": False,
+                      "usage": {"input_tokens": 10, "output_tokens": 2}, "total_cost_usd": 0.25,
+                      "modelUsage": {"claude-opus-5-5": {"costUSD": 0.25}}}])
+            if invalid:
+                rows = []
+            executable = Path(tmp, provider)
+            executable.write_text("#!" + sys.executable + "\nimport json, os, sys\nfrom pathlib import Path\n"
+                                  + ("import subprocess\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n" if hold_stdout else "")
+                                  + "value = " + repr(base) + "\nvalue['task_id'] = os.environ['FRAMEWORK_007_TASK_ID']\n"
+                                  + ("Path(os.environ['FRAMEWORK_007_REPO'], '.007/tasks/native-task.telemetry.json').write_text('{}')\n" if telemetry_collision else "")
+                                  + "Path(os.environ['FRAMEWORK_007_RECEIPT_PATH']).write_text(json.dumps(" + ("[1, 2]" if malformed_receipt else "value") + "))\n"
+                                  + "for row in " + repr(rows) + ": print(json.dumps(row), flush=True)\n"
+                                  + "sys.exit(" + str(exit_code) + ")\n")
+            executable.chmod(0o700)
+            args = (["exec", "--json", "--ephemeral", "test"] if provider == "codex" else
+                    ["--print", "--verbose", "--output-format", "stream-json", "--no-session-persistence", "test"])
+            if cleanup_state:
+                cli = [sys.executable, "-B", "-c", "import sys\nsys.path.insert(0, " + repr(str(ROOT / "scripts")) + ")\n"
+                       "import framework_cli as f\noriginal = f.kill_process_group\n"
+                       "def cleanup(process):\n    assert original(process) == 'gone'\n    return " + repr(cleanup_state) + "\n"
+                       "f.kill_process_group = cleanup\nsys.exit(f.main(sys.argv[1:]))\n"]
+            result = subprocess.run(cli + ["run", "--repo", str(repo), "--task-id", "native-task",
+                                          "--receipt", "outcome.json", "--native-cli", provider]
+                                    + (["--authority-file", str(authority), "--action", "test"] if authority_bound else [])
+                                    + (["--acceptance-file", str(acceptance)] if acceptance_bound else [])
+                                    + ["--", str(executable), *args],
+                                    capture_output=True, text=True, timeout=10)
+            if acceptance_bound:
+                self.assertEqual((repo / "gate.ran").exists(),
+                                 not (exit_code or invalid or malformed_receipt or telemetry_collision or cleanup_state),
+                                 result.stderr)
+            if cleanup_state:
+                self.assertIn("executor cleanup incomplete: " + cleanup_state, result.stderr)
+            evidence = repo / ".007/tasks/native-task.telemetry.json"
+            self.assertTrue(evidence.exists(), result.stderr)
+            if authority_bound:
+                event = repo / ".007/events/native-task.event.json"
+                self.assertTrue(event.is_file(), "telemetry suppressed the executed controller event")
+                self.assertEqual(json.loads(event.read_text())["exit_code"], 0)
+                self.assertEqual(json.loads(event.read_text())["outcome"], "executed")
+            if telemetry_collision:
+                self.assertEqual(evidence.read_text(), "{}")
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse((repo / ".007/receipts/native-task.receipt.json").exists())
+                self.assertIn("native telemetry already exists", result.stderr)
+                return
+            telemetry = json.loads(evidence.read_text())
+            self.assertEqual(telemetry["task_id"], "native-task")
+            self.assertEqual(telemetry["command_exit"], exit_code)
+            self.assertTrue(telemetry["stream_closed"])
+            self.assertEqual(telemetry["cleanup_state"], cleanup_state or "gone")
+            if cleanup_state:
+                self.assertEqual(telemetry["status"], "incomplete")
+            self.assertEqual(evidence.stat().st_mode & 0o077, 0)
+            destination = repo / ".007/receipts/native-task.receipt.json"
+            if exit_code or invalid or malformed_receipt or cleanup_state:
+                self.assertEqual(result.returncode, exit_code or 2, result.stderr)
+                self.assertFalse(destination.exists())
+            else:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                stored = json.loads(destination.read_text())
+                self.assertEqual(stored["tokens"], 12)
+                self.assertEqual(stored["native_telemetry"]["stream_sha256"], telemetry["stream_sha256"])
+                self.assertGreaterEqual(stored["wall_s"], 0)
+                original = json.loads((repo / "outcome.json").read_text())
+                self.assertEqual(original["tokens"], "unmeasured")
+                if declared_cost is not None:
+                    self.assertEqual(original["cost_usd"], declared_cost)
+                if provider == "claude":
+                    self.assertEqual(stored["cost_usd"], 0.25)
+                    self.assertEqual(stored["cost_status"], "provisional")
+                    self.assertEqual(stored["cost_source"], "rate-card-estimate")
+
+    def test_resumed_command_is_refused_before_start_or_execution(self):
+        module = self.module()
+        for provider, argv in (("claude", ["claude", "--print", "--resume", "s"]),
+                               ("codex", ["codex", "exec", "resume", "--json", "--ephemeral", "s"])):
+            with self.assertRaises(ValueError):
+                module.validate_command(provider, argv)
+
+    def test_manual_receipt_cannot_claim_native_observation(self):
+        import framework_cli
+        value = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
+        value["native_telemetry"] = {"status": "complete"}
+        with self.assertRaisesRegex(ValueError, "native telemetry"):
+            framework_cli.validate_receipt(value)
+
+
+if __name__ == "__main__":
+    unittest.main()

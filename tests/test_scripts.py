@@ -1,3 +1,4 @@
+import hashlib
 import json
 import io
 import os
@@ -10,7 +11,12 @@ import time
 import unittest
 from unittest import mock
 import stat
+from datetime import datetime, timezone
 from pathlib import Path
+if __package__:
+    from .historical_sources import historical_source
+else:
+    from historical_sources import historical_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,7 +105,7 @@ class ScriptContractTests(unittest.TestCase):
             subprocess.run(["git", "commit", "-qm", "human"], cwd=tmp, check=True, env=env)
             result = self.run_script("touch_rate.py", "--repo", tmp)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("TOUCH-RATE N/D", result.stdout)
+            self.assertIn("TOUCH-RATE N/A", result.stdout)
 
     def test_touch_rate_counts_agent_root_commit_as_surviving(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -170,6 +176,134 @@ class ScriptContractTests(unittest.TestCase):
                     identity, failure = replay_eval.validate_served_identity(value, policy)
                     self.assertIsNone(identity)
                     self.assertEqual(failure, expected)
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_acceptance_runs_through_the_sandbox_prefix_and_a_timeout_still_publishes_the_cell(self):
+        # Review r40 E2: candidate code runs during acceptance, so acceptance gets its own containment prefix ({cwd} = the copy).
+        # Review r40 A1: an acceptance timeout used to escape execute_cell, leaving a paid attempt without a cell file.
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.test",
+                       "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.test"}
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                (repo / "value.txt").write_text("base\n")
+                subprocess.run(["git", "add", "value.txt"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+                base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+                marker = Path(tmp, "sandbox-calls.txt")
+                wrap = ("import os,sys; open(sys.argv[1],'a').write(sys.argv[2]+'\\n'); "
+                        "rest=sys.argv[sys.argv.index('--')+1:]; os.execv(rest[0], rest)")
+                receipt = ("import json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps({"
+                           "'schema':'007-framework/runner-receipt/v1','valid':True,"
+                           "'requested':{'provider':'openai','model':'m','effort':'e'},'served':{'provider':'openai','model':'m','effort':'e'},"
+                           "'identity_source':'t','source_sha256':'b'*64,'usage':{'input_tokens':1,'output_tokens':1},"
+                           "'cost_usd':0.01,'cost_source':'rate-card-estimate'}))")
+                config = {"repos": {"repo": str(repo)}, "require_served_identity": True,
+                          "agent_command": [sys.executable, "-c", receipt, "{runner_receipt}"],
+                          "acceptance_sandbox": [sys.executable, "-c", wrap, str(marker), "{cwd}", "--"],
+                          "acceptance_env": {"PATH": os.environ["PATH"]},  # review r42 E2: minimal explicit environment
+                          "arms": {"NEW": {"provider": "openai", "model": "m", "effort": "e", "doctrine": ""}}}
+                os.environ["R43_PARENT_ONLY"] = "x"
+                self.addCleanup(os.environ.pop, "R43_PARENT_ONLY", None)
+                isolated = "import os; raise SystemExit(1 if 'R43_PARENT_ONLY' in os.environ else 0)"
+                for name, command, timeout in (("ok", isolated, 30), ("slow", "import time; time.sleep(5)", 1)):
+                    with self.subTest(case=name):
+                        output = Path(tmp, "out-" + name)
+                        output.mkdir()
+                        task = {"id": "sbx-" + name, "repo": "repo", "base": base, "accepted": base, "prompt": "p",
+                                "acceptance_timeout_s": timeout, "acceptance": [[sys.executable, "-c", command]]}
+                        cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+                        self.assertTrue((output / f"sbx-{name}-r01-NEW.json").is_file())
+                        if name == "ok":
+                            self.assertTrue(cell["accepted"])
+                            self.assertIn("007-acceptance-sbx-ok-", marker.read_text())
+                            self.assertTrue(marker.read_text().strip().endswith("/workspace"))
+                        else:
+                            self.assertEqual((cell["valid"], cell["failure_class"]), (False, "acceptance-timeout"))
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_cell_keeps_per_test_acceptance_outcomes_and_an_opt_in_candidate_patch(self):
+        # r45: after a cell, keep the candidate's change and the hidden acceptance per test (ids and outcomes only), so a
+        # failure can be told apart as wrong code, another interface or the environment.
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import commit_replay
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.test",
+                       "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.test"}
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                (repo / "value.txt").write_text("base\n")
+                (repo / "test_tiny.py").write_text("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n")
+                subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+                base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+                agent = ("import json,sys; from pathlib import Path; Path('answer.txt').write_text('42\\n'); "
+                         "Path(sys.argv[1]).write_text(json.dumps({"
+                         "'schema':'007-framework/runner-receipt/v1','valid':True,"
+                         "'requested':{'provider':'openai','model':'m','effort':'e'},'served':{'provider':'openai','model':'m','effort':'e'},"
+                         "'identity_source':'t','source_sha256':'b'*64,'usage':{'input_tokens':1,'output_tokens':1},"
+                         "'cost_usd':0.01,'cost_source':'rate-card-estimate'}))")
+                for retain in (True, False):
+                    with self.subTest(retain=retain):
+                        config = {"repos": {"repo": str(repo)}, "require_served_identity": True,
+                                  "agent_command": [sys.executable, "-c", agent, "{runner_receipt}"],
+                                  "arms": {"NEW": {"provider": "openai", "model": "m", "effort": "e", "doctrine": ""}}}
+                        if retain:
+                            config["retain_candidate_patch"] = True
+                        output = Path(tmp, f"out-{retain}")
+                        output.mkdir()
+                        task = {"id": "keep", "repo": "repo", "base": base, "accepted": base, "prompt": "p",
+                                "acceptance": [[sys.executable, "-I", "-c", commit_replay.BOOT.format(paths=["."]), "test_tiny.T.test_ok"]]}
+                        cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+                        self.assertTrue(cell["accepted"])
+                        self.assertEqual(cell["acceptance_outcomes"], {"test_tiny.T.test_ok": "pass"})
+                        if not retain:
+                            self.assertNotIn("candidate_patch", cell)
+                            self.assertEqual(sorted(p.name for p in output.iterdir()), ["keep-r01-NEW.json", "keep-r01-NEW.runner.json"])
+                            continue
+                        patch = cell["candidate_patch"]
+                        data = (output / patch["path"]).read_bytes()
+                        self.assertEqual(patch, {"path": "keep-r01-NEW.candidate.patch",
+                                                 "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
+                        self.assertIn(b"answer.txt", data)
+                        self.assertNotIn(b".007-prompt", data)
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_cell_times_the_agent_apart_from_grading(self):
+        # wall_s spans agent + acceptance + diagnostics; agent_wall_s is the agent alone, so a slow oracle cannot dilute an
+        # effort contrast measured on time.
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.test",
+                       "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.test"}
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                (repo / "value.txt").write_text("base\n")
+                subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+                base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+                config = {"repos": {"repo": str(repo)}, "agent_command": [sys.executable, "-c", "pass"],
+                          "arms": {"NEW": {"model": "m", "effort": "e", "doctrine": ""}}}
+                task = {"id": "timed", "repo": "repo", "base": base, "accepted": base, "prompt": "p",
+                        "acceptance": [[sys.executable, "-c", "import time; time.sleep(1.5)"]]}
+                output = Path(tmp, "out")
+                output.mkdir()
+                cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+                self.assertGreaterEqual(cell["wall_s"] - cell["agent_wall_s"], 1.5)
+                self.assertGreaterEqual(cell["agent_wall_s"], 0)
         finally:
             sys.path.pop(0)
 
@@ -534,26 +668,33 @@ class ScriptContractTests(unittest.TestCase):
             def outcomes(model, cost, wall, escaped=False):
                 return [
                     {
+                        "task_id": f"{model}-{index}", "project_id": "fixture", "completed_at": "2026-10-01T12:00:00Z",
+                        "candidate_sha256": "a" * 64,
+                        "followup_7d": {"task_id": f"{model}-{index}", "project_id": "fixture", "candidate_sha256": "a" * 64,
+                            "source_sha256": "b" * 64, "used_at": "2026-10-01T12:00:00Z",
+                            "observed_from": "2026-10-01T12:00:00Z", "observed_through": "2026-10-09T12:00:00Z",
+                            "escape_7d": "yes" if escaped and index == 0 else "no"},
                         "task_class": "implement", "status": "accepted",
                         "first_pass": "yes", "repair_rounds": 0,
                         "escape_7d": "yes" if escaped and index == 0 else "no",
                         "served_provider": "openai", "served_model": model,
                         "served_effort": "medium" if "terra" in model else "high",
                         "cost_usd": cost, "cost_source": "rate-card-estimate",
+                        "cost_components_usd": {"executor": cost, "review": 0, "retries": 0,
+                            "verification": 0, "infrastructure": 0, "preparation": 0},
                         "cost_status": "provisional", "wall_s": wall,
                     }
                     for index in range(5)
                 ]
 
-            selected = framework_cli.select_route(
-                candidates,
-                outcomes("gpt-5.6-terra", 0.2, 10) + outcomes("gpt-5.6-sol", 0.8, 8),
-                "implement",
-            )
+            observations = outcomes("gpt-5.6-terra", 0.2, 10) + outcomes("gpt-5.6-sol", 0.8, 8)
+            starts = [{"task_id": row["task_id"], "project_id": "fixture", "started_at": "2026-10-01T11:00:00Z"} for row in observations]
+            selected = framework_cli.select_route(candidates, observations, "implement", starts=starts,
+                as_of=datetime(2026, 10, 12, tzinfo=timezone.utc))
             rejected = framework_cli.select_route(
                 candidates,
                 outcomes("gpt-5.6-terra", 0.2, 10, escaped=True) + outcomes("gpt-5.6-sol", 0.8, 8),
-                "implement",
+                "implement", starts=starts, as_of=datetime(2026, 10, 12, tzinfo=timezone.utc),
             )
 
             self.assertEqual(selected["strategy"], "measured")
@@ -653,7 +794,10 @@ class ScriptContractTests(unittest.TestCase):
     def test_route_selector_matches_frozen_old_new_mechanism_cells(self):
         sys.path.insert(0, str(SCRIPTS))
         try:
-            import framework_cli
+            frozen = historical_source("301b1aa30522e87a486088c79687a93d95d2aa4a",
+                                       "scripts/framework_cli.py").decode()
+            historical = {"__name__": "historical_v14", "__file__": str(SCRIPTS / "framework_cli.py")}
+            exec(compile(frozen, "historical-v1.4-framework-cli", "exec"), historical)
             protocol = json.loads((ROOT / "evidence/v1.4.0/route-selector-protocol.json").read_text())
             expected = json.loads((ROOT / "evidence/v1.4.0/route-selector-result.json").read_text())
             candidates = [
@@ -687,7 +831,7 @@ class ScriptContractTests(unittest.TestCase):
             for scenario in protocol["scenarios"]:
                 for replicate in range(1, protocol["replicates"] + 1):
                     old = min(candidates, key=lambda item: item["nominal_cost"])["id"]
-                    new = framework_cli.select_route(candidates, scenarios[scenario["id"]], "implement")["selected"]["id"]
+                    new = historical["select_route"](candidates, scenarios[scenario["id"]], "implement")["selected"]["id"]
                     cells.extend([
                         {"scenario": scenario["id"], "arm": "OLD", "replicate": replicate,
                          "selected": old, "matched": old == scenario["expected_old"]},
@@ -962,16 +1106,24 @@ class ScriptContractTests(unittest.TestCase):
             def outcomes(model, cost):
                 return [
                     {
+                        "task_id": f"{model}-{index}", "project_id": "fixture", "completed_at": "2026-10-01T12:00:00Z",
+                        "candidate_sha256": "a" * 64,
+                        "followup_7d": {"task_id": f"{model}-{index}", "project_id": "fixture", "candidate_sha256": "a" * 64,
+                            "source_sha256": "b" * 64, "used_at": "2026-10-01T12:00:00Z",
+                            "observed_from": "2026-10-01T12:00:00Z", "observed_through": "2026-10-09T12:00:00Z",
+                            "escape_7d": "no"},
                         "task_class": "implement", "status": "accepted", "first_pass": "yes",
                         "repair_rounds": 0, "escape_7d": "no", "served_provider": "openai",
                         "served_model": model, "served_effort": "medium", "wall_s": 5,
-                        **({"cost_usd": cost, "cost_source": "rate-card-estimate", "cost_status": "provisional"}
+                        **({"cost_usd": cost, "cost_source": "rate-card-estimate", "cost_status": "provisional",
+                            "cost_components_usd": {"executor": cost, "review": 0, "retries": 0,
+                                "verification": 0, "infrastructure": 0, "preparation": 0}}
                            if cost is not None else {
                                "cost_usd": None, "cost_status": "unavailable",
                                "cost_source": "custom:chatgpt-plan", "cost_unavailable_reason": "unpriced",
                            }),
                     }
-                    for _ in range(5)
+                    for index in range(5)
                 ]
 
             def candidate(identifier, model, **extra):
@@ -981,8 +1133,10 @@ class ScriptContractTests(unittest.TestCase):
                 }
 
             receipts = outcomes("gpt-unpriced", None) + outcomes("gpt-priced", 9.0)
+            starts = [{"task_id": row["task_id"], "project_id": "fixture", "started_at": "2026-10-01T11:00:00Z"} for row in receipts]
             decision = framework_cli.select_route(
                 [candidate("unpriced", "gpt-unpriced"), candidate("priced", "gpt-priced")], receipts, "implement",
+                starts=starts, as_of=datetime(2026, 10, 12, tzinfo=timezone.utc),
             )
             self.assertEqual(decision["strategy"], "measured")
             self.assertEqual(decision["selected"]["id"], "priced")

@@ -21,6 +21,34 @@ def git(repo, *args):
     return result.stdout
 
 
+def survival(repo, shas, rev="HEAD"):
+    """(lines added by shas, those lines still attributed to shas by blame at rev)."""
+    added = {}
+    files = defaultdict(set)
+    for sha in shas:
+        total = 0
+        for line in git(repo, "show", "--numstat", "--format=", sha).splitlines():
+            fields = line.split("\t")
+            if len(fields) == 3 and fields[0].isdigit():
+                total += int(fields[0])
+                files[sha].add(fields[2])
+        added[sha] = total
+
+    prefixes = {sha[:12]: sha for sha in shas}
+    surviving = defaultdict(int)
+    for filename in sorted({name for names in files.values() for name in names}):
+        try:
+            blame = git(repo, "blame", "-w", "--line-porcelain", rev, "--", filename)
+        except RuntimeError:
+            continue
+        for line in blame.splitlines():
+            token = line.split(" ", 1)[0]
+            if token[:12] in prefixes and len(token) >= 12:
+                surviving[prefixes[token[:12]]] += 1
+
+    return sum(added.values()), sum(min(surviving[sha], added[sha]) for sha in shas)
+
+
 def calculate(repo, days=30, agent_regex=DEFAULT_AGENT_REGEX, max_commits=60):
     repo = Path(repo).expanduser().resolve()
     if not (repo / ".git").exists():
@@ -53,31 +81,7 @@ def calculate(repo, days=30, agent_regex=DEFAULT_AGENT_REGEX, max_commits=60):
             "reason": "no attributable agent commits",
         }
 
-    added = {}
-    files = defaultdict(set)
-    for sha in agents:
-        total = 0
-        for line in git(repo, "show", "--numstat", "--format=", sha).splitlines():
-            fields = line.split("\t")
-            if len(fields) == 3 and fields[0].isdigit():
-                total += int(fields[0])
-                files[sha].add(fields[2])
-        added[sha] = total
-
-    prefixes = {sha[:12]: sha for sha in agents}
-    surviving = defaultdict(int)
-    for filename in sorted({name for names in files.values() for name in names}):
-        try:
-            blame = git(repo, "blame", "-w", "--line-porcelain", "HEAD", "--", filename)
-        except RuntimeError:
-            continue
-        for line in blame.splitlines():
-            token = line.split(" ", 1)[0]
-            if token[:12] in prefixes and len(token) >= 12:
-                surviving[prefixes[token[:12]]] += 1
-
-    total_added = sum(added.values())
-    total_surviving = sum(min(surviving[sha], added[sha]) for sha in agents)
+    total_added, total_surviving = survival(repo, agents)
     rate = 0.0 if total_added == 0 else 100 * (1 - total_surviving / total_added)
     return {
         "window_days": days,
@@ -103,7 +107,7 @@ def main():
         f"agent_commits={result['agent_commits']} human_commits={result['human_commits']}"
     )
     if result["rate"] is None:
-        print("TOUCH-RATE N/D (no attributable agent commits)")
+        print("TOUCH-RATE N/A (no attributable agent commits)")
         return 0
     print(
         f"agent_lines_added={result['agent_lines_added']} "

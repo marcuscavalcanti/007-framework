@@ -17,13 +17,17 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+import replay_capture
+import harness_report
 
 
 TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -38,6 +42,9 @@ D0_DIAGNOSTIC_FIELDS = (
     "changed_files", "lines_added", "lines_deleted", "binary_files_changed",
     "dependency_manifests_changed", "file_jaccard_diagnostic", "line_similarity_diagnostic",
 )
+ACCEPT_OUTCOMES = ("pass", "fail", "error", "skip", "expected-failure", "unexpected-success")
+MAX_ACCEPT_OUTCOMES = 2000
+MAX_CANDIDATE_PATCH = 4 * 1024 * 1024
 DEPENDENCY_MANIFESTS = {
     "Cargo.toml", "Gemfile", "Pipfile", "go.mod", "package.json",
     "package-lock.json", "pnpm-lock.yaml", "poetry.lock", "pyproject.toml",
@@ -93,12 +100,12 @@ def kill_process_group(process, wait_s=2.0):
         time.sleep(min(0.01, remaining))
 
 
-def run(args, cwd=None, timeout=1800, input_text=None):
+def run(args, cwd=None, timeout=1800, input_text=None, env=None):
     # The child leads its own session; whenever it returns (exit, failure or timeout)
     # every remaining member of that group is killed before the result is interpreted.
     # No context manager: Popen.__exit__ would add an unbounded wait.
     process = subprocess.Popen(
-        args, cwd=cwd, stdin=subprocess.PIPE if input_text is not None else None,
+        args, cwd=cwd, env=env, stdin=subprocess.PIPE if input_text is not None else None,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
     )
     original = None
@@ -162,6 +169,10 @@ def export_snapshot(repo, revision, destination):
         extract_archive(archive, destination)
     finally:
         archive.unlink(missing_ok=True)
+    initialize_snapshot(destination)
+
+
+def initialize_snapshot(destination):
     run(["git", "init", "-q"], cwd=destination)
     run(["git", "add", "-A"], cwd=destination)
     commit = run(
@@ -205,7 +216,7 @@ def diagnostics(task, workspace, source_repo):
         deleted += int(parts[1])
     accepted_files, accepted_lines = changed_lines(
         source_repo, f"{task['base']}..{task['accepted']}"
-    )
+    ) if source_repo is not None else (set(), [])
     union = produced_files | accepted_files
     return {
         "d0_complete": complete,
@@ -216,20 +227,49 @@ def diagnostics(task, workspace, source_repo):
         "dependency_manifests_changed": sorted(
             path for path in produced_files if Path(path).name in DEPENDENCY_MANIFESTS
         ),
-        "file_jaccard_diagnostic": round(len(produced_files & accepted_files) / len(union), 3) if union else 0.0,
+        "file_jaccard_diagnostic": "unmeasured" if source_repo is None else round(len(produced_files & accepted_files) / len(union), 3) if union else 0.0,
         "line_similarity_diagnostic": round(
             difflib.SequenceMatcher(None, "\n".join(produced_lines), "\n".join(accepted_lines)).ratio(), 3
-        ) if produced_lines and accepted_lines else 0.0,
+        ) if produced_lines and accepted_lines else "unmeasured" if source_repo is None else 0.0,
     }
 
 
-def acceptance(task, workspace):
+def acceptance(task, workspace, sandbox=None, env=None):
+    """Review r40 E2: candidate code runs here, so `sandbox` (argv prefix, "{cwd}" = this workspace) contains each command."""
+    if sandbox is not None and not (isinstance(sandbox, list) and all(isinstance(part, str) for part in sandbox)):
+        raise ValueError("acceptance_sandbox must be a list of strings")
     results = []
     for command in task.get("acceptance", []):
         argv = command if isinstance(command, list) else shlex.split(command)
-        result = run(argv, cwd=workspace, timeout=task.get("acceptance_timeout_s", 900))
+        if sandbox:
+            argv = [part.replace("{cwd}", str(workspace)) for part in sandbox] + list(argv)
+        result = run(argv, cwd=workspace, timeout=task.get("acceptance_timeout_s", 900), env=env)
         results.append({"command": argv, "exit": result.returncode, "tail": (result.stdout + result.stderr)[-1000:]})
     return results, bool(results) and all(item["exit"] == 0 for item in results)
+
+
+def acceptance_outcomes(path):
+    """r45: the commit_replay.BOOT report, test id -> outcome only (never output); anything else is unavailable."""
+    try:
+        value = json.loads(replay_capture._read(Path(path), replay_capture.MAX_MANIFEST))
+    except (OSError, ValueError, RecursionError):
+        return "unavailable"
+    ok = isinstance(value, dict) and len(value) <= MAX_ACCEPT_OUTCOMES and all(v in ACCEPT_OUTCOMES for v in value.values())
+    return value if ok else "unavailable"
+
+
+def candidate_patch(workspace, destination):
+    """r45 opt-in: the candidate's change against the base snapshot commit, untracked files included (ignored ones are not)."""
+    with tempfile.TemporaryDirectory(prefix="007-patch-") as scratch:
+        staged = Path(scratch) / "candidate.patch"
+        diff = ["git", "diff", "--cached", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", f"--output={staged}", "HEAD"]
+        if run(["git", "add", "-A"], cwd=workspace, timeout=300).returncode or run(diff, cwd=workspace, timeout=300).returncode:
+            return "unavailable"
+        if staged.stat().st_size > MAX_CANDIDATE_PATCH:
+            return "too-large"
+        payload = staged.read_bytes()
+    replay_capture.write_bytes_no_replace(destination, payload, "candidate patch")
+    return {"path": destination.name, "sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
 
 
 def hidden_target(workspace, value):
@@ -319,7 +359,7 @@ def validate_usage(value):
     return usage, None
 
 
-def validate_served_identity(value, policy, unavailable_map=None):
+def validate_served_identity(value, policy, unavailable_map=None, requested_only=False):
     if value is None:
         return None, "served-identity-missing"
     if not isinstance(value, dict) or value.get("schema") != "007-framework/runner-receipt/v1":
@@ -332,6 +372,8 @@ def validate_served_identity(value, policy, unavailable_map=None):
     if not isinstance(served, dict):
         return None, "served-identity-missing"
     for key in ("provider", "model", "effort"):
+        if requested_only and served.get(key) is None:
+            continue  # master plan 3.2 decision 2(a): an unreported field stays "unverified", never copied from the request
         if served.get(key) != policy.get(key):
             return None, f"served-{key}-mismatch"
     if not isinstance(value.get("identity_source"), str) or not value["identity_source"]:
@@ -357,6 +399,7 @@ def validate_served_identity(value, policy, unavailable_map=None):
         return None, usage_failure
     identity = {
         **served,
+        **{key: "unverified" for key in ("provider", "model", "effort") if served.get(key) is None},
         "identity_source": value["identity_source"],
         "source_sha256": value["source_sha256"],
         "usage": usage,
@@ -416,16 +459,95 @@ def write_summary(output_dir, replay_set, config, replicates, rows):
     )
 
 
-def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
+def cell_id(task, arm, replicate):
     validate_task_id(task["id"])
+    validate_task_id(arm)
+    if type(replicate) is not int or replicate < 1:
+        raise ValueError("replicate must be a positive integer")
+    return f"{task['id']}-r{replicate:02d}-{arm}"
+
+
+def execute_reserved_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root, budget, upper_usd, bound_source_sha256):
+    if "replay_ref" in task or vault_root is not None:
+        if vault_root is None or task.get("replay_ref") is None:
+            raise ValueError("retained replay requires an explicit vault and reference")
+        metadata = replay_capture.validate_replay_ref(
+            vault_root, task["project_id"], task.get("source_task_id", task["id"]), task["replay_ref"])
+        if metadata["schema"] == replay_capture.INPUT_SCHEMA_V2:
+            raise ValueError("v2-execution-unqualified")
+    identifier = cell_id(task, arm, replicate)
+    grant = budget.reserve(identifier, "executor_cells", upper_usd, bound_source_sha256=bound_source_sha256)
+    if not grant["launch_granted"]:
+        raise ValueError("replay call already reserved; never launch a second time")
+    # Exceptions retain the reservation: unknown execution/spend is not an automatic refund.
+    record = execute_cell(config, task, arm, replicate, output_dir, timeout_s, vault_root=vault_root)
+    payload = replay_capture._read(output_dir / (identifier + ".json"), replay_capture.MAX_MANIFEST)
+    if payload != replay_capture._json_bytes(record):
+        raise ValueError("cell bytes changed before budget reconciliation; reservation retained")
+    source_basis = harness_report.receipt_cost_basis(record)
+    cost = record.get("cost_usd")
+    if source_basis != grant["state"]["cost_basis"] or not harness_report._valid_money(cost):
+        cost = None
+    state = budget.settle(identifier, cost, cost_basis=grant["state"]["cost_basis"], source_sha256=hashlib.sha256(payload).hexdigest())
+    if state["violations"]:
+        raise ValueError("observed cost violated reservation; cell preserved, dispatch stopped")
+    return record
+
+
+def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root=None):
+    attempt_id = cell_id(task, arm, replicate)
+    for suffix in (".json", ".runner.json", ".observation.json", ".prompt.txt"):
+        existing = output_dir / (attempt_id + suffix)
+        if existing.exists() or existing.is_symlink():
+            raise RuntimeError(f"replay output already exists: {existing}")
+    identity_mode = config.get("served_identity")
+    if identity_mode is not None and (identity_mode not in ("verified", "requested-only") or config.get("require_served_identity")):
+        raise ValueError("served identity policy must be verified or requested-only, without require_served_identity")
+    if config.get("require_served_identity"):
+        identity_mode = "verified"
     unavailable_map = cost_unavailable_map(config)
-    source_repo = Path(config["repos"][task["repo"]]).expanduser().resolve()
+    metadata, retained_ref = None, None
+    if "replay_ref" in task or vault_root is not None:
+        if vault_root is None or task.get("replay_ref") is None:
+            raise ValueError("retained replay requires an explicit vault and reference")
+        project, source_task = task["project_id"], task.get("source_task_id", task["id"])
+        metadata = replay_capture.validate_replay_ref(vault_root, project, source_task, task["replay_ref"])
+        if metadata["schema"] == replay_capture.INPUT_SCHEMA_V2:
+            raise ValueError("v2-execution-unqualified")
+        if ".007-prompt.txt" in metadata["config"]["files"] + metadata["config"]["output_files"]:
+            raise ValueError("capture path collides with replay prompt")
+        if metadata["config"]["external_inputs"] or metadata["versions"]["python"] != sys.version.split()[0]:
+            raise ValueError("retained environment is unqualified")
+        case = (Path(vault_root).absolute() / task["replay_ref"]["manifest"]).parent
+        frozen_prompt = replay_capture._read_private_artifact(case, "inputs/" + metadata["config"]["prompt_file"], replay_capture.MAX_FILE).decode("utf-8")
+        contract = json.loads(replay_capture._read_private_artifact(case, "inputs/" + metadata["config"]["acceptance_file"], replay_capture.MAX_FILE))
+        if ("prompt" in task and task["prompt"] != frozen_prompt
+                or "acceptance" in task and task["acceptance"] != contract["commands"]
+                or "acceptance_timeout_s" in task and task["acceptance_timeout_s"] != contract.get("timeout_s", 900)):
+            raise ValueError("retained prompt or acceptance differs from frozen bytes")
+        task = {**task, "prompt": frozen_prompt, "acceptance": contract["commands"], "acceptance_timeout_s": contract.get("timeout_s", 900)}
+        for entry in task.get("hidden_acceptance", []):
+            payload = replay_capture._read(Path(entry["source"]).expanduser().resolve(), replay_capture.MAX_FILE)
+            if not SHA256.fullmatch(entry.get("sha256", "")) or hashlib.sha256(payload).hexdigest() != entry["sha256"]:
+                raise ValueError("hidden acceptance hash mismatch before execution")
+        source_repo = None
+    else:
+        source_repo = Path(config["repos"][task["repo"]]).expanduser().resolve()
     policy = config["arms"][arm]
-    workspace = Path(tempfile.mkdtemp(prefix=f"007-{task['id']}-{arm}-r{replicate:02d}-"))
+    workspace = Path(tempfile.mkdtemp(prefix=f"007-{task['id']}-{arm}-r{replicate:02d}-")).resolve()
     try:
-        export_snapshot(source_repo, task["base"], workspace)
+        if metadata is None:
+            export_snapshot(source_repo, task["base"], workspace)
+        else:
+            replay_capture.restore_input(vault_root, project, source_task, task["replay_ref"], workspace)
+            initialize_snapshot(workspace)
+            retained_ref = replay_capture.capture_input(workspace, project, attempt_id, metadata["config"], vault_root=output_dir / "cases")
         prompt = workspace / ".007-prompt.txt"
-        prompt.write_text(task["prompt"] + "\n\n" + policy["doctrine"])
+        effective_prompt = task["prompt"] + "\n\n" + policy["doctrine"]
+        prompt.write_text(effective_prompt)
+        if retained_ref is not None:
+            prompt_artifact = output_dir / (attempt_id + ".prompt.txt")
+            replay_capture.write_bytes_no_replace(prompt_artifact, effective_prompt.encode("utf-8"), "replay effective prompt")
         runner_receipt = output_dir / f"{task['id']}-r{replicate:02d}-{arm}.runner.json"
         if runner_receipt.exists():
             raise RuntimeError(f"runner receipt already exists: {runner_receipt}")
@@ -442,7 +564,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
         started = time.monotonic()
         cleanup_failure = None
         try:
-            agent = run(argv, cwd=workspace, timeout=timeout_s, input_text=prompt.read_text())
+            agent = run(argv, cwd=workspace, timeout=timeout_s, input_text=effective_prompt)
             exit_code, tail = agent.returncode, (agent.stdout + agent.stderr)[-1500:]
         except subprocess.TimeoutExpired:
             exit_code, tail = -9, "TIMEOUT"
@@ -450,18 +572,27 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             cleanup_failure = exc.state
             timed_out = isinstance(exc.original, subprocess.TimeoutExpired)
             exit_code, tail = (-9, "TIMEOUT") if timed_out else (exc.returncode, str(exc))
+        agent_wall_s = round(time.monotonic() - started, 2)  # r46: the agent alone; wall_s also spans grading
         prompt.unlink(missing_ok=True)
         # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
-        hidden_failure, checks, checks_passed = cleanup_failure, [], False
+        hidden_failure, checks, checks_passed, outcomes = cleanup_failure, [], False, "unavailable"
         if cleanup_failure is None:
             try:
                 with tempfile.TemporaryDirectory(prefix=f"007-acceptance-{task['id']}-") as acceptance_tmp:
                     acceptance_workspace = Path(acceptance_tmp) / "workspace"
                     shutil.copytree(workspace, acceptance_workspace, symlinks=True)
+                    report = Path(acceptance_tmp) / "accept-report.json"  # r45: beside the copy, never inside it
+                    base_env = config.get("acceptance_env")
+                    # review r42 E2: an explicit minimal environment, so grading never inherits the coordinator's
+                    accept_env = {**(os.environ if base_env is None else base_env), "ACCEPT_REPORT": str(report)}
                     with hidden_acceptance(task, acceptance_workspace):
-                        checks, checks_passed = acceptance(task, acceptance_workspace)
+                        checks, checks_passed = acceptance(task, acceptance_workspace, config.get("acceptance_sandbox"), accept_env)
+                    # ponytail: every command shares one report path, so only single-command tasks get outcomes
+                    outcomes = acceptance_outcomes(report) if len(checks) == 1 else "unavailable"
             except CleanupIncomplete as exc:
                 hidden_failure = cleanup_failure = exc.state
+            except subprocess.TimeoutExpired:  # review r40 A1: the paid attempt still gets its cell
+                hidden_failure = "acceptance-timeout"
             except (OSError, ValueError, RuntimeError) as exc:
                 hidden_failure = f"hidden-acceptance-{type(exc).__name__.lower()}"
         try:
@@ -469,8 +600,8 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
         except json.JSONDecodeError:
             runner_value = {}
         identity, identity_failure = (
-            validate_served_identity(runner_value, policy, unavailable_map)
-            if config.get("require_served_identity") else (None, None)
+            validate_served_identity(runner_value, policy, unavailable_map, requested_only=identity_mode == "requested-only")
+            if identity_mode else (None, None)
         )
         if cleanup_failure:
             # No Git helper may start after an unconfirmed cleanup: diagnostics are unmeasured, never zero.
@@ -513,23 +644,424 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s):
             ) if identity and key in identity},
             "agent_exit": exit_code,
             "wall_s": round(time.monotonic() - started, 2),
+            "agent_wall_s": agent_wall_s,
             "valid": valid,
             "accepted": accepted,
             "failure_class": failure_class,
             "acceptance": checks,
+            "acceptance_outcomes": outcomes,
             **d0,
             "agent_tail": tail,
         }
-        (output_dir / f"{task['id']}-r{replicate:02d}-{arm}.json").write_text(json.dumps(record, indent=2))
+        if retained_ref is not None:
+            record.update(task_id=attempt_id, project_id=project, source_replay_ref=task["replay_ref"], replay_ref=retained_ref,
+                          generator_isolation="unqualified", causal_eligible=False, economic_eligible=False,
+                          effective_prompt={"path": prompt_artifact.name, "sha256": hashlib.sha256(effective_prompt.encode("utf-8")).hexdigest()})
+            record["candidate_retention"] = "cleanup-unconfirmed" if cleanup_failure else "unavailable"
+            if cleanup_failure is None:
+                observation = {"observation_kind": "replay-candidate", "task_id": attempt_id,
+                    "project_id": project, "replay_ref": retained_ref, "checks": checks,
+                    **{key: record[key] for key in ("served_provider", "served_model", "served_effort", "tokens", "wall_s", "cost_usd", "cost_source")},
+                    "cost_status": record.get("cost_status", "unmeasured"), "repair_rounds": "unmeasured"}
+                observation_path = output_dir / f"{attempt_id}.observation.json"
+                try:
+                    replay_capture.write_bytes_no_replace(observation_path, replay_capture._json_bytes(observation), "replay observation")
+                    result_path = replay_capture.finalize_case(workspace, project, {"task_id": attempt_id, "replay_ref": retained_ref}, observation_path, vault_root=output_dir / "cases")
+                    record.update(candidate_retention="declared-outputs-retained", result_sha256=hashlib.sha256(result_path.read_bytes()).hexdigest())
+                except (OSError, ValueError, RuntimeError):
+                    record.update(valid=False, accepted=False, failure_class="candidate-preservation-failed")
+        if config.get("retain_candidate_patch"):  # after diagnostics: `git add -A` would empty their worktree diff
+            try:
+                record["candidate_patch"] = "cleanup-unconfirmed" if cleanup_failure else candidate_patch(
+                    workspace, output_dir / f"{attempt_id}.candidate.patch")
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):  # the paid attempt still gets its cell
+                record["candidate_patch"] = "unavailable"
+        replay_capture.write_bytes_no_replace(output_dir / f"{task['id']}-r{replicate:02d}-{arm}.json", replay_capture._json_bytes(record), "replay cell")
         return record
     finally:
         shutil.rmtree(workspace)
 
 
+def recheck_retained_case(task, vault_root):
+    project, source_task, ref = task["project_id"], task.get("source_task_id", task["id"]), task["replay_ref"]
+    metadata = replay_capture.validate_replay_ref(vault_root, project, source_task, ref)
+    if metadata["schema"] == replay_capture.INPUT_SCHEMA_V2:
+        return {"replay_ready": False, "oracle_exits": [], "gaps": ["v2-execution-unqualified"]}
+    if metadata["config"]["external_inputs"]:
+        return {"replay_ready": False, "oracle_exits": [], "gaps": ["external-environment-unqualified"]}
+    if metadata["versions"]["python"] != sys.version.split()[0]:
+        return {"replay_ready": False, "oracle_exits": [], "gaps": ["runtime-version-mismatch"]}
+    case = (Path(vault_root).absolute() / ref["manifest"]).parent
+    contract = json.loads(replay_capture._read_private_artifact(case, "inputs/" + metadata["config"]["acceptance_file"], replay_capture.MAX_FILE))
+    from framework_cli import validate_acceptance
+    validate_acceptance(contract)
+    exits, gaps = [], []
+    deadline = time.monotonic() + 300
+    try:
+        for _ in range(2):
+            with tempfile.TemporaryDirectory(prefix="007-recheck-") as temporary:
+                workspace = Path(temporary).resolve() / "candidate"
+                replay_capture.restore_candidate(vault_root, project, source_task, ref, workspace)
+                row = []
+                exits.append(row)
+                with hidden_acceptance(task, workspace):
+                    for command in contract["commands"]:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, 300)
+                        result = run(command, cwd=workspace, timeout=min(contract.get("timeout_s", 900), remaining))
+                        row.append(result.returncode)
+        if exits[0] != exits[1]:
+            gaps.append("oracle-unstable")
+        if any(code != 0 for row in exits for code in row):
+            gaps.append("oracle-nonzero-unattributed")
+    except subprocess.TimeoutExpired:
+        gaps.append("oracle-timeout")
+    except CleanupIncomplete as exc:
+        gaps.append(exc.state)
+    except (OSError, ValueError, RuntimeError):
+        gaps.append("reconstruction-or-oracle-unavailable")
+    return {"replay_ready": not gaps and len(exits) == 2, "oracle_exits": exits, "gaps": sorted(gaps)}
+
+
+def dataset_counts(rows):
+    return {"observational": sum(r["state"] == "observational" for r in rows),
+            "replay-ready": sum(r["replay_ready"] for r in rows),
+            "qualified-comparison": sum(r["state"] == "qualified-comparison" for r in rows),
+            "retained": sum(r["retained_case"] for r in rows),
+            "holdout_admitted": sum(r["split"] == "holdout" and r["admitted"] for r in rows),
+            "admitted": sum(r["admitted"] for r in rows), "excluded": sum(not r["admitted"] for r in rows)}
+
+
+def admit_dataset(tasks, *, vault_root, recheck=False):
+    """Partition retained cases; file claims never qualify a causal comparison."""
+    if type(recheck) is not bool or not isinstance(tasks, list) or len(tasks) > 100:
+        raise ValueError("admission requires at most 100 tasks and an explicit boolean recheck")
+    if recheck and len(tasks) > 3:
+        raise ValueError("explicit recheck is limited to three cases per invocation")
+    from framework_cli import TASK_CLASSES
+    cases, groups = [], {}
+    identities, trial_ids = {}, {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise ValueError("dataset tasks must be objects")
+        identifier = task.get("id")
+        if not isinstance(identifier, str) or not replay_capture.ID.fullmatch(identifier):
+            raise ValueError("dataset case id must be a safe bounded identifier")
+        project, source = task.get("project_id"), task.get("source_task_id", identifier)
+        family, split = task.get("family"), task.get("split", "calibration" if "accepted" in task else "discovery")
+        if split not in ("discovery", "calibration", "holdout"):
+            raise ValueError("unsupported dataset split")
+        exclusions = []
+        task_class = task.get("class")
+        if not isinstance(task_class, str) or task_class not in TASK_CLASSES:
+            task_class = "unclassified"
+            exclusions.append("task-class-unavailable")
+        if not isinstance(family, str) or not replay_capture.ID.fullmatch(family):
+            exclusions.append("family-identity-unavailable")
+            family = None
+        family_hash = hashlib.sha256(family.encode()).hexdigest() if family else None
+        projection = {"state": "observational", "inputs_fingerprint_sha256": None,
+                      "input_sha256": None, "result_sha256": None, "gaps": ["retained-input-unavailable"]}
+        if not all(isinstance(v, str) and replay_capture.ID.fullmatch(v) for v in (project, source)):
+            exclusions.append("source-identity-unavailable")
+            project = project if isinstance(project, str) and replay_capture.ID.fullmatch(project) else None
+            source = source if isinstance(source, str) and replay_capture.ID.fullmatch(source) else None
+        else:
+            projection = replay_capture.qualify_case(vault_root, project, source, task.get("replay_ref"))
+        retained = projection["state"] == "case-retained"
+        if "result_sha256" in task:
+            expected = task["result_sha256"]
+            if not isinstance(expected, str) or not SHA256.fullmatch(expected):
+                raise ValueError("prefrozen candidate identity must be SHA-256")
+            if expected != projection["result_sha256"]:
+                exclusions.append("candidate-identity-mismatch")
+        if projection["state"] in ("invalid", "unavailable"):
+            exclusions.append("retained-source-" + projection["state"])
+        checked = {"replay_ready": False, "oracle_exits": [], "gaps": projection["gaps"]}
+        if split == "holdout":
+            exclusions.append("generator-isolation-unqualified")
+            if "accepted" in task:
+                exclusions.append("historical-solution-known")
+        if split == "calibration" and not retained:
+            exclusions.append("retained-candidate-unavailable")
+        row = {"id": identifier, "project_id": project, "source_task_id": source,
+               "class": task_class, "family_sha256": family_hash,
+               "split": split, "state": "replay-ready" if checked["replay_ready"] else "observational",
+               "retained_case": retained, "input_sha256": projection["input_sha256"],
+               "result_sha256": projection["result_sha256"],
+               "replay_ready": checked["replay_ready"], "oracle_exits": checked["oracle_exits"],
+               "causal_eligible": False, "economic_eligible": False,
+               "gaps": checked["gaps"], "exclusions": exclusions}
+        keys = [("task", project, source)] if project and source else []
+        if family_hash:
+            keys.append(("family", project, family_hash))
+        if projection["inputs_fingerprint_sha256"]:
+            keys.append(("inputs", projection["inputs_fingerprint_sha256"]))
+        for key in keys:
+            groups.setdefault(key, set()).add(split)
+        identities[(project, source)] = identities.get((project, source), 0) + 1
+        trial_ids[identifier] = trial_ids.get(identifier, 0) + 1
+        cases.append((row, keys, task))
+    rows = []
+    for row, keys, task in cases:
+        if any(len(groups[key]) > 1 for key in keys):
+            row["exclusions"].append("cross-split-contamination")
+        if identities[(row["project_id"], row["source_task_id"])] > 1 or trial_ids[row["id"]] > 1:
+            row["exclusions"].append("duplicate-case-identity")
+        row["exclusions"] = sorted(set(row["exclusions"]))
+        row["admitted"] = not row["exclusions"]
+        if recheck and row["retained_case"] and not any(reason != "generator-isolation-unqualified" for reason in row["exclusions"]):
+            try:
+                checked = recheck_retained_case(task, vault_root)
+            except (OSError, ValueError):
+                checked = {"replay_ready": False, "oracle_exits": [], "gaps": ["reconstruction-or-oracle-unavailable"]}
+            row.update(checked)
+            row["state"] = "replay-ready" if row["replay_ready"] else "observational"
+        rows.append(row)
+    rows.sort(key=lambda r: json.dumps(r, sort_keys=True))
+    return {"schema": "007-framework/dataset-admission/v1", "scope": "retention-and-current-host-recheck",
+            "counts": dataset_counts(rows), "cases": rows,
+            "by_project": {key: dataset_counts([r for r in rows if (r["project_id"] or "_unmeasured") == key])
+                           for key in sorted({r["project_id"] or "_unmeasured" for r in rows})},
+            "by_class": {key: dataset_counts([r for r in rows if r["class"] == key])
+                         for key in sorted({r["class"] for r in rows})},
+            "by_split": {key: dataset_counts([r for r in rows if r["split"] == key])
+                         for key in ("discovery", "calibration", "holdout")}}
+
+
+def _followup_projection(value, digest):
+    if not isinstance(value, dict) or not isinstance(digest, str) or not SHA256.fullmatch(digest):
+        raise ValueError("invalid followup source")
+    observed = harness_report._instant(value.get("observed_at"))
+    if observed is None or observed > datetime.now(timezone.utc):
+        raise ValueError("invalid or future followup date")
+    projected = {"source_sha256": digest, "observed_at": observed.isoformat()}
+    for name in ("repair_rounds", "corrective_lines"):
+        if name in value:
+            if type(value[name]) is not int or value[name] < 0:
+                raise ValueError("invalid corrective count")
+            projected[name] = value[name]
+    if "escape_7d" in value:
+        flag = value["escape_7d"]
+        if not (type(flag) is bool or type(flag) is str and flag in ("yes", "no")):
+            raise ValueError("invalid declared escape")
+        projected["escape_7d"] = flag
+    if len(projected) == 2:
+        raise ValueError("followup contains no correction or escape")
+    return projected
+
+
+def _hypothesis_projection(value, digest):
+    if (not isinstance(value, dict) or set(value) != {"kind", "source_sha256"}
+            or not isinstance(digest, str) or not SHA256.fullmatch(digest)
+            or value["source_sha256"] != digest or not isinstance(value["kind"], str)
+            or value["kind"] not in ("gate", "routing")):
+        raise ValueError("invalid proposed hypothesis projection")
+    return {"kind": value["kind"], "source_sha256": digest}
+
+
+def _curation_links(task, row, vault_root, kind):
+    refs = task.get(kind + "_refs", [])
+    if not isinstance(refs, list) or len(refs) > 8:
+        raise ValueError("curation reference budget exceeded")
+    if refs:
+        if not row["retained_case"]:
+            raise ValueError("followup requires the retained task and candidate")
+        replay_capture.validate_replay_ref(vault_root, row["project_id"], row["source_task_id"], task["replay_ref"])
+        case = Path(task["replay_ref"]["manifest"]).parent
+    projected = []
+    for ref in refs:
+        if (not isinstance(ref, dict) or set(ref) != {"manifest", "sha256"}
+                or not isinstance(ref["sha256"], str) or not SHA256.fullmatch(ref["sha256"])):
+            raise ValueError("invalid curation reference")
+        expected = str(case / f"{kind}-{ref['sha256']}.json")
+        if ref["manifest"] != expected or not row["retained_case"]:
+            raise ValueError("followup requires the retained task and candidate")
+        payload = replay_capture._read_private_artifact(Path(vault_root).absolute(), expected, 8192)
+        if hashlib.sha256(payload).hexdigest() != ref["sha256"]:
+            raise ValueError("followup source changed")
+        value = json.loads(payload)
+        if (not isinstance(value, dict)
+                or any(value.get(key) != row[field] for key, field in (
+                    ("project_id", "project_id"), ("task_id", "source_task_id"),
+                    ("input_sha256", "input_sha256"), ("result_sha256", "result_sha256")))):
+            raise ValueError("followup task or candidate identity differs")
+        if kind == "hypothesis":
+            if value.get("status") != "proposed" or any(not isinstance(value.get(key), str)
+                    or not value[key].strip() or len(value[key]) > 1024 for key in
+                    ("mechanism", "evidence", "counterproof", "positive_control", "experiment")):
+                raise ValueError("hypothesis requires proposed status and a bounded falsifiable recipe")
+            projected.append(_hypothesis_projection({"kind": value.get("kind"), "source_sha256": ref["sha256"]}, ref["sha256"]))
+        else:
+            projected.append(_followup_projection(value, ref["sha256"]))
+    if len({event["source_sha256"] for event in projected}) != len(projected):
+        raise ValueError("duplicate followup source")
+    return sorted(projected, key=lambda event: event["source_sha256"])
+
+
+def _check_curation_link_scope(rows):
+    owners = {}
+    for row in rows:
+        links = row.get("declared_followups", []) + row.get("declared_hypotheses", [])
+        identity = (row.get("project_id"), row.get("source_task_id"))
+        if links and (any(not isinstance(part, str) or not part for part in identity)
+                or sum((other.get("project_id"), other.get("source_task_id")) == identity for other in rows) != 1):
+            raise ValueError("ambiguous curation task identity")
+        for event in links:
+            owner = (row["id"], *identity)
+            if owners.setdefault(event["source_sha256"], owner) != owner:
+                raise ValueError("curation source has multiple task owners")
+
+
+def read_curation_checkpoint(checkpoint, *, vault_root):
+    """Validate persisted read-only admission, not producer or current-corpus authority."""
+    checkpoint = Path(checkpoint).expanduser().absolute()
+    if checkpoint.parent.resolve() != checkpoint.parent:
+        raise ValueError("symlink in curation checkpoint path")
+    info = checkpoint.parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid():
+        raise ValueError("curation directory must be owner-only")
+    payload = replay_capture._read_private_artifact(checkpoint.parent, checkpoint.name, replay_capture.MAX_MANIFEST)
+    value = json.loads(payload)
+    vault_hash = hashlib.sha256(str(Path(vault_root).expanduser().absolute()).encode()).hexdigest()
+    if (not isinstance(value, dict)
+            or set(value) != {"schema", "completed_at", "checkpoint_sha256", "vault_sha256", "verifier_sha256", "admission"}
+            or value["schema"] != "007-framework/dataset-curation/v1" or value["vault_sha256"] != vault_hash
+            or not isinstance(value["verifier_sha256"], str) or not SHA256.fullmatch(value["verifier_sha256"])
+            or not isinstance(value["admission"], dict) or not isinstance(value["admission"].get("cases"), list)
+            or len(value["admission"]["cases"]) > 100
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not replay_capture.ID.fullmatch(row["id"])
+                   for row in value["admission"]["cases"])):
+        raise ValueError("invalid or foreign curation checkpoint")
+    if not isinstance(value["completed_at"], str) or datetime.fromisoformat(value["completed_at"]).tzinfo is None:
+        raise ValueError("invalid curation completion date")
+    rows = value["admission"]["cases"]
+    for row in rows:
+        for field, project in (("declared_followups", _followup_projection), ("declared_hypotheses", _hypothesis_projection)):
+            events = row.get(field, [])
+            if (not isinstance(events, list) or len(events) > 8
+                    or events and (row.get("retained_case") is not True or row.get("admitted") is not True
+                        or sum(other["id"] == row["id"] for other in rows) != 1
+                        or any(not isinstance(row.get(key), str) or not SHA256.fullmatch(row[key])
+                               for key in ("input_sha256", "result_sha256")))
+                    or any(not isinstance(event, dict) or event != project(event, event.get("source_sha256")) for event in events)
+                    or len({event["source_sha256"] for event in events}) != len(events)):
+                raise ValueError("invalid curation links")
+    _check_curation_link_scope(rows)
+    delta = value["admission"].get("proposal_delta", [])
+    bound = [{"case_id": row["id"], **event} for row in rows for event in row.get("declared_hypotheses", [])]
+    if (not isinstance(delta, list) or len(delta) > 2 or any(entry not in bound for entry in delta)
+            or len({entry["kind"] for entry in delta}) != len(delta)):
+        raise ValueError("invalid curation proposal delta")
+    if (value["admission"].get("schema") != "007-framework/dataset-admission/v1"
+            or any(row.get("state") != "observational" or row.get("replay_ready") is not False
+                   or row.get("causal_eligible") is not False or row.get("economic_eligible") is not False
+                   or row.get("oracle_exits") != [] or type(row.get("retained_case")) is not bool
+                   or type(row.get("admitted")) is not bool or row.get("split") not in ("discovery", "calibration", "holdout") for row in rows)
+            or value["admission"].get("counts") != dataset_counts(rows)):
+        raise ValueError("checkpoint cannot claim an executed oracle or causal promotion")
+    content = {key: value[key] for key in ("vault_sha256", "verifier_sha256", "admission")}
+    if hashlib.sha256(replay_capture._json_bytes(content)).hexdigest() != value["checkpoint_sha256"]:
+        raise ValueError("curation checkpoint identity differs")
+    return value, payload
+
+
+def curate_dataset(tasks, *, vault_root, checkpoint):
+    """Checkpoint read-only admission; unchanged evidence is quiet, never promoted."""
+    from framework_cli import write_json_atomic
+    checkpoint = Path(checkpoint).expanduser().absolute()
+    if checkpoint.parent.resolve() != checkpoint.parent:
+        raise ValueError("symlink in curation checkpoint path")
+    replay_capture._relative(checkpoint.name)
+    replay_capture._private_dir(checkpoint.parent)
+    lock = checkpoint.with_name(checkpoint.name + ".lock")
+    try:
+        lock.mkdir(mode=0o700)
+    except FileExistsError as exc:
+        raise ValueError("curation checkpoint already owned; stale locks require review") from exc
+    try:
+        vault_hash = hashlib.sha256(str(Path(vault_root).expanduser().absolute()).encode()).hexdigest()
+        sources = {name: hashlib.sha256(replay_capture._read(Path(__file__).parent / name, replay_capture.MAX_FILE)).hexdigest()
+                   for name in ("replay_eval.py", "replay_capture.py", "framework_cli.py")}
+        verifier = hashlib.sha256(replay_capture._json_bytes(sources)).hexdigest()
+        previous = None
+        try:
+            previous, previous_bytes = read_curation_checkpoint(checkpoint, vault_root=vault_root)
+        except FileNotFoundError:
+            previous_bytes = None
+        admission = admit_dataset(tasks, vault_root=vault_root, recheck=False)
+        rows = admission["cases"]
+        for row in rows:
+            matched = [task for task in tasks if task["id"] == row["id"]]
+            if any(task.get("followup_refs") or task.get("hypothesis_refs") for task in matched) and (len(matched) != 1 or not row["admitted"]):
+                raise ValueError("followup case identity or split is ambiguous")
+            task = matched[0]
+            for kind, field in (("followup", "declared_followups"), ("hypothesis", "declared_hypotheses")):
+                events = _curation_links(task, row, vault_root, kind)
+                if events:
+                    row[field] = events
+        _check_curation_link_scope(rows)
+        identifiers = {row["id"] for row in rows}
+        prior_rows = previous["admission"]["cases"] if previous else []
+        gaps = []
+        if any(reason.startswith("retained-source-") for row in rows for reason in row["exclusions"]):
+            gaps.append("source-acquisition-incomplete")
+        if any(row["input_sha256"] and not row["retained_case"] for row in rows):
+            gaps.append("candidate-publication-incomplete")
+        if any(row["id"] not in identifiers
+               or row.get("input_sha256") and not any(r["input_sha256"] for r in rows if r["id"] == row["id"])
+               or row.get("retained_case") and not any(r["retained_case"] for r in rows if r["id"] == row["id"])
+               for row in prior_rows):
+            gaps.append("source-history-shrank")
+        if any(row["id"] in identifiers and not any((r["project_id"], r["source_task_id"]) == (row.get("project_id"), row.get("source_task_id"))
+                   for r in rows if r["id"] == row["id"]) for row in prior_rows):
+            gaps.append("source-identity-changed")
+        if any(not any(r["id"] == row["id"] and all(event in r.get("declared_followups", [])
+                    for event in row.get("declared_followups", [])) for r in rows) for row in prior_rows):
+            gaps.append("followup-history-shrank")
+        if any(not any(r["id"] == row["id"] and all(event in r.get("declared_hypotheses", [])
+                    for event in row.get("declared_hypotheses", [])) for r in rows) for row in prior_rows):
+            gaps.append("hypothesis-history-shrank")
+        if gaps:
+            return {"complete": False, "changed": False, "delta_ids": [], "gaps": gaps, "admission": admission,
+                    "checkpoint_sha256": previous["checkpoint_sha256"] if previous else None}
+        content = {"vault_sha256": vault_hash, "verifier_sha256": verifier, "admission": admission}
+        prior_content = {key: previous[key] for key in content} if previous else None
+        if prior_content:
+            prior_content = {**prior_content, "admission": {key: value for key, value in prior_content["admission"].items() if key != "proposal_delta"}}
+        if previous and content == prior_content:
+            return {**previous, "complete": True, "changed": False, "delta_ids": [], "gaps": []}
+        proposals = [{"case_id": row["id"], **event} for row in rows for event in row.get("declared_hypotheses", [])
+                     if not any(prior["id"] == row["id"] and event in prior.get("declared_hypotheses", []) for prior in prior_rows)]
+        if any(sum(entry["kind"] == kind for entry in proposals) > 1 for kind in ("gate", "routing")):
+            raise ValueError("at most one new routing and gate hypothesis per cycle")
+        if proposals or any(row.get("declared_hypotheses") for row in rows):
+            admission["proposal_delta"] = sorted(proposals, key=lambda entry: (entry["kind"], entry["source_sha256"]))
+        digest = hashlib.sha256(replay_capture._json_bytes(content)).hexdigest()
+        delta = sorted(identifier for identifier in identifiers
+                       if [r for r in rows if r["id"] == identifier] != [r for r in prior_rows if r["id"] == identifier])
+        value = {"schema": "007-framework/dataset-curation/v1", "completed_at": datetime.now(timezone.utc).isoformat(),
+                 "checkpoint_sha256": digest, **content}
+        if previous_bytes is None:
+            replay_capture.write_bytes_no_replace(checkpoint, replay_capture._json_bytes(value), "curation checkpoint")
+        else:
+            if replay_capture._read_private_artifact(checkpoint.parent, checkpoint.name, replay_capture.MAX_MANIFEST) != previous_bytes:
+                raise ValueError("curation checkpoint changed during collection")
+            # shortcut: atomic replace only; add fsync before promising power-loss durability.
+            write_json_atomic(checkpoint, value)
+        return {**value, "complete": True, "changed": True, "delta_ids": delta, "gaps": []}
+    finally:
+        lock.rmdir()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run frozen OLD×NEW coding replays")
     parser.add_argument("--set", required=True)
-    parser.add_argument("command", choices=("list", "run"))
+    parser.add_argument("command", choices=("list", "run", "admit", "curate"))
+    parser.add_argument("--vault", type=Path, help="private retained-input vault (admit/curate only)")
+    parser.add_argument("--checkpoint", type=Path, help="private completed curation checkpoint (curate only)")
+    parser.add_argument("--recheck", action="store_true", help="explicitly run the frozen acceptance commands on restored candidates")
     parser.add_argument("--tasks", default="all", help="all or comma-separated task ids")
     parser.add_argument("--arms", default="OLD,NEW")
     parser.add_argument("--out", default="replay-results")
@@ -537,6 +1069,28 @@ def main():
     parser.add_argument("--replicates", type=int)
     args = parser.parse_args()
     replay_set = Path(args.set).expanduser().resolve()
+    if args.recheck and args.command != "admit":
+        parser.error("--recheck is only valid for admit")
+    if args.vault is not None and args.command not in ("admit", "curate"):
+        parser.error("--vault is only valid for admit/curate")
+    if (args.checkpoint is not None) != (args.command == "curate"):
+        parser.error("curate requires --checkpoint; other commands cannot use it")
+    if args.command in ("admit", "curate"):
+        run_flags = ("--tasks", "--arms", "--out", "--timeout-min", "--replicates")
+        if any(arg == flag or arg.startswith(flag + "=") for arg in sys.argv[1:] for flag in run_flags):
+            parser.error("run options do not apply to admit/curate; recheck has its own bounded profile")
+        config = json.loads(replay_capture._read(replay_set, replay_capture.MAX_MANIFEST))
+        vault = (args.vault or replay_capture.default_vault()).expanduser()
+        if args.command == "curate":
+            try:
+                result = curate_dataset(config["tasks"], vault_root=vault, checkpoint=args.checkpoint)
+            except (OSError, ValueError):
+                parser.error("curation unavailable; checkpoint not confirmed")
+            if result["changed"] or not result["complete"]:
+                print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["complete"] else 2
+        print(json.dumps(admit_dataset(config["tasks"], vault_root=vault, recheck=args.recheck), indent=2, sort_keys=True))
+        return 0
     config = json.loads(replay_set.read_text())
     cost_unavailable_map(config)
     tasks = config["tasks"]

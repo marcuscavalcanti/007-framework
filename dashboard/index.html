@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -18,122 +18,150 @@
         <div class="brand-mark" aria-hidden="true"><span>007</span></div>
         <div><strong>EVIDENCE COCKPIT</strong><span>Reliable agentic delivery</span></div>
       </div>
-      <nav class="project-navigation" aria-label="Navegação de projetos">
-        <p class="nav-label">Escopo</p>
-        <button class="nav-item is-active" id="overview-nav" type="button"><span class="nav-icon" aria-hidden="true">⌁</span><span>Todos os projetos</span><span class="nav-count" id="overview-count">0</span></button>
+      <nav class="project-navigation" aria-label="Project navigation">
+        <p class="nav-label">Scope</p>
+        <button class="nav-item is-active" id="overview-nav" type="button"><span class="nav-icon" aria-hidden="true">⌁</span><span>All projects</span><span class="nav-count" id="overview-count">0</span></button>
         <div class="nav-divider"></div>
-        <div class="nav-heading"><p class="nav-label">Projetos</p><span id="available-count">0 ativos</span></div>
+        <div class="nav-heading"><p class="nav-label">Projects</p><span id="available-count">0 active</span></div>
         <div class="project-list" id="project-nav"></div>
       </nav>
-      <div class="sidebar-footer"><div class="connection-state"><span class="pulse-dot" aria-hidden="true"></span><div><strong>Observador local</strong><span id="server-status">Conectando…</span></div></div><p>Receipts e Git permanecem nesta máquina.</p></div>
+      <div class="sidebar-footer"><div class="connection-state"><span class="pulse-dot" aria-hidden="true"></span><div><strong>Local observer</strong><span id="server-status">Connecting…</span></div></div><p>Receipts and Git stay on this machine.</p></div>
     </aside>
 
     <main class="workspace">
       <header class="topbar">
-        <div><p class="breadcrumb"><span>007 Framework</span><b>/</b><span id="breadcrumb-view">Visão geral</span></p><p class="last-update" aria-live="polite">Atualizado <span id="last-updated">—</span></p></div>
-        <div class="topbar-actions"><span class="version-pill" id="framework-version">v—</span><button class="refresh-button" id="refresh-button" type="button"><span aria-hidden="true">↻</span> Atualizar</button></div>
+        <div><p class="breadcrumb"><span>007 Framework</span><b>/</b><span id="breadcrumb-view">Overview</span></p><p class="last-update" aria-live="polite">Read <span id="last-updated">—</span> · Ingested <span id="last-ingested">N/A</span> · Last task event <span id="last-event">N/A</span></p><p class="measurement-note" id="source-status" role="status">Read not completed yet.</p></div>
+        <div class="topbar-actions"><span class="version-pill" id="framework-version">v—</span><button class="refresh-button" id="refresh-button" type="button"><span aria-hidden="true">↻</span> Refresh</button></div>
       </header>
       <div class="error-banner" id="error-banner" role="alert" hidden></div>
 
       <div class="content" id="dashboard-content" aria-busy="true">
         <section class="hero-panel" aria-labelledby="view-title">
           <div class="hero-copy">
-            <div class="eyebrow"><span></span> Engenharia com evidência</div>
-            <h1 id="view-title">Entrega, retrabalho e custo: o que a evidência mostra</h1>
-            <p id="view-subtitle">007 orienta a menor mudança segura, verifica o aceite e torna custo e lacunas visíveis. Ganho causal exige comparação controlada.</p>
-            <div class="scope-line"><span id="scope-sample">Aguardando dados</span><span aria-hidden="true">•</span><span id="scope-boundary">Uso real é evidência operacional; causalidade exige OLD×NEW.</span></div>
+            <div class="eyebrow"><span></span> Evidence-based engineering</div>
+            <h1 id="view-title">Delivery, rework and cost: what the evidence shows</h1>
+            <p id="view-subtitle">007 steers toward the smallest safe change, verifies acceptance, and makes cost and gaps visible. A causal gain requires a controlled comparison.</p>
+            <div class="scope-line"><span id="scope-sample">Waiting for data</span><span aria-hidden="true">•</span><span id="scope-boundary">Real usage is operational evidence; causality requires OLD×NEW.</span></div>
           </div>
-          <div class="verdict-card" id="verdict-card"><div class="verdict-topline"><span class="status-orbit" aria-hidden="true"><i></i></span><span>Metas operacionais · não causalidade</span></div><strong id="verdict-label">Sem dados</strong><p id="verdict-reason">A instrumentação ainda não observou uma tarefa.</p><div class="primary-action"><span>Próxima ação</span><b id="primary-action">Inicie uma tarefa medida.</b></div></div>
+          <div class="verdict-card" id="verdict-card"><div class="verdict-topline"><span class="status-orbit" aria-hidden="true"><i></i></span><span>Operational targets · not causality</span></div><strong id="verdict-label">No data</strong><p id="verdict-reason">Instrumentation has not observed a task yet.</p><div class="primary-action"><span>Next action</span><b id="primary-action">Start a measured task.</b></div></div>
         </section>
 
-        <section class="value-summary" aria-label="Resultados operacionais do escopo selecionado">
-          <article class="metric-card"><div class="metric-heading"><span>Mudanças aceitas</span></div><strong id="value-accepted">0</strong><p id="value-acceptance">0 com aceite controller-observed · 0 declaradas</p></article>
-          <article class="metric-card"><div class="metric-heading"><span>Reparo / tarefa medida</span></div><strong id="value-rework">N/D</strong><p id="value-rework-detail">Rodadas após a primeira entrega</p></article>
-          <article class="metric-card"><div class="metric-heading"><span>USD terminal contabilizado</span></div><strong id="value-cost">N/D</strong><p id="value-cost-detail">Origem e estado de contabilização</p></article>
-          <article class="metric-card"><div class="metric-heading"><span>Tarefas abertas</span></div><strong id="value-open">0</strong><p id="value-open-detail">Starts ainda sem receipt terminal</p></article>
+        <section class="value-summary" aria-label="Operational results for the selected scope">
+          <article class="metric-card"><div class="metric-heading"><span>Accepted changes</span></div><strong id="value-accepted">0</strong><p id="value-acceptance">0 declared · authorship not authenticated</p></article>
+          <article class="metric-card"><div class="metric-heading"><span>Repair / measured task</span></div><strong id="value-rework">N/A</strong><p id="value-rework-detail">Rounds after the first delivery</p></article>
+          <article class="metric-card"><div class="metric-heading"><span>Terminal USD accounted</span></div><strong id="value-cost">N/A</strong><p id="value-cost-detail">Source and accounting state</p></article>
+          <article class="metric-card"><div class="metric-heading"><span>Open tasks</span></div><strong id="value-open">0</strong><p id="value-open-detail">Starts without a terminal receipt yet</p></article>
         </section>
 
         <section class="panel evidence-panel" aria-labelledby="causal-title">
           <div class="evidence-icon" aria-hidden="true">Δ</div><div>
-            <div class="panel-heading"><div><p class="panel-kicker">Comparação controlada · OLD × NEW</p><h2 id="causal-title">Onde há ganho demonstrado?</h2></div><span class="sample-pill" id="causal-strength">Carregando</span></div>
-            <p class="evidence-sample" id="causal-scope">Experimento histórico global · não mede o ganho atual do projeto selecionado.</p>
-            <p id="causal-claim">Carregando a comparação OLD×NEW…</p><p class="evidence-sample" id="causal-sample">Amostra N/D</p><p class="evidence-pricing" id="causal-pricing">Custo N/D</p>
-            <div class="causal-grid"><span><small>CONTROL · USD / aceito</small><strong id="causal-old-cost">N/D</strong><small id="causal-old-route">Rota N/D</small></span><span><small>TREATMENT · USD / aceito</small><strong id="causal-new-cost">N/D</strong><small id="causal-new-route">Rota N/D</small></span><span><small>Δ custo estimado</small><strong id="causal-cost-delta">N/D</strong></span><span><small>Δ tempo / aceito</small><strong id="causal-latency-delta">N/D</strong></span></div>
-            <p class="evidence-spread" id="causal-spread">Dispersão N/D</p><div class="evidence-boundary" id="causal-boundary"></div>
+            <div class="panel-heading"><div><p class="panel-kicker">Controlled comparison · OLD × NEW</p><h2 id="causal-title">Where is there a demonstrated gain?</h2></div><span class="sample-pill" id="causal-strength">Loading</span></div>
+            <p class="evidence-sample" id="causal-scope">Global historical experiment · does not measure the selected project's current gain.</p>
+            <p id="causal-claim">Loading the OLD×NEW comparison…</p><p class="evidence-sample" id="causal-sample">Sample N/A</p><p class="evidence-pricing" id="causal-pricing">Cost N/A</p>
+            <div class="causal-grid"><span><small>CONTROL · USD / accepted</small><strong id="causal-old-cost">N/A</strong><small id="causal-old-route">Route N/A</small></span><span><small>TREATMENT · USD / accepted</small><strong id="causal-new-cost">N/A</strong><small id="causal-new-route">Route N/A</small></span><span><small>Δ estimated cost</small><strong id="causal-cost-delta">N/A</strong></span><span><small>Δ time / accepted</small><strong id="causal-latency-delta">N/A</strong></span></div>
+            <p class="evidence-spread" id="causal-spread">Spread N/A</p><div class="evidence-boundary" id="causal-boundary"></div>
           </div>
         </section>
 
         <section class="instrumentation-panel" id="instrumentation-panel" aria-labelledby="instrumentation-title">
-          <div><p class="panel-kicker">Cobertura primeiro</p><h2 id="instrumentation-title">Projetos conectados; captura ainda não iniciada</h2><p id="instrumentation-copy">O dashboard só mede tarefas que começam com <code>007 begin</code> e terminam com um receipt válido.</p></div>
-          <div class="instrumentation-stats" aria-label="Cobertura da instrumentação"><span><strong id="instrumentation-started">0</strong> iniciadas</span><span><strong id="instrumentation-terminal">0</strong> concluídas</span><span><strong id="instrumentation-active">0</strong> ativas</span><span><strong id="instrumentation-coverage">N/D</strong> cobertura</span></div>
-          <div class="command-path"><code>007 begin --repo . --task-id minha-tarefa</code><span>→</span><code>007 record --repo . --file task.receipt.json</code></div>
+          <div><p class="panel-kicker">Coverage first</p><h2 id="instrumentation-title">Projects connected; capture not started yet</h2><p id="instrumentation-copy">The dashboard only measures tasks that start with <code>007 begin</code> and end with a valid receipt.</p></div>
+          <div class="instrumentation-stats" aria-label="Instrumentation coverage"><span><strong id="instrumentation-started">0</strong> started</span><span><strong id="instrumentation-terminal">0</strong> completed</span><span><strong id="instrumentation-active">0</strong> active</span><span><strong id="instrumentation-coverage">N/A</strong> coverage</span></div>
+          <div class="command-path"><code>007 begin --repo . --task-id my-task</code><span>→</span><code>007 record --repo . --file task.receipt.json</code></div>
         </section>
 
         <section class="panel runtime-activity-panel" id="runtime-activity-panel" aria-labelledby="runtime-activity-title">
-          <div class="panel-heading"><div><p class="panel-kicker">Pulso operacional · últimas 24h</p><h2 id="runtime-activity-title">Atividade local observada</h2></div><span class="live-tag"><i></i> Codex · Claude · Kimi · Gemini</span></div>
+          <div class="panel-heading"><div><p class="panel-kicker">Operational pulse · last 24h</p><h2 id="runtime-activity-title">Observed local activity</h2></div><span class="live-tag"><i></i> Codex · Claude · Kimi · Gemini</span></div>
           <div class="runtime-activity-grid">
-            <article><span>Sessões</span><strong id="activity-sessions">0</strong></article>
-            <article><span>Ativas agora</span><strong id="activity-active">0</strong></article>
+            <article><span>Sessions</span><strong id="activity-sessions">0</strong></article>
+            <article><span>Active now</span><strong id="activity-active">0</strong></article>
             <article><span>Tokens</span><strong id="activity-tokens">0</strong></article>
-            <article><span>USD terminal observado</span><strong id="activity-cost">N/D</strong><small id="activity-equivalent-cost">Estimativa opcional: N/D</small></article>
+            <article><span>Observed terminal USD</span><strong id="activity-cost">N/A</strong><small id="activity-equivalent-cost">Optional estimate: N/A</small></article>
           </div>
-          <p class="measurement-note">Atividade local não é outcome verificado. O KPI usa o custo capturado no receipt terminal; Headroom, RTK ou outro rate card são apenas diagnósticos opcionais. Ausência permanece N/D, nunca zero.</p>
+          <p class="measurement-note">Local activity is not a verified outcome. Tokens marked as partial do not cover the whole period. The KPI uses the cost captured in the terminal receipt; Headroom, RTK or any other rate card are optional diagnostics only. Missing data stays N/A, never zero.</p>
         </section>
 
-        <section class="metric-grid decision-metrics" aria-label="Indicadores que decidem o objetivo">
-          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>First-pass sem escape D7 declarado</span><i class="metric-signal signal-cyan"></i></div><strong id="metric-reliable">N/D</strong><p id="metric-reliable-detail">Follow-up declarado; não verificado</p><div class="micro-track"><span id="track-reliable"></span></div></article>
-          <article class="metric-card"><div class="metric-heading"><span>Escapes D7 declarados</span><i class="metric-signal signal-red"></i></div><strong id="metric-escape">N/D</strong><p id="metric-escape-detail">Follow-up ausente permanece N/D</p><div class="micro-track inverse"><span id="track-escape"></span></div></article>
-          <article class="metric-card"><div class="metric-heading"><span>Rodadas de reparo</span><i class="metric-signal signal-amber"></i></div><strong id="metric-repairs">N/D</strong><p id="metric-repairs-detail">Correções após a primeira entrega</p><div class="micro-track inverse"><span id="track-repairs"></span></div></article>
-          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>First-pass declarado / USD</span><i class="metric-signal signal-green"></i></div><strong id="metric-roi">N/D</strong><p id="metric-roi-detail">Razão operacional; não economia causada pelo 007</p><div class="micro-track"><span id="track-roi"></span></div></article>
-          <article class="metric-card"><div class="metric-heading"><span>USD / first-pass declarado</span><i class="metric-signal signal-violet"></i></div><strong id="metric-reliable-cost">N/D</strong><p id="metric-reliable-cost-detail">Custos terminais incluindo falhas; abertas fora do custo</p><div class="micro-track"><span id="track-cost"></span></div></article>
-          <article class="metric-card"><div class="metric-heading"><span>Tempo / first-pass declarado</span><i class="metric-signal signal-blue"></i></div><strong id="metric-reliable-time">N/D</strong><p id="metric-reliable-time-detail">Inclui tentativas terminais bloqueadas e falhas</p><div class="micro-track"><span id="track-time"></span></div></article>
+        <section class="metric-grid decision-metrics" aria-label="Indicators that decide the objective">
+          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>First-pass with no declared D7 escape</span><i class="metric-signal signal-cyan"></i></div><strong id="metric-reliable">N/A</strong><p id="metric-reliable-detail">Declared follow-up; not verified</p><div class="micro-track"><span id="track-reliable"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>Declared D7 escapes</span><i class="metric-signal signal-red"></i></div><strong id="metric-escape">N/A</strong><p id="metric-escape-detail">Missing follow-up stays N/A</p><div class="micro-track inverse"><span id="track-escape"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>Repair rounds</span><i class="metric-signal signal-amber"></i></div><strong id="metric-repairs">N/A</strong><p id="metric-repairs-detail">Fixes after the first delivery</p><div class="micro-track inverse"><span id="track-repairs"></span></div></article>
+          <article class="metric-card metric-card-primary"><div class="metric-heading"><span>Declared first-pass / USD</span><i class="metric-signal signal-green"></i></div><strong id="metric-roi">N/A</strong><p id="metric-roi-detail">Operational ratio; not savings caused by 007</p><div class="micro-track"><span id="track-roi"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>USD / declared first-pass</span><i class="metric-signal signal-violet"></i></div><strong id="metric-reliable-cost">N/A</strong><p id="metric-reliable-cost-detail">Terminal costs including failures; open tasks excluded from cost</p><div class="micro-track"><span id="track-cost"></span></div></article>
+          <article class="metric-card"><div class="metric-heading"><span>USD / declared acceptance</span></div><strong id="metric-accepted-cost">N/A</strong><p id="metric-accepted-cost-detail">All attempts in the same cohort; not causal ROI</p></article>
+          <article class="metric-card"><div class="metric-heading"><span>Time / declared first-pass</span><i class="metric-signal signal-blue"></i></div><strong id="metric-reliable-time">N/A</strong><p id="metric-reliable-time-detail">Includes blocked and failed terminal attempts</p><div class="micro-track"><span id="track-time"></span></div></article>
         </section>
 
         <section class="analytics-grid decision-grid">
-          <article class="panel gate-panel"><div class="panel-heading"><div><p class="panel-kicker">Sem nota composta</p><h2>Por que essa é a resposta?</h2></div><span class="sample-pill">7 gates independentes</span></div><div class="table-scroll"><table class="gate-table"><thead><tr><th>Gate</th><th>Atual</th><th>Alvo</th><th>Evidência</th><th>Estado</th></tr></thead><tbody id="gate-matrix-body"></tbody></table></div></article>
-          <article class="panel chart-panel"><div class="panel-heading"><div><p class="panel-kicker">Últimos 30 dias · declarações</p><h2>Resultados ao longo do tempo</h2></div><div class="legend" aria-label="Legenda"><span><i class="legend-reliable"></i>First-pass + D7 declarado</span><span><i class="legend-repaired"></i>Aceito/outro</span><span><i class="legend-not-accepted"></i>Não aceito</span></div></div><div class="trend-chart" id="outcome-trend" role="img" aria-label="Tendência diária de resultados"></div></article>
+          <article class="panel gate-panel"><div class="panel-heading"><div><p class="panel-kicker">No composite score</p><h2>Why is this the answer?</h2></div><span class="sample-pill">8 independent gates</span></div><div class="table-scroll"><table class="gate-table"><thead><tr><th>Gate</th><th>Current</th><th>Target</th><th>Evidence</th><th>Status</th></tr></thead><tbody id="gate-matrix-body"></tbody></table></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><div><p class="panel-kicker">Last 30 days · declarations</p><h2>Outcomes over time</h2></div><div class="legend" aria-label="Legend"><span><i class="legend-reliable"></i>First-pass + declared D7</span><span><i class="legend-repaired"></i>Accepted/other</span><span><i class="legend-not-accepted"></i>Not accepted</span></div></div><div class="trend-chart" id="outcome-trend" role="img" aria-label="Daily outcome trend"></div></article>
         </section>
 
         <section class="panel" aria-labelledby="authority-title">
-          <div class="panel-heading"><div><p class="panel-kicker">Confiança da evidência</p><h2 id="authority-title">Quem observou a fronteira?</h2></div><span class="sample-pill" id="authority-confidence-label">não observado</span></div>
-          <p class="panel-intro">“Controlado” significa observado por <code>007 run</code>; não significa proteção contra o dono da máquina ou outro processo com o mesmo usuário.</p>
+          <div class="panel-heading"><div><p class="panel-kicker">Evidence confidence</p><h2 id="authority-title">Who observed the boundary?</h2></div><span class="sample-pill" id="authority-confidence-label">not observed</span></div>
+          <p class="panel-intro"><code>007 run</code> stamps preserve declarations and bindings; authorship not authenticated. Files the executor can write do not prove independent observation by the controller.</p>
           <div class="provenance-grid">
-            <article class="metric-card metric-card-primary"><div class="metric-heading"><span>Controller-observed</span><i class="metric-signal signal-green"></i></div><strong id="authority-controlled">0</strong><p id="authority-controlled-detail">0% dos outcomes vinculados</p></article>
-            <article class="metric-card"><div class="metric-heading"><span>Agent-declared</span><i class="metric-signal signal-amber"></i></div><strong id="authority-declared">0</strong><p>Receipt manual; válido, mas autorrelatado</p></article>
-            <article class="metric-card"><div class="metric-heading"><span>Não observado</span><i class="metric-signal signal-red"></i></div><strong id="authority-unobserved">0</strong><p>Outcome sem envelope de autoridade</p></article>
+            <article class="metric-card metric-card-primary"><div class="metric-heading"><span>Authenticated authorship</span><i class="metric-signal"></i></div><strong id="authority-controlled">0</strong><p id="authority-controlled-detail">Local records do not authenticate the producer</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Agent-declared</span><i class="metric-signal signal-amber"></i></div><strong id="authority-declared">0</strong><p>Manual receipt; valid, but self-reported</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Not observed</span><i class="metric-signal signal-red"></i></div><strong id="authority-unobserved">0</strong><p>Outcome without an authority envelope</p></article>
           </div>
           <div class="metric-grid decision-metrics">
-            <article class="metric-card"><div class="metric-heading"><span>Envelope presente</span><i class="metric-signal signal-cyan"></i></div><strong id="authority-coverage">N/D</strong><p id="authority-coverage-detail">Presença, não rigor da política</p></article>
-            <article class="metric-card"><div class="metric-heading"><span>Bloqueios reportados</span><i class="metric-signal signal-violet"></i></div><strong id="authority-protected">0</strong><p>Ação negada reportada como bloqueada</p></article>
-            <article class="metric-card"><div class="metric-heading"><span>Atrito reportado</span><i class="metric-signal signal-amber"></i></div><strong id="authority-friction">N/D</strong><p id="authority-friction-detail">0/0 tentativas permitidas</p></article>
-            <article class="metric-card"><div class="metric-heading"><span>Não classificados</span><i class="metric-signal signal-red"></i></div><strong id="authority-unclassified">0</strong><p>Bloqueados fora do envelope</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Envelope present</span><i class="metric-signal signal-cyan"></i></div><strong id="authority-coverage">N/A</strong><p id="authority-coverage-detail">Presence, not policy strictness</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Reported blocks</span><i class="metric-signal signal-violet"></i></div><strong id="authority-protected">0</strong><p>Denied action reported as blocked</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Reported friction</span><i class="metric-signal signal-amber"></i></div><strong id="authority-friction">N/A</strong><p id="authority-friction-detail">0/0 allowed attempts</p></article>
+            <article class="metric-card"><div class="metric-heading"><span>Unclassified</span><i class="metric-signal signal-red"></i></div><strong id="authority-unclassified">0</strong><p>Blocked outside the envelope</p></article>
           </div>
         </section>
 
         <section class="panel funnel-panel" id="reliability-funnel" aria-labelledby="funnel-title">
-          <div class="panel-heading"><div><p class="panel-kicker">Da atividade ao resultado</p><h2 id="funnel-title">Funil de resultados</h2></div><span class="sample-pill" id="funnel-maturity">0 follow-ups declarados</span></div>
-          <p class="panel-intro">Cada etapa mostra onde o resultado se perdeu. Contagens, não uma nota composta.</p>
+          <div class="panel-heading"><div><p class="panel-kicker">From activity to outcome</p><h2 id="funnel-title">Outcome funnel</h2></div><span class="sample-pill" id="funnel-maturity">0 declared follow-ups</span></div>
+          <p class="panel-intro">Each stage shows where the outcome was lost. Counts, not a composite score.</p>
           <div class="funnel-grid">
-            <article><span>01</span><strong id="funnel-started">0</strong><b>Iniciadas</b><small>denominador observável</small></article>
-            <article><span>02</span><strong id="funnel-terminal">0</strong><b>Concluídas</b><small>receipt terminal válido</small></article>
-            <article><span>03</span><strong id="funnel-accepted">0</strong><b>Aceitas</b><small>gate requerido atingido</small></article>
-            <article><span>04</span><strong id="funnel-first-pass">0</strong><b>First-pass</b><small>sem rodada de reparo</small></article>
-            <article class="funnel-final"><span>05</span><strong id="funnel-reliable">0</strong><b>First-pass + D7 declarado</b><small>sem escape declarado; não verificado</small></article>
+            <article><span>01</span><strong id="funnel-started">0</strong><b>Started</b><small>observable denominator</small></article>
+            <article><span>02</span><strong id="funnel-terminal">0</strong><b>Completed</b><small>valid terminal receipt</small></article>
+            <article><span>03</span><strong id="funnel-accepted">0</strong><b>Accepted</b><small>required gate reached</small></article>
+            <article><span>04</span><strong id="funnel-first-pass">0</strong><b>First-pass</b><small>no repair round</small></article>
+            <article class="funnel-final"><span>05</span><strong id="funnel-reliable">0</strong><b>First-pass + declared D7</b><small>no declared escape; not verified</small></article>
           </div>
         </section>
 
-        <section class="panel table-panel" aria-labelledby="projects-title"><div class="panel-heading"><div><p class="panel-kicker">Mesmo contrato em todo lugar</p><h2 id="projects-title">Projetos</h2></div><span class="sample-pill" id="projects-summary">0 registrados</span></div><div class="table-scroll"><table><thead><tr><th>Projeto</th><th>Estado</th><th>Sessões 24h</th><th>Tokens 24h</th><th>USD terminal 24h</th><th>First-pass D7 declarado</th><th>USD / first-pass declarado</th><th>Cobertura</th></tr></thead><tbody id="project-table-body"></tbody></table></div></section>
+        <section class="panel observatory-panel" aria-labelledby="observatory-title">
+          <div class="panel-heading"><div><p class="panel-kicker">Choice observatory</p><h2 id="observatory-title">Model and effort: was it worth it?</h2></div></div>
+          <p class="panel-intro" id="observatory-status">Select a repository.</p>
+          <div id="observatory-trial" class="observatory-block"></div>
+          <div id="observatory-calibrations"></div>
+          <div id="observatory-sessions"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="dataset-title">
+          <div class="panel-heading"><div><p class="panel-kicker">From observation to experiment</p><h2 id="dataset-title">What became available for the dataset?</h2></div></div>
+          <p class="panel-intro" id="dataset-boundary">Waiting for a read; a hash reference is not a recoverable case.</p>
+          <h3>Latest curation checkpoint</h3>
+          <p class="panel-intro"><span id="curation-status">Not configured</span> · <span id="curation-completed">N/A</span></p>
+          <p class="measurement-note" id="curation-summary">Configured manifest scope, not all agent activity.</p>
+          <p class="measurement-note" id="curation-boundary">Declared checkpoint; authorship not authenticated. Not training, policy promotion or proof of ROI.</p>
+          <div class="funnel-grid">
+            <article><strong id="dataset-observational">N/A</strong><b>Identified tasks</b><small>union of starts and receipts</small><div class="micro-track"><span id="dataset-track-observational"></span></div></article>
+            <article><strong id="dataset-inputs-retained">N/A</strong><b>Checked inputs</b><small>result of the last check</small><div class="micro-track"><span id="dataset-track-inputs-retained"></span></div></article>
+            <article><strong id="dataset-case-retained">N/A</strong><b>Checked candidates</b><small>last check, not current proof</small><div class="micro-track"><span id="dataset-track-case-retained"></span></div></article>
+            <article><strong id="dataset-replay-ready">N/A</strong><b>Independent replay</b><small>not run during the read</small><div class="micro-track"><span id="dataset-track-replay-ready"></span></div></article>
+            <article><strong id="dataset-qualified-comparison">N/A</strong><b>Qualified comparison</b><small>not inferred from a receipt</small><div class="micro-track"><span id="dataset-track-qualified-comparison"></span></div></article>
+          </div>
+        </section>
+
+        <section class="panel table-panel" aria-labelledby="projects-title"><div class="panel-heading"><div><p class="panel-kicker">Same contract everywhere</p><h2 id="projects-title">Projects</h2></div><span class="sample-pill" id="projects-summary">0 registered</span></div><div class="table-scroll"><table><thead><tr><th>Project</th><th>Status</th><th>Sessions 24h</th><th>Tokens 24h</th><th>Terminal USD 24h</th><th>Declared D7 first-pass</th><th>USD / declared first-pass</th><th>Coverage</th></tr></thead><tbody id="project-table-body"></tbody></table></div></section>
 
         <section class="analytics-grid lower-grid">
-          <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Ledger operacional</p><h2>Resultados recentes</h2></div><span class="live-tag"><i></i> near real-time</span></div><div class="activity-list" id="activity-list"></div></article>
-          <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Economia por rota</p><h2>Modelo, custo e aceite</h2></div><span class="sample-pill">served &gt; requested</span></div><div class="route-list" id="route-list"></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><h2>OLD × NEW by experiment</h2></div><p class="panel-intro" id="comparison-chart-note">No qualified comparison in this read.</p><div class="trend-chart" id="comparison-chart"></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><h2>Declared events per day</h2></div><p class="panel-intro" id="events-chart-note">30-day UTC window; waiting for a read.</p><div class="trend-chart" id="events-chart"></div></article>
+          <article class="panel chart-panel"><div class="panel-heading"><h2>Case evolution in this session</h2></div><p class="panel-intro" id="dataset-history-note">Select a project; no evolution is assumed.</p><p class="measurement-note">Tasks: gray · inputs: cyan · candidates: amber · replay: green · comparison: violet.</p><div class="trend-chart" id="dataset-history-chart"></div></article>
+          <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Operational ledger</p><h2>Recent outcomes</h2></div><span class="live-tag"><i></i> near real-time</span></div><div class="activity-list" id="activity-list"></div></article>
+          <article class="panel"><div class="panel-heading"><div><p class="panel-kicker">Economics by route</p><h2>Model, cost and acceptance</h2></div><span class="sample-pill">served &gt; requested</span></div><div class="route-list" id="route-list"></div></article>
         </section>
 
         <section class="boundary-grid">
-          <article class="panel diagnostics-panel"><div class="panel-heading"><div><p class="panel-kicker">Podemos confiar no painel?</p><h2>Qualidade dos dados</h2></div><span class="diagnostic-count" id="diagnostic-count">0</span></div><ul id="diagnostic-list"></ul></article>
+          <article class="panel diagnostics-panel"><div class="panel-heading"><div><p class="panel-kicker">Can we trust the dashboard?</p><h2>Data quality</h2></div><span class="diagnostic-count" id="diagnostic-count">0</span></div><ul id="diagnostic-list"></ul></article>
         </section>
 
-        <section class="empty-state" id="empty-state" hidden><div class="empty-radar" aria-hidden="true"><span></span></div><p class="panel-kicker">Nenhum projeto registrado</p><h2>Conecte o primeiro projeto</h2><p>Execute dentro de um repositório Git. O cockpit reconhecerá o projeto no próximo ciclo.</p><code>007 init</code></section>
+        <section class="empty-state" id="empty-state" hidden><div class="empty-radar" aria-hidden="true"><span></span></div><p class="panel-kicker">No project registered</p><h2>Connect the first project</h2><p>Run it inside a Git repository. The cockpit will pick up the project on the next cycle.</p><code>007 init</code></section>
       </div>
     </main>
   </div>

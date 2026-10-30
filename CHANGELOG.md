@@ -4,6 +4,92 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+### Thesis D: minimum sufficient effort
+
+- Product thesis moved from "007 doctrine vs none" to the canonical minimum-intelligence thesis: the least reasoning effort that
+  keeps accepted, durable changes, measured per repository. README states the bounded evidence (holdout: Codex `medium` matched
+  `xhigh` with ~52% less time; Claude `medium` failed the zero margin; harder tasks at ceiling, Codex only, exploratory).
+- Add `choice_observatory.py`: sessions attributed to commits by activity intervals (ambiguous commits are never guessed), line
+  survival at 7/30 days, and an evidence level on every judgment; `touch_rate.survival` extracted for reuse.
+- Add `effort_trial.py`/`effort_trial_analysis.py` for an opt-in randomized field trial of default effort (off by default;
+  blinded outcomes) and `config_guard.py`, which refuses settings that would change the meaning of evidence levels.
+- Native runner hardening found by adversarial review: whole pipe drained after exit, all served models kept, receipts reserved
+  before spending, option allowlist with user configuration sources off, error classes (rate limit vs transient), acceptance run
+  inside a sandbox with a minimal environment.
+- Internal planning documents are no longer shipped in the public tree.
+
+### Evidence and replay candidate
+
+- Treat persisted acceptance/authority labels as declarations, not authenticated
+  controller authorship. Original receipts and declared outcomes are preserved;
+  the dashboard no longer turns locally writable evidence into verified authorship.
+- Add experimental native JSON-stream adapters for fresh non-interactive Codex
+  and Claude commands. Reject inherited/forked sessions, ambiguous identities,
+  duplicate/truncated or over-budget streams; preserve unknown usage and cost.
+  A real canary is still required for each advertised route and mode.
+- Mark clipped Codex session-tail consumption as incomplete, preserving observed
+  counters without submitting them for rate-card pricing. Show partial token
+  coverage in the overview and affected project rows, not as a complete period.
+- Retain explicitly declared pre-edit files, instructions, environment and
+  acceptance recipes in a private vault, with byte/mode checks and no-replace
+  publication. Restore inputs and candidates without the original checkout.
+  This is a declared dependency closure, not automatic full-project capture.
+- Preserve stable candidate outputs after supported incomplete outcomes,
+  including telemetry publication collision, only after confirmed cleanup.
+  Do not fabricate a terminal receipt, cost or successful shutdown.
+- Use shared cohort economics across reports, dashboard and routing: include
+  failed attempts, separate USD bases, account inclusive parent/child totals once,
+  and keep incomplete cost or followup coverage unavailable for comparison.
+- Add optional disjoint USD cost portions for executor, review, retries,
+  verification, infrastructure and preparation. All six must reconcile to the
+  declared total before full-scope economics qualifies routing or readiness;
+  unknown overhead never becomes zero or upgrades historical receipts.
+- Clear full-scope economic eligibility when route identity is incomplete or
+  a project's source is unavailable, including an HTTP-successful stale read.
+  Preserve historical data without current approval, and recover on a valid read.
+- Add retained-case admission, contamination checks and explicit bounded oracle
+  rechecks. Historical calibration never becomes holdout by changing a label.
+  Qualified real comparisons are not yet admitted by the new dataset path.
+- Add serial USD30 reservation/reconciliation accounting, checkpoint stops and
+  unknown-cost/overrun handling. Accounting is not a provider spending cap;
+  public retained-vault experiment execution remains disabled pending qualification.
+- Add bounded dashboard event/case timelines, local-time dates, factual receipt
+  contribution, stale last-good data and single-flight polling. Existing global
+  historical comparisons do not represent new per-project causal experiments.
+- Reuse the existing muted palette for secondary text that failed contrast checks;
+  preserve keyboard focus, layout, metric values and evidence boundaries.
+- Add idempotent read-only curation and sanitized checkpoint projection, with
+  append-only hash/task/candidate-bound declared correction and escape links.
+  Show source and affected-case counts by project without authenticating incidents.
+  Accept hash/task/candidate-bound proposed hypotheses with one new routing and
+  one new gate source per curation cycle; show sanitized kind/hash references
+  and declared counts by project. Automatic generation, policy application and
+  daily activation remain pending; proposals are not qualified improvements.
+- Make historical tests reproducible from source archives using hash-bound MIT
+  proof inputs. Add a synthetic integrated controller check for restoration,
+  oracle controls, seeded order, complete cost arithmetic and repeated decisions.
+- Add a licensed static synthetic replay corpus and full semantic regression
+  digest for independent offline reproduction; keep native runtime mismatch
+  rejection separate from portable fixture controls and economic ROI.
+
+### Migration and proof boundaries
+
+- Receipt v1 files are not rewritten. Keep the prior installation for rollback;
+  this candidate has not been installed, integrated or released.
+- Amount-only v1 receipts remain valid and descriptive but no longer qualify
+  measured route ranking or readiness. Supply explicit reconciled cost portions
+  prospectively; this is declaration coherence, not authenticated billing or ROI.
+- Capture is explicit through a declared config and starts before task edits.
+  Existing project use or old receipts do not imply replay retention.
+- Native capture initially targets supported fresh non-interactive envelopes.
+  Interactive/resumed tasks remain outside that promise until qualified.
+- Same frozen bytes, versions and seed must yield the same controller decisions.
+  Fresh LLM generations and newly captured local fixtures may differ.
+- Costs in synthetic tests are literal fixture data, not charges or savings.
+  No new real OLD×NEW benefit, reliable-result cost or net financial ROI is claimed.
+- Final native canaries, prospective cases, financial bounds, independent review,
+  installation/rollback, public content audit and release CI remain open.
+
 ## [1.5.2] — local candidate (2026-10-06)
 
 - remove the inherited body minimum width that caused whole-page overflow at

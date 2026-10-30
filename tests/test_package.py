@@ -6,13 +6,51 @@ import hashlib
 import tempfile
 import os
 import sys
+import shutil
 from pathlib import Path
+from unittest import mock
+
+if __package__:
+    from . import historical_sources
+else:
+    import historical_sources
+historical_source = historical_sources.historical_source
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageContractTests(unittest.TestCase):
+    def test_corrupt_historical_fixture_is_rejected_before_use(self):
+        payload = historical_sources.FIXTURE.read_bytes()
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary) / "corrupt.tar.gz"
+            fixture.write_bytes(payload[:-1] + bytes([payload[-1] ^ 1]))
+            with mock.patch.object(historical_sources, "FIXTURE", fixture):
+                with self.assertRaisesRegex(ValueError, "fixture hash mismatch"):
+                    historical_source("301b1aa30522e87a486088c79687a93d95d2aa4a", "LICENSE")
+
+    def test_historical_proofs_run_from_source_archive_without_skips(self):
+        checks = [
+            "test_package.PackageContractTests.test_v14_release_manifest_matches_public_bytes",
+            "test_package.PackageContractTests.test_v15_manifest_matches_historical_release_not_current_runtime",
+            "test_package.PackageContractTests.test_v15_rc_mutation_patch_reproduces_exact_mutant",
+            "test_scripts.ScriptContractTests.test_route_selector_matches_frozen_old_new_mechanism_cells",
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            shutil.copytree(ROOT, source, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+            for prefix in ("", "tests."):
+                result = subprocess.run(
+                    [sys.executable, "-m", "unittest", *[prefix + check for check in checks]],
+                    cwd=source if prefix else source / "tests",
+                    env={**os.environ, "GIT_CEILING_DIRECTORIES": temporary},
+                    capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("skipped", result.stderr)
+                self.assertIn("Ran 4 tests", result.stderr)
+
     def test_layout_check_rejects_optimized_python_before_starting_server(self):
         normal = subprocess.run(
             [sys.executable, "tests/dashboard_layout.py", "--help"],
@@ -152,27 +190,21 @@ class PackageContractTests(unittest.TestCase):
         manifest = ROOT / "evidence/v1.4.0/manifest.sha256"
         self.assertEqual(hashlib.sha256(manifest.read_bytes()).hexdigest(), "af18a8d85705d02b5fb5363c20ae130311e609322deba56eb84a8c083bd6ab6d")
         release = "301b1aa30522e87a486088c79687a93d95d2aa4a"
-        if subprocess.run(["git", "cat-file", "-e", f"{release}^{{tree}}"], cwd=ROOT).returncode:
-            return
         mismatches = []
         for line in manifest.read_text().splitlines():
             digest, relative = line.split("  ", 1)
-            source = subprocess.run(["git", "show", f"{release}:{relative}"], cwd=ROOT, capture_output=True)
-            if source.returncode or hashlib.sha256(source.stdout).hexdigest() != digest:
+            source = historical_source(release, relative)
+            if hashlib.sha256(source).hexdigest() != digest:
                 mismatches.append(relative)
         self.assertEqual(mismatches, [])
 
 
     def test_v15_manifest_matches_historical_release_not_current_runtime(self):
         release = "460e98535752b18d1b4738babf8ad1f7d859d4a1"
-        if subprocess.run(["git", "cat-file", "-e", f"{release}^{{tree}}"],
-                          cwd=ROOT, capture_output=True).returncode:
-            self.skipTest("Historical v1.5.0 tree requires a full Git checkout")
         for line in (ROOT / "evidence/v1.5.0/manifest.sha256").read_text().splitlines():
             digest, name = line.split("  ", 1)
-            source = subprocess.run(["git", "show", f"{release}:{name}"], cwd=ROOT, capture_output=True)
-            self.assertEqual(source.returncode, 0, name)
-            self.assertEqual(hashlib.sha256(source.stdout).hexdigest(), digest, name)
+            source = historical_source(release, name)
+            self.assertEqual(hashlib.sha256(source).hexdigest(), digest, name)
 
     def test_v15_rc_evidence_and_manifest_are_bound(self):
         directory = ROOT / "evidence/v1.5.0-rc.2"
@@ -231,7 +263,9 @@ class PackageContractTests(unittest.TestCase):
         protocol = json.loads((directory / "mechanism-protocol.json").read_text())
         self.assertEqual(hashlib.sha256(patch.read_bytes()).hexdigest(),
                          protocol["mutation_patch_sha256"])
-        source = (ROOT / "scripts/framework_cli.py").read_bytes()
+        source = historical_source(protocol["head"], protocol["mutation"]["path"])
+        result = json.loads((directory / "mechanism-result.json").read_text())
+        self.assertEqual(hashlib.sha256(source).hexdigest(), result["runtime_source_sha256"])
         old = b"        if shutdown_signal is None:\n"
         self.assertEqual(source.count(old), 1)
         with tempfile.TemporaryDirectory() as temporary:

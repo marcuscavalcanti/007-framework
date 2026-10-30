@@ -9,6 +9,34 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
+## Current thesis: minimum sufficient effort (October 2026)
+
+**The same durable change, with less reasoning, less waiting and less quota — proven in your repository, not in a benchmark.**
+For the model you chose, 007 measures which reasoning effort is enough for the work in *your* repository, and says so only at the
+level of evidence it actually has.
+
+What the experiments so far support (pre-registered rules, zero non-inferiority margin on accepted changes):
+
+- **Holdout, one private Go repository, 13 real tasks** whose requirements were written before implementation and whose hidden
+  tests were validated by an implementer who only read the requirement; 3 replicates per effort.
+  - **Codex (`gpt-6.1-sol`): `medium` matched `xhigh`** — 39/39 vs 39/39 accepted, with **51.8% less agent time per accepted change**
+    (95% CI 44.3–57.9%) and ~43% less rate-card cost. `low` missed 2/39 (owner-invariant regressions) and fails the zero margin.
+  - **Claude (`sonnet-5.5`): `medium` did not pass** — 37/39 vs 39/39 (−50.6% time); `low` 36/39. Fisher p≈0.49: no power to tell
+    them apart; the verdict follows the pre-registered rule.
+- **8 harder tasks, Codex only (exploratory, after two post-start amendments):** `low` and `medium` matched `xhigh` (24/24 vs 23/24;
+  the single `xhigh` miss is an infrastructure-invalidated attempt that passed the oracle) with 68% and 52% less time. Every effort
+  solved every task, so this says nothing about *when to escalate*. The Claude run stopped at the pre-registered USD cap (50/72,
+  no verdict).
+- A commit-replay corpus built from 007's own history proved inadequate to measure quality and was closed.
+
+Not proven: durability over time, other repositories or languages, any population claim. Served effort is not reported by either
+CLI (a reasoning-token manipulation check is the only evidence the effort changed). Costs are API-equivalent estimates, not
+invoices. Raw experiment records stay private because they contain business code; the summaries above are their full claim.
+
+Tools for this thesis: `scripts/choice_observatory.py` (session → commit attribution and line survival, with an explicit evidence
+level), `scripts/effort_trial.py` (opt-in randomized default effort for a durability field trial; **off by default**) and
+`scripts/effort_trial_analysis.py`. A blinded field trial of 30-day line survival by effort is in progress.
+
 > **1.5.2 local candidate:** fixes the inherited 320px page overflow and adds a
 > browser-assisted visibility selfcheck. The source delta has exact-commit CI
 > and a context-only independent review; later documentation is qualified
@@ -75,7 +103,39 @@ python3 -m unittest discover -s tests -v
 python3 -m py_compile scripts/*.py
 ```
 
+The same suite runs from an extracted source archive without Git history.
+Historical checks use the hash-bound, MIT-licensed proof inputs documented in
+[tests/fixtures/README.md](tests/fixtures/README.md); Git is still needed by tests
+that create disposable repositories.
+
 ## Use
+
+For the offline synthetic controller proof, run:
+
+```bash
+python3 -m unittest discover -s tests -p test_semantic_replay.py -v
+```
+
+It restores a retained candidate, accepts the correct fixture and rejects a
+wrong one, repeats admission/budget/accounting/seeded order three times, and
+rejects byte corruption. USD values are literal test data, not provider charges
+or measured savings. Each invocation freezes a new local fixture; its identity
+hashes may differ from another invocation or runtime. Within that fixture all
+semantic values and identities must remain identical across the three repeats.
+
+For the same public corpus bytes across independent processes and supported
+Python versions, run:
+
+```bash
+python3 -m unittest discover -s tests -p test_public_replay_corpus.py -v
+```
+
+This licensed static fixture pins the full read-only admission, restored file
+identities/modes, portable oracle controls, seeded order, budget and accounting
+digest. It does not remove errors or identities to obtain equality. The native
+`recheck` path separately retains its exact captured-runtime requirement; the
+portable fixture controls do not waive that gate or qualify native generation.
+See [corpus contents and limits](tests/fixtures/README.md).
 
 Register each Git project once. Registration is idempotent, adds `.007/` only to
 the repository's local Git exclude file, and updates the user-level project
@@ -228,12 +288,12 @@ local Codex, Claude, Kimi Code, and Gemini CLI logs. It maps Git worktrees back
 to their registered project and shows sessions, active state, served route, and
 24-hour token deltas. Provider-reported terminal USD is preserved when present.
 Headroom/LiteLLM, RTK, or another rate card may supply a separate diagnostic
-estimate, but never closes the cost gate. Unknown cost is `N/D`, never free.
+estimate, but never closes the cost gate. Unknown cost is `N/A`, never free.
 This lane does not infer acceptance, first-pass success, or reliability from a
 completed session.
 
 The ROI cards use every measured attempt, including failures, in the numerator
-and only reliable first-pass outcomes in the denominator. They remain `N/D`
+and only reliable first-pass outcomes in the denominator. They remain `N/A`
 unless terminal cost and wall-time coverage are complete. A separate frozen
 OLD×NEW card reports release-level causal evidence, so live observational data
 is never mislabeled as causation.

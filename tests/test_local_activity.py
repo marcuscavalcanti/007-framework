@@ -146,6 +146,43 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertFalse(result["usage"]["usage_complete"])
                 self.assertIsNone(activity.pricing_request(result))
 
+    def test_codex_clipped_tail_keeps_observed_tokens_without_complete_usage_or_price(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "codex-clipped.jsonl")
+            rows = codex_rows("codex-clipped", Path(tmp))[:4] + [
+                {"timestamp": "2026-08-30T14:01:00Z", "type": "event_msg", "payload": {
+                    "type": "token_count", "info": {
+                        "total_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+                        "last_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}}}},
+                {"type": "response_item", "payload": {"padding": "x" * (4 * 1024 * 1024)}},
+                {"timestamp": "2026-08-30T14:02:00Z", "type": "turn_context",
+                 "payload": {"model": "gpt-5.6-sol", "effort": "xhigh"}},
+                {"timestamp": "2026-08-30T14:03:00Z", "type": "event_msg", "payload": {
+                    "type": "token_count", "info": {
+                        "total_token_usage": {"input_tokens": 107, "output_tokens": 22, "total_tokens": 129},
+                        "last_token_usage": {"input_tokens": 7, "output_tokens": 2, "total_tokens": 9}}}},
+            ]
+            write_jsonl(path, rows)
+            result = activity.parse_codex_session(path, NOW)
+
+        self.assertEqual(result["usage"]["total_tokens"], 9)
+        self.assertFalse(result["usage"]["usage_complete"])
+        self.assertIsNone(activity.pricing_request(result))
+        self.assertEqual(activity.HeadroomPricer(runner=lambda _: self.fail("clipped usage was priced"))
+                         .quote([result])[0]["pricing_source"], "usage-incomplete")
+
+    def test_usage_completeness_is_visible_in_project_summary_without_promoting_cost(self):
+        activity = self.module()
+        sessions = [{"status": "idle", "runtime_provider": "openai", "model": "m",
+                     "effort": "high", "usage": {"total_tokens": 9, "usage_complete": False}},
+                    {"status": "idle", "runtime_provider": "openai", "model": "m",
+                     "effort": "high", "usage": {"total_tokens": 120, "usage_complete": True}}]
+        result = activity.summarize(sessions, 24)
+        self.assertEqual(result["tokens_total"], 129)
+        self.assertEqual(result.get("usage_incomplete_sessions"), 1)
+        self.assertIsNone(result["cost_usd_estimate"])
+
     def test_claude_session_sums_token_classes_and_cache_tiers(self):
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -195,6 +232,20 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(request["cache_creation_1h_input_tokens"], 20_000)
         self.assertNotIn("SECRET", json.dumps(result))
 
+    def test_claude_subagent_logs_are_marked_so_they_never_speak_for_the_session(self):
+        # one sessionId spans the main log and <session>/subagents/agent-*.jsonl; only the main log may give model/effort/start
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            row = {"type": "user", "cwd": str(Path(tmp)), "sessionId": "s", "timestamp": "2026-08-30T14:00:00Z"}
+            main, sub = Path(tmp, "s.jsonl"), Path(tmp, "s", "subagents", "agent-1.jsonl")
+            sub.parent.mkdir(parents=True)
+            write_jsonl(main, [row])
+            write_jsonl(sub, [row])
+            flagged = Path(tmp, "flag.jsonl")
+            write_jsonl(flagged, [{**row, "isSidechain": True}])
+            marks = [activity.parse_claude_session(p, NOW)["subagent"] for p in (main, sub, flagged)]
+        self.assertEqual(marks, [False, True, True])
+
     def test_claude_usage_excludes_messages_before_window(self):
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -212,7 +263,7 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(result["usage"]["output_tokens"], 2)
         self.assertEqual(result["usage"]["total_tokens"], 12)
 
-    def test_claude_reported_cost_sums_results_inside_window(self):
+    def test_claude_counter_reset_keeps_cost_unknown(self):
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "claude-cost-window.jsonl")
@@ -225,7 +276,44 @@ class LocalActivityTests(unittest.TestCase):
 
             result = activity.parse_claude_session(path, NOW, lookback_hours=24)
 
+        self.assertIsNone(result["cost_usd_reported"])
+
+    def test_codex_repeated_cumulative_event_does_not_repeat_consumption(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "duplicate.jsonl")
+            event = {"timestamp": "2026-08-30T14:05:00Z", "type": "event_msg", "payload": {
+                "type": "token_count", "info": {
+                    "total_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+                    "last_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}}}}
+            write_jsonl(path, codex_rows("duplicate", Path(tmp))[:4] + [event, event])
+            result = activity.parse_codex_session(path, NOW)
+        self.assertEqual(result["usage"]["total_tokens"], 120)
+
+    def test_claude_cost_is_latest_session_total_not_sum_of_resumes(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "cost.jsonl")
+            write_jsonl(path, [
+                {"type": "user", "cwd": tmp, "sessionId": "cost", "timestamp": "2026-08-30T14:00:00Z"},
+                {"type": "result", "timestamp": "2026-08-30T14:01:00Z", "total_cost_usd": 1.0},
+                {"type": "result", "timestamp": "2026-08-30T14:02:00Z", "total_cost_usd": 1.0},
+                {"type": "result", "timestamp": "2026-08-30T14:03:00Z", "total_cost_usd": 1.5},
+            ])
+            result = activity.parse_claude_session(path, NOW)
         self.assertEqual(result["cost_usd_reported"], 1.5)
+
+    def test_claude_window_cost_requires_a_cumulative_baseline(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "cost.jsonl")
+            meta = {"type": "user", "cwd": tmp, "sessionId": "cost", "timestamp": "2026-08-28T14:00:00Z"}
+            inside = [{"type": "result", "timestamp": "2026-08-30T14:01:00Z", "total_cost_usd": 10.0},
+                      {"type": "result", "timestamp": "2026-08-30T14:02:00Z", "total_cost_usd": 10.5}]
+            write_jsonl(path, [meta, {"type": "result", "timestamp": "2026-08-29T12:00:00Z", "total_cost_usd": 9.0}, *inside])
+            self.assertEqual(activity.parse_claude_session(path, NOW)["cost_usd_reported"], 1.5)
+            write_jsonl(path, [meta, *inside])
+            self.assertIsNone(activity.parse_claude_session(path, NOW)["cost_usd_reported"])
 
     def test_kimi_session_normalizes_turn_usage(self):
         activity = self.module()
@@ -279,6 +367,80 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(request["prompt_tokens"], 63)
         self.assertEqual(request["cache_read_input_tokens"], 40)
         self.assertEqual(request["completion_tokens"], 25)
+
+    def test_active_intervals_merge_close_timestamps_and_cap_by_merging_the_closest(self):
+        # Marcus, 2026-10-25: a session resumed over days (271 h) must not own every commit of its span; only its active stretches.
+        activity = self.module()
+        stamps = [5100, 0, 100, 2000, 5000, 100.9]
+        self.assertEqual(activity.active_intervals(stamps, gap_s=1800), [[0, 100], [2000, 2000], [5000, 5100]])
+        self.assertEqual(activity.active_intervals(stamps, gap_s=1800, cap=2), [[0, 2000], [5000, 5100]])
+        self.assertEqual(activity.active_intervals(stamps, gap_s=1800, cap=1), [[0, 5100]])
+        self.assertEqual(activity.active_intervals([], gap_s=1800), [])
+        self.assertEqual(activity.MAX_INTERVALS, 500)
+        self.assertEqual(len(activity.active_intervals(range(0, 10_000_000, 3600), gap_s=1800)), 500)
+
+    def test_every_parser_emits_active_intervals_from_row_timestamps_only(self):
+        activity = self.module()
+        epoch = lambda text: int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+        with tempfile.TemporaryDirectory() as tmp:
+            codex = Path(tmp, "codex.jsonl")
+            write_jsonl(codex, codex_rows("codex-1", Path(tmp)) + [
+                {"timestamp": "2026-08-30T14:40:00Z", "type": "event_msg", "payload": {"type": "task_started"}}])
+            claude = Path(tmp, "claude.jsonl")
+            write_jsonl(claude, [
+                {"type": "user", "cwd": tmp, "sessionId": "c", "timestamp": "2026-08-30T10:00:00Z", "message": {"content": "SECRET"}},
+                {"type": "assistant", "cwd": tmp, "sessionId": "c", "timestamp": "2026-08-30T10:20:00Z",
+                 "message": {"model": "claude-opus-5", "content": "SECRET"}},
+                {"type": "user", "cwd": tmp, "sessionId": "c", "timestamp": "2026-08-30T14:00:00Z", "message": {"content": "SECRET"}}])
+            gemini = Path(tmp, "gemini.jsonl")
+            write_jsonl(gemini, [{"sessionId": "g", "startTime": "2026-08-30T12:00:00Z"},
+                                 {"type": "gemini", "timestamp": "2026-08-30T12:10:00Z", "model": "gm", "tokens": {"total": 1}},
+                                 {"type": "user", "timestamp": "2026-08-30T13:00:00Z"}])
+            kimi = Path(tmp, "kimi/state.json")
+            write_json(kimi, {"id": "k", "cwd": tmp, "createdAt": 0, "updatedAt": 0})
+            hour = 3_600_000
+            write_jsonl(kimi.parent / "agents/main/wire.jsonl", [{"type": "turn.prompt", "time": epoch("2026-08-30T09:00:00Z") * 1000},
+                                                                 {"type": "turn.ended", "time": epoch("2026-08-30T09:00:00Z") * 1000 + hour}])
+            results = {"codex": activity.parse_codex_session(codex, NOW), "claude": activity.parse_claude_session(claude, NOW),
+                       "gemini": activity.parse_gemini_session(gemini, tmp, NOW), "kimi": activity.parse_kimi_session(kimi, NOW)}
+        self.assertEqual(results["codex"]["active_intervals"], [[epoch("2026-08-30T14:00:00Z"), epoch("2026-08-30T14:05:01Z")],
+                                                                [epoch("2026-08-30T14:40:00Z")] * 2])
+        self.assertEqual(results["claude"]["active_intervals"], [[epoch("2026-08-30T10:00:00Z"), epoch("2026-08-30T10:20:00Z")],
+                                                                 [epoch("2026-08-30T14:00:00Z")] * 2])
+        self.assertEqual(results["gemini"]["active_intervals"], [[epoch("2026-08-30T12:00:00Z"), epoch("2026-08-30T12:10:00Z")],
+                                                                 [epoch("2026-08-30T13:00:00Z")] * 2])
+        self.assertEqual(results["kimi"]["active_intervals"], [[epoch("2026-08-30T09:00:00Z")] * 2, [epoch("2026-08-30T10:00:00Z")] * 2])
+        self.assertNotIn("SECRET", json.dumps(results))
+        for result in results.values():
+            self.assertTrue(all(isinstance(x, int) for pair in result["active_intervals"] for x in pair))
+
+    def test_clipped_log_counts_its_unread_head_as_active_so_it_can_only_add_ambiguity(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "codex-clipped.jsonl")
+            rows = codex_rows("codex-clipped", Path(tmp))[:1] + [
+                {"type": "response_item", "payload": {"padding": "x" * (4 * 1024 * 1024)}},
+                {"timestamp": "2026-08-30T18:02:00Z", "type": "turn_context", "payload": {"model": "m", "effort": "low"}},
+                {"timestamp": "2026-08-30T18:03:00Z", "type": "event_msg", "payload": {"type": "task_complete"}}]
+            write_jsonl(path, rows)
+            result = activity.parse_codex_session(path, NOW)
+        start = int(datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc).timestamp())
+        self.assertEqual(result["active_intervals"], [[start, start + 4 * 3600 + 180]])
+
+    def test_collector_applies_the_activity_gap_parameter(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_jsonl(root / "codex/s.jsonl", codex_rows("s", root) + [
+                {"timestamp": "2026-08-30T14:40:00Z", "type": "event_msg", "payload": {"type": "task_started"}}])
+            values = {}
+            for minutes in (30, 60):
+                collector = activity.ActivityCollector(codex_root=root / "codex", claude_root=root / "claude", kimi_root=root / "kimi",
+                                                       gemini_root=root / "gemini", pricer=activity.HeadroomPricer(runner=lambda r: []),
+                                                       activity_gap_minutes=minutes)
+                (_, path), = collector.candidates(NOW)
+                values[minutes] = len(collector.parse("codex", path, NOW)["active_intervals"])
+        self.assertEqual(values, {30: 2, 60: 1})
 
     def test_summary_keeps_provider_reported_cost_separate_from_rate_card(self):
         activity = self.module()
