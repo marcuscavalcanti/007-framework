@@ -1,7 +1,10 @@
 """Adversarial reviewer route by host session (AGENTS.md revision 2026-10-21b; master plan 3.3). Selection only, no launch, fail-closed."""
 import importlib
+from pathlib import Path
+import sys
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from cli_telemetry import validate_command
 
 ALL = {"codex": "/bin/codex", "claude": "/bin/claude", "kimi": "/bin/kimi"}

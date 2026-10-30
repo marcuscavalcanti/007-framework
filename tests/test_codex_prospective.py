@@ -5,8 +5,12 @@ import hashlib
 import importlib
 import io
 import json
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 NOW = "2026-10-17T00:00:00Z"
 PRODUCER = dict(namespace="codex-app-server-v2", adapter="codex-app-server", surface="terminal",

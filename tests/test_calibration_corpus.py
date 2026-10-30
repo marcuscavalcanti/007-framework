@@ -6,9 +6,11 @@ import importlib
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 replay = importlib.import_module("replay_eval")
 ROOT = Path(__file__).parent / "fixtures/calibration"
 # Review r25-r32 R6 / re-review r35 N1: pinned inventory; the expectation comes from the name (legit_* accepted, mutant_* rejected).
