@@ -613,6 +613,156 @@ function renderEvidence() {
     : "Spread N/A");
 }
 
+// ---- verdict home: what the evidence supports for the selected scope, never more
+const JUDGED = ["above-necessary", "good-choice", "no-cheaper-proven", "cannot-spend-less"];
+const SAYS = {
+  "above-necessary": (entry) => [`Above what was needed: ${entry.gain?.effort || "less"} is enough`, "warn"],
+  "good-choice": () => ["Good choice", "good"],
+  "no-cheaper-proven": () => ["Nothing cheaper proven", "plain"],
+  "cannot-spend-less": () => ["Lower effort not proven", "plain"],
+};
+const scopeProjects = () => { const project = selectedProject(); return project ? [project] : state.snapshot.projects; };
+const calibrationsOf = (projects) => projects.flatMap((project) => (project.observatory?.calibrations || []).filter((item) => !item.error).map((item) => ({ ...item, repository: project.name })));
+const signedPercent = (value) => value == null ? "N/A" : `${value > 0 ? "−" : "+"}${Math.abs(value * 100).toFixed(0)}%`;
+
+function sessionJudgement(session, project) {
+  const calibration = (project.observatory?.calibrations || []).find((item) => item.cli === session.source && item.model === session.model);
+  const entry = calibration?.by_effort?.[session.effort];
+  const [says, tone] = SAYS[entry?.verdict]?.(entry) || ["No evidence to change it", "plain"];
+  return { says, tone, level: entry?.badge || "Observed" };
+}
+
+function liveSessions(projects, now) {
+  return projects.flatMap((project) => (project.activity?.recent_sessions || []).filter((session) => session.status === "active").map((session) => {
+    const started = Date.parse(session.started_at);
+    return { repo: project.name, model: session.model, effort: session.effort, tokens: session.usage?.total_tokens,
+             minutes: Number.isFinite(started) ? Math.max(0, Math.round((now - started) / 60000)) : null, ...sessionJudgement(session, project) };
+  }));
+}
+
+function effortScores(projects, now) {
+  const sessions = projects.flatMap((project) => (project.observatory?.sessions || [])).filter((session) => now - Date.parse(session.started_at) <= 30 * 86400000);
+  const judged = sessions.filter((session) => JUDGED.includes(session.questions?.[2]?.verdict));
+  const enough = judged.filter((session) => session.questions[2].verdict !== "above-necessary");
+  const tokens = (rows) => rows.reduce((sum, session) => sum + (session.total_tokens || 0), 0);
+  const every = projects.flatMap((project) => project.observatory?.sessions || []);  // a 30-day window only matures on older sessions
+  const mature = every.map((session) => session.durability?.["30"]).filter((window) => window?.status === "mature" && window.lines_added);
+  const added = mature.reduce((sum, window) => sum + window.lines_added, 0);
+  const calibrated = projects.filter((project) => calibrationsOf([project]).length).length;
+  return { quota: tokens(judged) ? tokens(enough) / tokens(judged) : null, enough: enough.length, judged: judged.length, sessions: sessions.length,
+           lines: added ? mature.reduce((sum, window) => sum + window.lines_surviving, 0) / added : null, calibrated, repositories: projects.length,
+           blinded: every.some((session) => typeof session.durability === "string") };
+}
+
+function bestVerdict(calibrations) {
+  for (const calibration of calibrations) {
+    const efforts = Object.keys(calibration.by_effort || {});
+    const effort = efforts.find((name) => calibration.by_effort[name].verdict === "good-choice");
+    if (effort) return { calibration, effort, entry: calibration.by_effort[effort] };
+  }
+  return null;
+}
+
+function thesisClaims(best, report) {
+  const measured = Boolean(best);
+  const durable = report?.durability === "PROVEN" ? ["PROVEN", "good"] : report?.durability === "KILL" ? ["FAILED", "bad"] : measured ? ["NOT PROVEN", "warn"] : ["NO EVIDENCE", "plain"];
+  const supported = measured ? ["SUPPORTED", "good"] : ["NO EVIDENCE", "plain"];
+  // same_change_reachable is the interval rule; the older point-estimate same_change called one null run in three a loss
+  const sameVerdict = report?.same_change_reachable;
+  const same = sameVerdict === "PROVEN" ? ["PROVEN", "good"] : sameVerdict === "KILL" ? ["FAILED", "bad"] : measured ? ["NOT PROVEN", "warn"] : ["NO EVIDENCE", "plain"];
+  return [
+    { id: "claim-reasoning", claim: "Less reasoning", state: supported, evidence: measured ? "Effort changed what the model actually did." : "Run a replay on this repository." },
+    { id: "claim-waiting", claim: "Less waiting", state: supported, evidence: measured ? `${percent(best.entry.gain?.time_reduction)} less agent time per accepted change.` : "Run a replay on this repository." },
+    { id: "claim-quota", claim: "Less quota", state: measured ? ["ESTIMATED", "warn"] : ["NO EVIDENCE", "plain"], evidence: measured ? `${percent(best.entry.gain?.cost_reduction)} less estimated cost per accepted change: a price estimate, not a quota meter.` : "Run a replay on this repository." },
+    { id: "claim-change", claim: "The same change", state: same, evidence: sameVerdict === "PROVEN" ? "Non-inferior on behaviour the agent never saw." : sameVerdict === "KILL" ? "Lost more than the margin on behaviour the agent never saw." : measured ? "No accepted change lost, but no lab report bounds the loss." : "Run a replay on this repository." },
+    { id: "claim-durable", claim: "Durable", state: durable, evidence: report?.durability === "PROVEN" ? "Survived the next real change, within the margin." : report?.durability === "KILL" ? "Lost more than the margin at the next real change." : "No instrument has shown it can see the difference yet." },
+  ];
+}
+
+function textBlock(className, parts) {
+  const box = element("div", className);
+  for (const [tag, cls, text] of parts) box.append(element(tag, cls, text));
+  return box;
+}
+
+function renderLive(rows, generatedAt) {
+  const body = byId("live-rows");
+  body.replaceChildren();
+  for (const row of rows) {
+    const line = element("tr");
+    const cells = [[row.repo], [row.model, "mono"], [row.effort, "mono"], [row.minutes == null ? "N/A" : `${row.minutes} min`, "mono num"], [row.tokens == null ? "N/A" : integer(row.tokens), "mono num"], [row.says, `tone-${row.tone}`], [row.level, "mono dim"]];
+    for (const [text, cls] of cells) line.append(element("td", cls, text));
+    body.append(line);
+  }
+  byId("live-table").hidden = !rows.length;
+  byId("live-empty").hidden = rows.length > 0;
+  setText("live-count", `${rows.length} session${rows.length === 1 ? "" : "s"} · read ${localDateTime(generatedAt)}`);
+}
+
+function renderScores(scores) {
+  const items = [
+    [scores.quota == null ? "N/A" : percent(scores.quota), "Quota at enough effort", scores.judged ? "Weighted by tokens, not sessions." : "No recent session in a calibrated repository.", scores.quota != null && scores.quota < .5 ? "warn" : "plain"],
+    [scores.judged ? `${scores.enough}/${scores.judged}` : "N/A", "Sessions at enough effort", `Of ${scores.sessions} recorded in 30 days, ${scores.judged} can be judged.`, "plain"],
+    [scores.lines == null ? "N/A" : percent(scores.lines), "Lines still alive at 30 days", scores.lines == null ? "Hidden or not mature yet." : `Linked to sessions, not proof of quality.${scores.blinded ? " Trial sessions stay hidden." : ""}`, "plain"],
+    [`${scores.calibrated}/${scores.repositories}`, "Repositories calibrated", "The rest are only observed.", "plain"],
+  ];
+  byId("verdict-scores").replaceChildren(...items.map(([value, label, detail, tone]) => textBlock("verdict-score", [["strong", `tone-${tone}`, value], ["span", null, label], ["small", null, detail]])));
+}
+
+function renderLadder(best) {
+  const box = byId("effort-ladder");
+  box.replaceChildren();
+  byId("ladder-band").hidden = !best;
+  if (!best) return;
+  const rows = Object.entries(best.calibration.arms || {});
+  const slowest = Math.max(...rows.map(([, arm]) => arm.wall_per_accepted_s || 0));
+  const top = rows.at(-1)?.[1].accepted;
+  for (const [effort, arm] of rows) {
+    const line = element("div", `ladder-row${effort === best.effort ? " is-enough" : ""}`);
+    const track = element("div", "ladder-track");
+    const bar = element("div", "ladder-bar");
+    bar.style.width = `${slowest ? (arm.wall_per_accepted_s || 0) / slowest * 100 : 0}%`;
+    track.append(bar);
+    const note = effort === best.effort ? ["enough", "good"] : effort === rows.at(-1)[0] ? ["reference", "plain"] : arm.accepted < top ? [`loses ${top - arm.accepted}`, "warn"] : ["", "plain"];
+    line.append(element("span", "mono", effort), track, element("span", "mono num", arm.wall_per_accepted_s == null ? "N/A" : `${arm.wall_per_accepted_s.toFixed(0)} s`), element("span", "mono num", `${arm.accepted}/${arm.units}`), element("span", `num tone-${note[1]}`, note[0]));
+    box.append(line);
+  }
+}
+
+function renderVerdict(project) {
+  const projects = scopeProjects();
+  const now = Date.parse(state.snapshot.generated_at);
+  const calibrations = calibrationsOf(projects);
+  const best = bestVerdict(calibrations);
+  const report = state.snapshot.lab_report;
+  const scope = project?.name || "all repositories";
+  const durable = report?.durability === "PROVEN";
+  const reach = project ? "" : ` · calibrated in ${projects.filter((item) => calibrationsOf([item]).length).length} of ${projects.length}`;
+  setText("verdict-kicker", best ? `${best.calibration.model} · ${best.calibration.repository}${reach}` : `${scope} · no calibration yet`);
+  setText("verdict-title", best ? `${best.effort} is enough.` : "No verdict yet.");
+  setText("verdict-lede", best ? `Tests accept the same changes with ${percent(best.entry.gain?.time_reduction)} less agent time. ${durable ? "They also survived the next real change." : "Whether those changes last is not shown yet."}`
+    : "007 will not guess which effort is enough for your code. It replays your own commits at two efforts and tells you what the evidence supports.");
+  const gain = best?.entry.gain;
+  const arm = best?.calibration.arms?.[best.effort], reference = gain && best.calibration.arms?.[gain.against];
+  byId("verdict-gains").replaceChildren(...(best ? [
+    [signedPercent(gain?.time_reduction), "agent time", "per accepted change"],
+    [signedPercent(gain?.cost_reduction), "cost", "per accepted change"],
+    [arm && reference ? `${arm.accepted} = ${reference.accepted}` : "N/A", "accepted", `${best.effort} and ${gain?.against}`],
+  ] : []).map(([value, label, detail]) => textBlock("verdict-gain", [["strong", null, value], ["span", null, label], ["small", null, detail]])));
+  renderLive(liveSessions(projects, now), state.snapshot.generated_at);
+  renderScores(effortScores(projects, now));
+  const claims = thesisClaims(best, report);
+  for (const claim of claims) for (const id of [claim.id, claim.extra].filter(Boolean)) byId(id).className = `claim-word claim-${claim.state[1]}`;
+  byId("verdict-claims").replaceChildren(...claims.map((claim) => textBlock("verdict-claim", [["span", `mono tone-${claim.state[1]}`, claim.state[0]], ["strong", null, claim.claim], ["small", null, claim.evidence]])));
+  renderLadder(best);
+  byId("verdict-advice").replaceChildren(...calibrations.map((calibration) => {
+    const found = bestVerdict([calibration]);
+    return textBlock("verdict-advice-row", [["div", "mono", `${calibration.cli} · ${calibration.model} · ${calibration.repository}`], ["strong", `tone-${found ? "good" : "warn"}`, found ? `use ${found.effort}` : "keep your effort"],
+      ["small", null, found ? "No accepted change lost." : "No lower effort passed the gates."]]);
+  }));
+  if (!calibrations.length) byId("verdict-advice").replaceChildren(element("p", "verdict-note", "No model calibrated in this scope."));
+}
+
 function render() {
   if (!state.snapshot) return;
   const project = selectedProject();
@@ -620,6 +770,7 @@ function render() {
   const hasProjects = state.snapshot.projects.length > 0;
   byId("empty-state").hidden = hasProjects;
   renderNavigation();
+  renderVerdict(project);
   renderHeader(metrics, project);
   renderInstrumentation(metrics);
   renderRuntimeActivity(metrics.activity);
@@ -656,6 +807,11 @@ async function loadSnapshot() {
   byId("refresh-button").classList.add("is-loading");
   try {
     const response = await fetch("/api/snapshot", { cache: "no-store", signal:controller.signal });
+    if (response.status === 503 && !previous) {
+      setText("verdict-kicker", "Reading your repositories for the first time. Large registries take a minute or two.");
+      setText("server-status", "First read in progress");
+      return;
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const next = await response.json();
     if (next?.schema !== "007-framework/dashboard-snapshot/v1" || !Array.isArray(next.projects)

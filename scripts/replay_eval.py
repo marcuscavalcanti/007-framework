@@ -289,10 +289,33 @@ def hidden_target(workspace, value):
     return target
 
 
+def reset_to_base(task, workspace):
+    """Paths matching task["reset_to_base"] that the agent changed, other than hidden targets: the oracle grades them at base. A Go
+    test the agent wrote beside a hidden one can redeclare its names and break the whole package, and the agent's tests never grade."""
+    patterns = task.get("reset_to_base", [])
+    if not patterns:
+        return {}
+    git = lambda *args: run(["git", *args], cwd=workspace, timeout=300)
+    roots = git("rev-list", "--max-parents=0", "HEAD").stdout.split()
+    if len(roots) != 1:
+        raise ValueError("reset_to_base needs the base snapshot repository")
+    listed = lambda *args: set(filter(None, git(*args).stdout.split("\0")))
+    changed = listed("diff", "--name-only", "--no-renames", "-z", roots[0]) | listed("ls-files", "--others", "-z")
+    in_base = listed("ls-tree", "-r", "--name-only", "-z", roots[0])
+    hidden = {entry["target"] for entry in task.get("hidden_acceptance", [])}
+    return {name: roots[0] if name in in_base else None for name in sorted(changed - hidden) if any(Path(name).match(p) for p in patterns)}
+
+
 @contextmanager
 def hidden_acceptance(task, workspace):
     backups = []
     try:
+        for name, root in reset_to_base(task, workspace).items():
+            target = hidden_target(workspace, name)
+            backups.append((name, target.read_bytes() if target.exists() else None))
+            target.unlink(missing_ok=True)
+            if root is not None and run(["git", "--literal-pathspecs", "checkout", root, "--", name], cwd=workspace, timeout=300).returncode:
+                raise ValueError(f"cannot reset to base: {name}")
         for entry in task.get("hidden_acceptance", []):
             source = Path(entry["source"]).expanduser().resolve()
             hidden_bytes = source.read_bytes()

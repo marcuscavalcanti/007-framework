@@ -17,7 +17,7 @@ HOST_FAMILY = {"claude": "anthropic", "codex": "openai"}
 # (the same features Marcus's other reviewer sessions disable on this binary).
 CODEX_REVIEW_DISABLED = ("shell_tool", "unified_exec", "apps", "plugins", "hooks", "memories", "multi_agent", "browser_use",
                          "browser_use_external", "computer_use", "image_generation", "view_image", "in_app_browser", "tool_suggest",
-                         "goals", "remote_plugin", "sleep_tool")
+                         "goals", "remote_plugin", "sleep_tool", "code_mode_host")  # code_mode_host: on by default since 0.165
 
 
 def host_session(env=None):

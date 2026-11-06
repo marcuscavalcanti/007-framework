@@ -9,33 +9,74 @@ change, prove the outcome, and report uncertainty without inventing telemetry.
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
-## Current thesis: minimum sufficient effort (October 2026)
+## Current thesis: minimum sufficient effort (November 2026)
 
-**The same durable change, with less reasoning, less waiting and less quota — proven in your repository, not in a benchmark.**
-For the model you chose, 007 measures which reasoning effort is enough for the work in *your* repository, and says so only at the
-level of evidence it actually has.
+**Thesis under test: for the model you chose, a lower reasoning effort makes the same durable change with less reasoning, less
+waiting and less quota.** What one repository can show today is measured, guarded and bounded, each per executor:
 
-What the experiments so far support (pre-registered rules, zero non-inferiority margin on accepted changes):
+- **Measured in your repository.** `007 lab` replays your own commits at two efforts. Agent time and tokens settle within a few
+  dozen commits. Public go-json replay, Codex `medium` vs `high`: agent time −32% median per attempt (task-bootstrap 95% CI −39%
+  to −25%), tokens −26% to −34% under any weighting of input, cached input and output, acceptance equal.
+- **Guarded in your repository.** `report` returns `KILL` when the whole 95% interval of the paired difference falls below −3
+  points. With about 40 commits that reach new behaviour and go-json's noise, a loss spread across commits is caught four times
+  in five from about 10–12 points, roughly where the lower effort stops paying (on go-json a 10.5-point drop in acceptance
+  erases the 31% cost saving per accepted change). A loss concentrated in a few commits must be larger.
+- **Bounded, not proven: the same change within 3 points.** With the attempts each run had (about two per arm for Codex, three
+  for Claude), excluding a loss above 3 points takes roughly 190–360 commits that reach new behaviour for Codex (go-json, after a
+  grading fix) and about 700 for Claude (estimated from 17 tasks, so anywhere from 400 to 1,700). go-json-experiment/json gave 41
+  such commits out of 145 candidates; they exclude only losses above about 7 points. When a loss comes as rare attempts that
+  fail outright, the t interval calls a 3-point loss `PROVEN` up to 5.6% of the time instead of 2.5%, so `report` takes
+  `PROVEN`'s critical value from that loss simulated on the run's own attempts. `007 lab feasibility` computes the task count
+  for your history before you spend.
+- **One repository may be enough with more attempts per commit: a pre-registered test.** 41 go-json commits × 8 fresh attempts
+  per arm, two looks, `PROVEN` only past the larger of a critical value fixed in advance and the run's own
+  ([pre-registration](evidence/go-json-topup-20261106/PREREG-TOPUP.md)). In simulation it proves equal arms about four times in
+  five if commits agree in effect (about one in four if they differ by 8 points), and a true 3-point loss at most 2.4% of the
+  time. A `PROVEN` would hold on average over those commits, on what their own tests can see; per-commit effects stay bounded,
+  not shown equal.
+- **Each executor gets its own verdict.** Claude Opus 5.5 `medium` vs `xhigh` on one owner's Node repository: −6.9 pp (CI −21.8
+  to +8.0) over 17 commits, so `medium` is not shown sufficient for Claude.
+- **Not measured:** durability, subscription quota per arm, served effort.
 
-- **Holdout, one private Go repository, 13 real tasks** whose requirements were written before implementation and whose hidden
-  tests were validated by an implementer who only read the requirement; 3 replicates per effort.
-  - **Codex (`gpt-6.1-sol`): `medium` matched `xhigh`** — 39/39 vs 39/39 accepted, with **51.8% less agent time per accepted change**
-    (95% CI 44.3–57.9%) and ~43% less rate-card cost. `low` missed 2/39 (owner-invariant regressions) and fails the zero margin.
-  - **Claude (`sonnet-5.5`): `medium` did not pass** — 37/39 vs 39/39 (−50.6% time); `low` 36/39. Fisher p≈0.49: no power to tell
-    them apart; the verdict follows the pre-registered rule.
-- **8 harder tasks, Codex only (exploratory, after two post-start amendments):** `low` and `medium` matched `xhigh` (24/24 vs 23/24;
-  the single `xhigh` miss is an infrastructure-invalidated attempt that passed the oracle) with 68% and 52% less time. Every effort
-  solved every task, so this says nothing about *when to escalate*. The Claude run stopped at the pre-registered USD cap (50/72,
-  no verdict).
-- A commit-replay corpus built from 007's own history proved inadequate to measure quality and was closed.
+Anthropic documents `medium` as the default effort of Claude Opus 5.5 and recommends running an effort sweep on your own evals;
+`007 lab` runs that sweep from your Git history.
 
-Not proven: durability over time, other repositories or languages, any population claim. Served effort is not reported by either
-CLI (a reasoning-token manipulation check is the only evidence the effort changed). Costs are API-equivalent estimates, not
-invoices. Raw experiment records stay private because they contain business code; the summaries above are their full claim.
+Where each claim stands (pre-registered replays; hidden tests are each commit's own tests; one owner's repositories plus the public go-json-experiment/json):
 
-Tools for this thesis: `scripts/choice_observatory.py` (session → commit attribution and line survival, with an explicit evidence
-level), `scripts/effort_trial.py` (opt-in randomized default effort for a durability field trial; **off by default**) and
-`scripts/effort_trial_analysis.py`. A blinded field trial of 30-day line survival by effort is in progress.
+| Claim | Status | Evidence |
+|---|---|---|
+| Less reasoning | **manipulation check** | it shows the effort setting changed the work; it is not a benefit by itself. Median reasoning tokens, lower effort vs reference: Codex −72%, Claude Opus 5.5 −84%, Claude Sonnet 5.5 138 vs 1,780; public go-json replay, Codex `medium` vs `high` −67% |
+| Less waiting | **supported** | agent time per attempt: Codex `medium` vs `high` −47.5% (95% CI 43–51%); Claude Opus 5.5 `medium` vs `xhigh` −60.0% (CI 57–63%), faster on 23 of 24 tasks; Claude Sonnet −50.6% per accepted change (holdout); public go-json replay, Codex `medium` vs `high` −32% median per attempt, same acceptance (37.9% vs 36.5%) |
+| Less quota | **proxy only** | estimated cost per attempt −40% (Codex), −67% (Opus), −31% median (Codex, public go-json replay). On go-json any non-negative weighting of input, cached input and output tokens gives −26% to −34%, so the saving does not hang on how a plan counts cache; subscription quota itself is not measured per arm |
+| Same change | **not proven** | behaviour the commit introduced (hidden tests red at base), paired by task. Public pre-registered replay (go-json-experiment/json, 62 Go commits, Codex `medium` vs `high`): +1.3 pp over the 41 commits where any attempt reached new behaviour (95% t interval −4.7 to +7.2; paired-replicate reading +0.05, −7.3 to +7.4). Its checks: an A/A not killed and a 30-point injected loss killed (gross errors only), 79% of planted partial changes rejected; at this size a plain t interval would call a true 3-point loss `PROVEN` 3.7–5.3% of the time. Re-graded without a model after fixing a grading defect (the agent's own Go tests could break a package): +1.5 pp (−3.2 to +6.2; paired +0.3, −6.1 to +6.7), still not proven. One owner's Node repository: Claude Opus 5.5 −6.9 pp over 17 commits (CI −21.8 to +8.0, pre-registered metric, corrected in an erratum: the first scale also counted old behaviour, 83% of hidden tests); Codex +9.4 pp over 16 commits (CI +0.2 to +18.7, metric chosen after the data), a gain the go-json replay did not reproduce. Neither executor excludes a loss above 3 points |
+| Durable | **not measured yet** | observational only: 30-day line survival of 332 Codex commits, 85% at `high` vs 89% at `xhigh` (−4.8 pp, CI −12.7 to +3.7, confounded by task). A randomized per-run instrument exists (`scripts/line_trial.py`); no trial has run |
+
+The earlier holdout (one private Go repository, 13 tasks with independently validated requirements) found Codex `medium` 39/39
+vs `xhigh` 39/39 with 51.8% less agent time per accepted change (CI 44.3–57.9%), and Claude Sonnet `medium` 37/39 vs 39/39. At that size a zero-margin count rule rejects two equal arms about
+four times in ten, so the Sonnet result means *no power*, not *worse*. An exploratory run on 8 harder tasks (Codex only) found
+every effort solved every task, so it says nothing about when to escalate.
+
+What the instrument learned, and now does by default:
+
+- **Say before spending whether a run can answer.** `007 lab feasibility` turns a pilot's noise into the number of tasks a
+  verdict needs. On the Opus data, read on the corrected scale, a 3-point margin needs about 700 tasks that reach new
+  behaviour; the run had 17.
+- **Read "same change" where both arms can be compared.** Reports use reachable behaviours (hidden tests red at base that some
+  attempt passes), paired by task, with a symmetric interval rule — a point estimate never kills — and a pseudo A/A per arm.
+  `PROVEN` must beat a critical value simulated from the run's own attempts with a 3-point loss of whole failed attempts, so
+  such a loss comes out `PROVEN` about 2.5% of the time.
+- **Filter weak specifications.** Commit messages make thin requirements: few tasks reach full acceptance. `007 lab sufficiency`
+  drops tasks whose prompt alone cannot reach their tests.
+
+Not proven: durability, a 3-point bound for any executor, other repositories or languages, any population claim. Served
+effort is not reported by either CLI (a reasoning-token manipulation check is the only evidence the effort changed). Costs are API-equivalent estimates, not invoices.
+Raw records of the replays on private repositories stay private because they contain business code; the summaries above are
+their full claim.
+
+Tools for this thesis: `scripts/effort_lab.py` (`007 lab`: mine, run, report, feasibility, sufficiency),
+`scripts/line_trial.py` (per-run effort assignment and content-based line survival for a launcher),
+`scripts/choice_observatory.py` (session → commit attribution and line survival, with an explicit evidence level) and
+`scripts/effort_trial.py` (opt-in randomized default effort; **off by default**).
 
 > **1.5.2 local candidate:** fixes the inherited 320px page overflow and adds a
 > browser-assisted visibility selfcheck. The source delta has exact-commit CI
