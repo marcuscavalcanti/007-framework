@@ -43,6 +43,10 @@ Declare it before any attempt, from the decision you face, never from the run th
 | 0.05 | effectively the same change | ~40 such commits, 8 attempts per arm, ~US$165 |
 | 0.03 | the same change within research precision | ~55–145 such commits, 8 attempts per arm: several repositories |
 
+Sizes are per executor. Claude Opus 5.5 on the same go-json commits had about five times Codex's between-commit spread: break-even
+at 2 attempts per arm needs about 40 commits for 80% power when the arms are equal
+([result](../evidence/go-json-claude-20261107/RESULT-CLAUDE.md)).
+
 Take the break-even inputs from a pilot or from published savings, never from the confirmatory attempts. Break-even is computed on acceptance while the verdict reads the reachable scale, so it is an approximation of the economic question, not the question itself. The sizes are normal
 approximations; the calibrated `PROVEN` rule is stricter, so run `feasibility` on your own pilot. `report` writes `report.md`,
 the verdict in plain words at the declared margin.
