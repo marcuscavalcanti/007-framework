@@ -26,6 +26,8 @@ All notable changes are documented here.
   reports as no test passing and names them in `unreadable_outcomes`.
 - README states what one repository can show: measured (time and tokens with intervals), guarded (`KILL` near the loss that
   erases the saving), bounded (the same change within 3 points stays open); "less reasoning" is the manipulation check.
+- Pre-registration of Claude Opus 5.5 `medium` vs `xhigh` on the same 41 go-json commits, margin 10 points (the decision
+  margin), 2 fresh attempts per arm, critical-value floor fixed in advance: `evidence/go-json-claude-20261107/`.
 - Thesis D restated as a decision: `007 lab` shows whether a lower effort pays, against a margin the set declares before any
   attempt (`compare.margin`, default 3 points, at most 20): break-even, "effectively the same" at 5, research precision at 3.
   `report` also writes `report.md`, the verdict in plain words. Durability leaves the claim until it is measured.
