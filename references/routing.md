@@ -83,3 +83,38 @@ Handoffs point to files; they do not paste the repository or conversation.
 
 Provider switching repays context and changes the experiment. Keep one executor
 per task unless the handoff explicitly starts a new attempt.
+
+## Escalation economics (hypothesis, not proven)
+
+A head-to-head comparison asks whether the cheaper effort is as good as the
+expensive one. At a −5 pp non-inferiority margin and a 70% pass rate, that takes
+about a thousand tasks per arm, more than one repository produces. A cascade
+asks a smaller question: start low, and escalate only on a detected failure.
+
+- If failures are detected and the escalated attempt starts fresh, the cascade
+  succeeds at least as often as starting high:
+  P(low ok) + P(low fails, high ok) ≥ P(high ok).
+- It spends less agent time when p_low ≥ (ρ + q) / (1 + q), where ρ is the
+  low/high time ratio and q is detection time over high time. That is a
+  one-sample test against a threshold, feasible at one person's volume when
+  p_low is high.
+
+Both conditions break when detection breaks. In the exploratory holdout
+simulation (13 tasks, 3 replicates each, the same data that suggested the
+policy):
+
+- Codex: the repository's suite caught every failure; `medium` then `xhigh`
+  saved 22–39% of time with 39/39 accepted.
+- Claude: the suite missed both `medium` failures (37/39; 9% saved, 95% CI −4
+  to 21%). A stricter check caught them but raised 9 false alarms in 39 and was
+  slower than `xhigh` (−26%, CI −52 to +2%).
+- The 8 harder tasks cannot inform escalation: every effort solved every task.
+
+Detection, not effort, is the binding constraint. A field reading with the
+owner as the detector was pre-registered and then suspended before it started:
+most sessions in the owner's history were launched by programs, not typed, and
+the rest (about six in four weeks) could not reach a reading. Check who sends
+the prompts before choosing the detector. When a program launches the session,
+the cascade belongs in the launcher: start low, run the check, and relaunch one
+tier higher on a detected failure. Treat the escalation rule above as practice,
+not evidence.

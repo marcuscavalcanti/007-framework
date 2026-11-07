@@ -8,6 +8,7 @@ import math
 import os
 import stat
 import subprocess
+import sys
 import threading
 import time
 from collections import Counter
@@ -1233,6 +1234,16 @@ class ObservatoryCollector:
 OBSERVATORY_COLLECTOR = ObservatoryCollector()
 
 
+def load_lab_report(config=None):
+    """The verdict of the latest `007 lab report` named by observatory.lab_report, if any: the thesis panel never claims more than this."""
+    try:
+        path = observatory_history.read_config(Path(config) if config else observatory_history.HOME / "config.json").get("observatory", {}).get("lab_report")
+        report = json.loads(Path(path).expanduser().read_text()) if path else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    return report.get("verdict") if isinstance(report, dict) and isinstance(report.get("verdict"), dict) else None
+
+
 def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provider=None, project_provider=None, curation_provider=None,
                    observatory_provider=None):
     entries, registry_errors = registry_entries(registry)
@@ -1272,15 +1283,46 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
             "label": "Operational coverage starts at 007 begin and ends at 007 record. Runs before or outside that cycle stay outside the denominator.",
         },
         "causal_evidence": load_causal_evidence(),
+        "lab_report": load_lab_report(),
         "curation": {key: value for key, value in curation.items() if key not in ("by_project", "proposals_by_project")},
     }
 
 
-def handler_class(registry, static_dir, touch_provider, activity_provider=None, curation_checkpoint=None, curation_vault=None):
+class LiveSnapshot:
+    """Repositories and durability take minutes on a large registry, sessions take milliseconds. A daemon rebuilds the heavy part;
+    every read serves the latest one with fresh activity, so a 2 s poll stays a 2 s poll. None until the first build ends."""
+
+    def __init__(self, build, entries, activity=None, pause_s=15):
+        self.build, self.entries, self.activity, self.pause_s = build, entries, activity or ACTIVITY_COLLECTOR.collect, pause_s
+        self.latest = None
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            try:
+                self.latest = self.build()
+            except Exception as exc:  # the last good evidence stays; a failed rebuild must not end the daemon
+                print(f"dashboard: rebuild failed: {exc}"[:300], file=sys.stderr)
+            time.sleep(self.pause_s)
+
+    def read(self):
+        latest = self.latest
+        if latest is None:
+            return None
+        activity = self.activity(self.entries())
+        fresh = activity.get("projects", {})
+        return {**latest, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "aggregate": {**latest["aggregate"], "activity": activity.get("aggregate", latest["aggregate"]["activity"])},
+                "projects": [{**p, "activity": fresh.get(p["project_id"], p["activity"])} for p in latest["projects"]]}
+
+
+def handler_class(registry, static_dir, touch_provider, activity_provider=None, curation_checkpoint=None, curation_vault=None, background=False):
     static_dir = Path(static_dir)
     project_provider = ProjectCollector()
     curation_provider = CurationCollector(curation_checkpoint, curation_vault)
     snapshot_lock = threading.Lock()
+    build = lambda: build_snapshot(registry, touch_provider, activity_provider, project_provider, curation_provider)
+    live = LiveSnapshot(build, lambda: registry_entries(registry)[0], activity_provider) if background else None
     assets = {
         "/": (static_dir / "index.html", "text/html; charset=utf-8"),
         "/styles.css": (static_dir / "styles.css", "text/css; charset=utf-8"),
@@ -1319,7 +1361,11 @@ def handler_class(registry, static_dir, touch_provider, activity_provider=None, 
                     self.json_response(503, {"error": "snapshot collection already in progress"})
                     return
                 try:
-                    self.json_response(200, build_snapshot(registry, touch_provider, activity_provider, project_provider, curation_provider))
+                    snapshot = live.read() if live else build()
+                    if snapshot is None:
+                        self.json_response(503, {"error": "first read in progress"})
+                    else:
+                        self.json_response(200, snapshot)
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # A timed-out client cannot enqueue another collection while this one runs.
                 except Exception:
@@ -1347,10 +1393,10 @@ def handler_class(registry, static_dir, touch_provider, activity_provider=None, 
     return Handler
 
 
-def create_server(host, port, registry, static_dir, activity_provider=None, *, curation_checkpoint=None, curation_vault=None):
+def create_server(host, port, registry, static_dir, activity_provider=None, *, curation_checkpoint=None, curation_vault=None, background=False):
     cache = TouchCache()
     server = ThreadingHTTPServer(
-        (host, port), handler_class(Path(registry), Path(static_dir), cache, activity_provider, curation_checkpoint, curation_vault)
+        (host, port), handler_class(Path(registry), Path(static_dir), cache, activity_provider, curation_checkpoint, curation_vault, background)
     )
     server.daemon_threads = True
     return server

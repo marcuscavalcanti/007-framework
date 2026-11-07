@@ -442,6 +442,36 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    def test_hidden_acceptance_grades_the_agents_own_go_tests_at_base(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                workspace = root / "workspace"
+                (workspace / "pkg").mkdir(parents=True)
+                (workspace / "pkg" / "a_test.go").write_text("base\n")
+                replay_eval.initialize_snapshot(workspace)
+                (workspace / "pkg" / "a_test.go").write_text("agent\n")
+                (workspace / "pkg" / "b_test.go").write_text("func TestHidden() {}\n")
+                (workspace / "pkg" / "c.go").write_text("code\n")
+                hidden = root / "h_test.go"
+                hidden.write_text("func TestHidden() {}\n")
+                digest = __import__("hashlib").sha256(hidden.read_bytes()).hexdigest()
+                task = {"reset_to_base": ["*_test.go"], "hidden_acceptance": [{"source": str(hidden), "target": "pkg/h_test.go", "sha256": digest}]}
+                with replay_eval.hidden_acceptance(task, workspace):
+                    self.assertEqual((workspace / "pkg" / "a_test.go").read_text(), "base\n")
+                    self.assertFalse((workspace / "pkg" / "b_test.go").exists())
+                    self.assertEqual((workspace / "pkg" / "c.go").read_text(), "code\n")
+                    self.assertTrue((workspace / "pkg" / "h_test.go").exists())
+                self.assertEqual((workspace / "pkg" / "a_test.go").read_text(), "agent\n")
+                self.assertTrue((workspace / "pkg" / "b_test.go").exists())
+                self.assertFalse((workspace / "pkg" / "h_test.go").exists())
+                with replay_eval.hidden_acceptance({**task, "reset_to_base": []}, workspace):
+                    self.assertTrue((workspace / "pkg" / "b_test.go").exists())
+        finally:
+            sys.path.pop(0)
+
     def test_hidden_acceptance_rejects_workspace_escape(self):
         sys.path.insert(0, str(SCRIPTS))
         try:

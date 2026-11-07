@@ -1020,7 +1020,7 @@ def run_dashboard(host, port, registry, open_browser=True, *, curation_checkpoin
     import dashboard
 
     static_dir = Path(__file__).resolve().parents[1] / "dashboard"
-    server = dashboard.create_server(host, port, registry, static_dir, curation_checkpoint=curation_checkpoint, curation_vault=curation_vault)
+    server = dashboard.create_server(host, port, registry, static_dir, curation_checkpoint=curation_checkpoint, curation_vault=curation_vault, background=True)
     url = f"http://{host}:{server.server_port}"
     print(f"007 dashboard: {url}")
     if open_browser:
@@ -1035,6 +1035,10 @@ def run_dashboard(host, port, registry, open_browser=True, *, curation_checkpoin
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["lab"]:
+        import effort_lab
+        return effort_lab.main(argv[1:])
     args = parser().parse_args(argv)
     try:
         if args.command == "init":

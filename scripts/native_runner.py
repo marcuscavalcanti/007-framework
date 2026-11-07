@@ -82,7 +82,8 @@ def native_request(cli, command):
             i += 1
         else:
             raise ValueError("unlisted option or argument refused")
-    flags = [flag for flag, _ in pairs if flag != "-c"]
+    # `--disable` is repeatable natively and only switches a feature off, so repeating it cannot override a checked option.
+    flags = [flag for flag, _ in pairs if flag not in ("-c", "--disable")]
     keys = [item.split("=", 1)[0] for flag, item in pairs if flag == "-c"]
     if len(flags) != len(set(flags)) or len(keys) != len(set(keys)):
         raise ValueError("repeated option refused")  # review r42 R2: native last-occurrence parsing could override a checked one

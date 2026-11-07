@@ -504,3 +504,64 @@ test('after the readout the effort trial shows 30-day line survival with its int
   assert.match(text, /7 days: medium 98%, xhigh 97%.*corrective share of later commits: medium 25%, xhigh 20%/);
   assert.doesNotMatch(text, /blinded until/);
 });
+
+const verdictSnapshot = () => ({ generated_at: '2026-11-01T12:00:00Z', lab_report: null, projects: [{ name: 'repo', project_id: 'p',
+  activity: { recent_sessions: [
+    { status: 'active', source: 'codex', model: 'm', effort: 'high', started_at: '2026-11-01T11:30:00Z', usage: { total_tokens: 900 } },
+    { status: 'active', source: 'claude', model: 'other', effort: 'xhigh', started_at: 'bad', usage: {} },
+    { status: 'idle', source: 'codex', model: 'm', effort: 'high' }] },
+  observatory: { calibrations: [{ cli: 'codex', model: 'm', arms: { medium: { accepted: 6, units: 6, wall_per_accepted_s: 100 }, high: { accepted: 6, units: 6, wall_per_accepted_s: 200 } }, by_effort: {
+    medium: { verdict: 'good-choice', badge: 'Calibrated', gain: { effort: 'medium', against: 'high', time_reduction: .5, cost_reduction: .3 } },
+    high: { verdict: 'above-necessary', badge: 'Calibrated', gain: { effort: 'medium', against: 'high' } } } }],
+  sessions: [
+    { started_at: '2026-10-30T00:00:00Z', total_tokens: 90, durability: { 30: { status: 'pending' } }, questions: [{}, {}, { verdict: 'above-necessary' }] },
+    { started_at: '2026-10-30T00:00:00Z', total_tokens: 10, durability: { 30: { status: 'mature', lines_added: 10, lines_surviving: 8 } }, questions: [{}, {}, { verdict: 'good-choice' }] },
+    { started_at: '2026-10-30T00:00:00Z', total_tokens: 500, questions: [{}, {}, { verdict: 'no-evidence' }] },
+    { started_at: '2026-01-01T00:00:00Z', total_tokens: 500, questions: [{}, {}, { verdict: 'above-necessary' }] }] } }] });
+
+test('live sessions carry the verdict for their own model and effort, and only active ones count', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  const rows = vm.runInContext('liveSessions(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at))', r.context);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].says, 'Above what was needed: medium is enough');
+  assert.equal(rows[0].minutes, 30);
+  assert.equal(rows[1].says, 'No evidence to change it');
+  assert.equal(rows[1].minutes, null);
+});
+
+test('scores weigh quota by tokens, ignore uncalibrated sessions and stay inside 30 days', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  const s = vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at))', r.context);
+  assert.equal(s.quota, .1);
+  assert.deepEqual([s.enough, s.judged, s.sessions, s.lines, s.calibrated], [1, 2, 3, .8, 1]);
+});
+
+test('durable is never claimed without a proving lab report', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  const claim = (report) => { r.context.report = report; return vm.runInContext('thesisClaims(bestVerdict(calibrationsOf(snapshotFixture.projects)), report).at(-1).state[0]', r.context); };
+  assert.equal(claim(null), 'NOT PROVEN');
+  assert.equal(claim({ durability: 'NO-INFORMATION' }), 'NOT PROVEN');
+  assert.equal(claim({ durability: 'KILL' }), 'FAILED');
+  assert.equal(claim({ durability: 'PROVEN' }), 'PROVEN');
+});
+
+test('the same change is only called proven by a lab report that says so', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  const claim = (report) => { r.context.report = report; return vm.runInContext('thesisClaims(bestVerdict(calibrationsOf(snapshotFixture.projects)), report).find((c) => c.id === "claim-change").state[0]', r.context); };
+  assert.equal(claim(null), 'NOT PROVEN');
+  assert.equal(claim({ same_change_reachable: 'NOT-PROVEN' }), 'NOT PROVEN');
+  assert.equal(claim({ same_change_reachable: 'PROVEN' }), 'PROVEN');
+  assert.equal(claim({ same_change_reachable: 'KILL' }), 'FAILED');
+  assert.equal(claim({ same_change: 'KILL', same_change_reachable: 'NOT-PROVEN' }), 'NOT PROVEN');  // the superseded rule never decides
+});
+
+test('quota is never called supported from a price estimate', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  const quota = vm.runInContext('thesisClaims(bestVerdict(calibrationsOf(snapshotFixture.projects)), null).find((c) => c.id === "claim-quota").state[0]', r.context);
+  assert.equal(quota, 'ESTIMATED');
+});

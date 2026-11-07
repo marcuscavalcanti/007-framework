@@ -1,0 +1,82 @@
+{
+ "P/S0": {
+  "t": {
+   "PROVEN": 0.988,
+   "KILL": 0.0
+  },
+  "calib": {
+   "PROVEN": 0.958,
+   "KILL": 0.0
+  }
+ },
+ "P/S1": {
+  "t": {
+   "PROVEN": 0.049,
+   "KILL": 0.0095
+  },
+  "calib": {
+   "PROVEN": 0.0325,
+   "KILL": 0.0095
+  }
+ },
+ "P/S2": {
+  "t": {
+   "PROVEN": 0.02425,
+   "KILL": 0.0185
+  },
+  "calib": {
+   "PROVEN": 0.007,
+   "KILL": 0.0185
+  }
+ },
+ "P/S3": {
+  "t": {
+   "PROVEN": 0.0,
+   "KILL": 0.0
+  },
+  "calib": {
+   "PROVEN": 0.0,
+   "KILL": 0.0
+  }
+ },
+ "B/S0": {
+  "t": {
+   "PROVEN": 0.96625,
+   "KILL": 0.0
+  },
+  "calib": {
+   "PROVEN": 0.8915,
+   "KILL": 0.0
+  }
+ },
+ "B/S1": {
+  "t": {
+   "PROVEN": 0.0465,
+   "KILL": 0.0135
+  },
+  "calib": {
+   "PROVEN": 0.02525,
+   "KILL": 0.0135
+  }
+ },
+ "B/S2": {
+  "t": {
+   "PROVEN": 0.03275,
+   "KILL": 0.01025
+  },
+  "calib": {
+   "PROVEN": 0.01125,
+   "KILL": 0.01025
+  }
+ },
+ "B/S3": {
+  "t": {
+   "PROVEN": 0.0,
+   "KILL": 0.0
+  },
+  "calib": {
+   "PROVEN": 0.0,
+   "KILL": 0.0
+  }
+ }
+}

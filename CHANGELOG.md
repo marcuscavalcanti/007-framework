@@ -17,6 +17,46 @@ All notable changes are documented here.
   before spending, option allowlist with user configuration sources off, error classes (rate limit vs transient), acceptance run
   inside a sandbox with a minimal environment.
 - Internal planning documents are no longer shipped in the public tree.
+- Thesis restated by what can prove each part: a repository measures the savings and guards against a large loss (`KILL`
+  when the whole interval is below -3 points); a 3-point bound needs more attempts per commit or a pooled public corpus, with
+  one verdict per executor.
+- Public pre-registered replay on go-json-experiment/json (Codex `medium` vs `high`, 62 commits): reasoning -67%, median agent
+  time -32%, same change +1.3 pp (95% t interval -4.7 to +7.2), not proven. It did not reproduce the +9.4 pp post-hoc Codex gain.
+- `007 lab mine` skips commits with more hidden tests than the acceptance reader takes; `report` counts unreadable test
+  reports as no test passing and names them in `unreadable_outcomes`.
+- README states what one repository can show: measured (time and tokens with intervals), guarded (`KILL` near the loss that
+  erases the saving), bounded (the same change within 3 points stays open); "less reasoning" is the manipulation check.
+- Pre-registration of Claude Opus 5.5 `medium` vs `xhigh` on the same 41 go-json commits, margin 10 points (the decision
+  margin), 2 fresh attempts per arm, critical-value floor fixed in advance: `evidence/go-json-claude-20261107/`.
+- Thesis D restated as a decision: `007 lab` shows whether a lower effort pays, against a margin the set declares before any
+  attempt (`compare.margin`, default 3 points, at most 20): break-even, "effectively the same" at 5, research precision at 3.
+  `report` also writes `report.md`, the verdict in plain words. Durability leaves the claim until it is measured.
+- go-json top-up result (pre-registered, 656 attempts, US$173 list price): Codex `medium` vs `high` −0.9 pp, 95% CI −3.4 to
+  +1.6, not proven; agent time −30%. Commits differ in effect beyond what 41 can absorb, so "one repository may be enough" is
+  withdrawn; a 3-point bound needs several repositories.
+- Pre-registration of a go-json top-up (41 commits × 8 fresh attempts per arm, two looks, critical-value floor fixed in
+  advance): `evidence/go-json-topup-20261106/`.
+- The time gate no longer compares raw accepted counts (equal arms failed it about half the time); acceptance enters through
+  time per accepted change and the same-change verdict. `reach_rates`, `reachable_diffs` and `proven_critical` accept a frozen
+  reach set (`reach=`), and `proven_critical` an attempt count (`attempts=`), so a pre-registered run fixes its denominator and a
+  critical-value floor from earlier attempts.
+- `007 lab run` takes `--max-invalid`; an invalid cell whose call reported no cost is charged its reserve instead of stopping the
+  run at the first provider error, and a cell the runner refused before writing its receipt is reported invalid instead of
+  breaking `report`. `line_trial` counts files a run created.
+- Grading no longer lets the agent's own Go tests break a package: files matching a task's `reset_to_base` (`*_test.go` for
+  the go adapter) go back to base before the hidden tests land.
+- `same_change` (point estimate on tests that split cells, about one false `KILL` in three under no difference) is now only a
+  diagnostic; `same_change_reachable` governs and its `KILL` kills the thesis. Its `PROVEN` must beat a critical value
+  simulated from the run's own cells with a 3-point loss of whole failed attempts (`proven_critical`): the t interval proved
+  such a loss up to 5.6% of the time on go-json, and bootstrap-t and Johnson's skew-corrected t did worse (up to 9.8%). The t
+  interval now uses t at every task count. Report schema v6.
+- Dashboard: "the same change" reads `same_change_reachable` and never shows a green state without a proving report; "less
+  quota" is its own claim, `ESTIMATED`, because it comes from a price estimate.
+- go-json evidence, without a model: re-graded with the fix, the per-attempt noise halves (6 of 231 attempts changed) and the
+  verdict stays not proven (+1.5 pp, CI −3.2 to +6.2); the planted-defect check, which had been a stub, now ran and passes
+  (79% of partial changes rejected). Under the calibrated rule, two attempts per arm almost never prove; about eight per arm on
+  the same 41 commits would prove equal arms about three times in four if commits do not differ in effect.
+  README and docs restate what one repository can show.
 
 ### Evidence and replay candidate
 

@@ -1,0 +1,128 @@
+{
+ "look": 2,
+ "cells_valid": 652,
+ "decision": "NOT-PROVEN",
+ "sequence": {
+  "manipulation": {
+   "medium": 921.0,
+   "high": 2808.0,
+   "passed": true
+  },
+  "time": {
+   "saving": 0.3041361582801059,
+   "ci95": [
+    0.2569184317464642,
+    0.33053180396246096
+   ],
+   "passed": true
+  }
+ },
+ "primary": {
+  "P": {
+   "tasks": 41,
+   "mean": -0.009103117411044245,
+   "ci95": [
+    -0.03371411036920434,
+    0.015507875547115853
+   ],
+   "statistic": 1.7160690114422705,
+   "critical_fresh": 2.2035584349239397,
+   "critical_floor": 2.197896185043496,
+   "critical": 2.2035584349239397,
+   "verdict": "NOT-PROVEN"
+  },
+  "B": {
+   "tasks": 41,
+   "mean": -0.009103117411044245,
+   "ci95": [
+    -0.03371411036920434,
+    0.015507875547115853
+   ],
+   "statistic": 1.7160690114422705,
+   "critical_fresh": 2.208720591986248,
+   "critical_floor": 2.197896185043496,
+   "critical": 2.208720591986248,
+   "verdict": "NOT-PROVEN"
+  }
+ },
+ "secondary": {
+  "product_reach": {
+   "P": {
+    "tasks": 41,
+    "mean": -0.01066138299370007,
+    "ci95": [
+     -0.035367985215679826,
+     0.014045219228279681
+    ],
+    "statistic": 1.5819573544498093,
+    "critical_fresh": 2.2006515399708904,
+    "critical_floor": 2.197896185043496,
+    "critical": 2.2006515399708904,
+    "verdict": "NOT-PROVEN"
+   },
+   "B": {
+    "tasks": 41,
+    "mean": -0.01066138299370007,
+    "ci95": [
+     -0.035367985215679826,
+     0.014045219228279681
+    ],
+    "statistic": 1.5819573544498093,
+    "critical_fresh": 2.2057034494602425,
+    "critical_floor": 2.197896185043496,
+    "critical": 2.2057034494602425,
+    "verdict": "NOT-PROVEN"
+   }
+  },
+  "solvable_acceptance": {
+   "tasks": 25,
+   "mean": -0.04357142857142857,
+   "sd": 0.1457191000605239,
+   "ci95": [
+    -0.10372427307641285,
+    0.0165814159335557
+   ]
+  },
+  "timeouts_as_failures": null,
+  "tau2": {
+   "sigma2": 0.013087437417504417,
+   "tau2_moments": 0.0027830732025347815,
+   "tau2_covariance": 0.00486413581584428,
+   "covariance_tasks": 41,
+   "budget_41_tasks": 0.0047
+  },
+  "similarity_to_reference": {
+   "medium": {
+    "median": 0.129,
+    "over_0_8": 10
+   },
+   "high": {
+    "median": 0.1215,
+    "over_0_8": 11
+   }
+  },
+  "invalid_per_arm": {
+   "medium": 0,
+   "high": 4
+  },
+  "failure_classes": [
+   "none",
+   "runner-invalid"
+  ],
+  "requested": [
+   [
+    "gpt-6.1-sol",
+    "high",
+    "high"
+   ],
+   [
+    "gpt-6.1-sol",
+    "medium",
+    "medium"
+   ]
+  ],
+  "settings_sha256": [
+   null
+  ]
+ }
+}

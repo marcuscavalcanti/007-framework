@@ -230,8 +230,9 @@ def view(store, entries, project_id, allowed, calibrations, now, slack_s=600, wi
     for c in mine:
         probe = choice_observatory.calibrated(c["data"], None) if c["data"] is not None else {}
         summary.append({**{k: c[k] for k in ("cli", "model", "analysis", "sha256", "error")}, "limits": probe.get("limits"),
+                        "arms": choice_observatory.arms(c["data"]) if c["data"] is not None else {},
                         "by_effort": {e: {k: v for k, v in choice_observatory.calibrated(c["data"], e, ci=c.get("ci")).items()
-                                          if k in ("level", "badge", "verdict", "answer")}
+                                          if k in ("level", "badge", "verdict", "answer", "gain")}
                                       for e in probe.get("measured_efforts", [])}})
     return {"opted_in": True, "available": True, "sessions": sessions, "calibrations": summary,
             "parameters": {"slack_s": slack_s, "windows_days": list(windows), "levels_built": [0, 1, 3],
