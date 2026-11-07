@@ -796,11 +796,20 @@ def tasks_needed(sd, margin, delta=0.0, power_z=Z80):
     return math.ceil(((1.96 + power_z) * sd / (margin + delta)) ** 2)
 
 
+def declared_margin(config):
+    """The non-inferiority margin the set declares before any attempt (`compare.margin`), 3 points unless stated: a set can
+    declare the loss that would cancel the saving instead of near-sameness. Bounded so a margin cannot swallow any loss."""
+    margin = config.get("compare", {}).get("margin", GATES["reachable_margin"])
+    if not isinstance(margin, (int, float)) or not 0 < margin <= .2:
+        raise ValueError("compare.margin must be a share between 0 and 0.2")
+    return margin
+
+
 def feasibility(config_path, results, margin=None, sd=None):
     """Before spending: with the noise of a pilot (or a stated per-task SD), how many tasks does a verdict need, and what does the
     current number of tasks buy? A run that cannot reach a verdict should not be paid for."""
-    margin = GATES["reachable_margin"] if margin is None else margin
     config = json.loads(config_path.read_text())
+    margin = declared_margin(config) if margin is None else margin
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     observed = reach = None
     if results is not None:
@@ -902,12 +911,14 @@ def report(config_path, results, next_results):
     behaviour = {"tests": sum(map(len, tests.values())), "signal_tasks": len(signal), low: low_rate, ref: ref_rate, "diff": diff, "ci95": unseen_ci, "estimable": len(draws),
                  "superseded_verdict": same_change(diff, unseen_ci, sum(map(len, tests.values())), len(signal), sensitive)}
     task_dir = config_path.parent / "tasks"
+    margin = declared_margin(config)
     diffs = reachable_diffs(rows, task_dir, low, ref)
     reachable = paired_interval(diffs)
-    critical = proven_critical(rows, task_dir, low, ref, config["seed"])
-    tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, critical=math.inf if critical is None else critical)
-    proof = {"critical": critical, "statistic": studentized(diffs, GATES["reachable_margin"]) if len(diffs) > 1 else None,
-             "t975": t975(len(diffs) - 1) if len(diffs) > 1 else None, "t_false_proven": false_proven(rows, task_dir, low, ref, config["seed"])}
+    critical = proven_critical(rows, task_dir, low, ref, config["seed"], margin)
+    tier["margin"] = margin
+    tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, margin, critical=math.inf if critical is None else critical)
+    proof = {"critical": critical, "statistic": studentized(diffs, margin) if len(diffs) > 1 else None,
+             "t975": t975(len(diffs) - 1) if len(diffs) > 1 else None, "t_false_proven": false_proven(rows, task_dir, low, ref, config["seed"], margin)}
     if tier["same_change_reachable"] == "KILL":
         tier["thesis"] = "KILLED"
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
@@ -918,7 +929,32 @@ def report(config_path, results, next_results):
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES}
     (results / "report.json").write_text(json.dumps(result, indent=1) + "\n")
+    (results / "report.md").write_text(summary(result, low, ref, len(rows)))
     return result
+
+
+def summary(result, low, ref, attempts):
+    """The report in plain words: what was measured, what the same-change verdict means at the declared margin, what is not shown."""
+    tier, c, r = result["verdict"], result["contrast"], result["reachable_behaviour"]
+    points = lambda x: f"{100 * x:+.1f}"
+    margin = 100 * tier["margin"]
+    meaning = {"PROVEN": f"`{low}` lost no more than {margin:g} points against `{ref}` on average over these commits, on what their own tests check.",
+               "KILL": f"`{low}` lost more than {margin:g} points: keep `{ref}`.",
+               "NOT-PROVEN": f"Neither a loss beyond {margin:g} points nor its absence is shown.",
+               "NO-INFORMATION": "Too few commits reach new behaviour, or the oracle failed its planted-defect check."}[tier["same_change_reachable"]]
+    interval = f" (mean {points(r['mean'])} points, 95% interval {points(r['ci95'][0])} to {points(r['ci95'][1])}, {r['tasks']} commits)" if r.get("ci95") else ""
+    saving = f"{100 * c['reduction']:.0f}% less agent time per accepted change" if c["reduction"] is not None else "agent time not comparable"
+    reasoning = result["median_reasoning_tokens"]
+    return "\n".join([
+        f"# `{low}` vs `{ref}`: {attempts} valid attempts",
+        "",
+        f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {reasoning[low]:.0f} vs {reasoning[ref]:.0f}.",
+        f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
+        f"- **Durable:** {tier['durability']}.",
+        "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits or models other than these.",
+        f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts, never retried.",
+        "",
+    ])
 
 
 def main(argv=None):

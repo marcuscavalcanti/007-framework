@@ -11,8 +11,15 @@ code that looks finished but must be rewritten, repaired, or explained again.
 
 ## Current thesis: minimum sufficient effort (November 2026)
 
-**Thesis under test: for the model you chose, a lower reasoning effort makes the same durable change with less reasoning, less
-waiting and less quota.** What one repository can show today is measured, guarded and bounded, each per executor:
+**Thesis: for the model you chose, `007 lab` shows in your own repository whether a lower reasoning effort pays.** It measures
+the agent time and tokens saved, and tests, against a margin you declare before spending, whether the lower effort loses more
+of the behaviour your commits' own tests check. One verdict per executor and repository; durability is not part of the claim
+until it is measured. The earlier wording, "the same durable change", is what a 3-point margin tests, and that stays open:
+
+- **Declare the margin by the decision you face.** The loss that would cancel the saving (about 10 points of acceptance at a 30%
+  saving) is cheap to test: roughly 20 commits that reach new behaviour at 2 attempts per arm. "Effectively the same" at 5
+  points takes about 40 such commits at 8 attempts per arm. 3 points takes several repositories. Rough sizes at go-json's noise;
+  [docs/lab.md](docs/lab.md#choosing-the-margin) has the rule. A margin is fixed before any attempt, never after.
 
 - **Measured in your repository.** `007 lab` replays your own commits at two efforts. Agent time and tokens settle within a few
   dozen commits. Public go-json replay, Codex `medium` vs `high`, 8 attempts per arm on 41 commits: agent time −30% median per
@@ -27,7 +34,8 @@ waiting and less quota.** What one repository can show today is measured, guarde
   grading fix) and about 700 for Claude (estimated from 17 tasks, so anywhere from 400 to 1,700). go-json-experiment/json gave 41
   such commits out of 145 candidates. At 8 fresh attempts per arm (pre-registered) Codex `medium` vs `high` came out −0.9 pp,
   95% t interval −3.4 to +1.6: losses above about 3.4 points are excluded, 3 points are not
-  ([result](evidence/go-json-topup-20261106/RESULT-TOPUP.md)). When a loss comes as rare attempts that
+  ([result](evidence/go-json-topup-20261106/RESULT-TOPUP.md)). That run declared 3 points; it is not re-read at any other
+  margin. When a loss comes as rare attempts that
   fail outright, the t interval calls a 3-point loss `PROVEN` up to 5.6% of the time instead of 2.5%, so `report` takes
   `PROVEN`'s critical value from that loss simulated on the run's own attempts. `007 lab feasibility` computes the task count
   for your history before you spend.

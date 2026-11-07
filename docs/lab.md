@@ -32,6 +32,21 @@ The savings settle fast: reasoning tokens, agent time and estimated cost per att
 
 Only some mined tasks reach new behaviour (41 of 62 on go-json). Given pilot results (`--results`), `feasibility` reports that share as `reach_share` and the tasks to mine as `tasks_to_mine_if_equal`; with `--sd` alone it assumes every task reaches.
 
+## Choosing the margin
+
+`compare.margin` in the set (a share, default 0.03, at most 0.2) is the loss `report` tests against; `feasibility` uses it too.
+Declare it before any attempt, from the decision you face, never from the run that will be judged:
+
+| Margin | What `PROVEN` means | Rough size at go-json's noise (Codex) |
+|---|---|---|
+| Break-even: reference acceptance × the saving share (about 0.10 at 36% acceptance and a 30% saving) | the lower effort does not lose what it saves | ~20 commits that reach new behaviour, 2 attempts per arm, ~US$25 |
+| 0.05 | effectively the same change | ~40 such commits, 8 attempts per arm, ~US$165 |
+| 0.03 | the same change within research precision | ~55–145 such commits, 8 attempts per arm: several repositories |
+
+Take the break-even inputs from a pilot or from published savings, never from the confirmatory attempts. Break-even is computed on acceptance while the verdict reads the reachable scale, so it is an approximation of the economic question, not the question itself. The sizes are normal
+approximations; the calibrated `PROVEN` rule is stricter, so run `feasibility` on your own pilot. `report` writes `report.md`,
+the verdict in plain words at the declared margin.
+
 ## Limits
 
 Commit messages often under-specify what their tests pin. A generated contract states names and strings, never behaviour, but tests can stay out of reach. Tests that fail in every cell carry no signal and leave the metric.

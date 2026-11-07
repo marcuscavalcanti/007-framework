@@ -26,6 +26,9 @@ All notable changes are documented here.
   reports as no test passing and names them in `unreadable_outcomes`.
 - README states what one repository can show: measured (time and tokens with intervals), guarded (`KILL` near the loss that
   erases the saving), bounded (the same change within 3 points stays open); "less reasoning" is the manipulation check.
+- Thesis D restated as a decision: `007 lab` shows whether a lower effort pays, against a margin the set declares before any
+  attempt (`compare.margin`, default 3 points, at most 20): break-even, "effectively the same" at 5, research precision at 3.
+  `report` also writes `report.md`, the verdict in plain words. Durability leaves the claim until it is measured.
 - go-json top-up result (pre-registered, 656 attempts, US$173 list price): Codex `medium` vs `high` −0.9 pp, 95% CI −3.4 to
   +1.6, not proven; agent time −30%. Commits differ in effect beyond what 41 can absorb, so "one repository may be enough" is
   withdrawn; a 3-point bound needs several repositories.

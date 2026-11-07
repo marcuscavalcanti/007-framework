@@ -107,6 +107,22 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual(result["excluded_invalid"], [cell.stem])
         self.assertEqual((result["contrast"]["medium"]["units"], result["contrast"]["high"]["units"]), (1, 2))
 
+    def test_the_report_reads_the_declared_margin_and_says_it_in_plain_words(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        lab.run(path, results, replicates=1, jobs=2, max_calls=4, max_usd=10, stop_usd=1)
+        lab.sensitivity(path, 2)
+        self.assertEqual(lab.report(path, results, None)["verdict"]["margin"], .03)
+        self.assertIn("margin 3 points", (results / "report.md").read_text())
+        config = json.loads(path.read_text())
+        path.write_text(json.dumps({**config, "compare": {**config["compare"], "margin": .1}}))
+        self.assertEqual(lab.report(path, results, None)["verdict"]["margin"], .1)
+        self.assertIn("margin 10 points", (results / "report.md").read_text())
+        path.write_text(json.dumps({**config, "compare": {**config["compare"], "margin": .5}}))
+        with self.assertRaises(ValueError):
+            lab.report(path, results, None)
+
     def test_a_task_past_the_outcome_cap_is_never_mined(self):
         candidate = next(c for c in lab.pool(self.config) if c["sha"] == self.sha)
         with mock.patch.object(lab.replay_eval, "MAX_ACCEPT_OUTCOMES", 5):  # 5 hidden tests + "__module__"
