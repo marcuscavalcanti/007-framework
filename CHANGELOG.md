@@ -26,6 +26,9 @@ All notable changes are documented here.
   reports as no test passing and names them in `unreadable_outcomes`.
 - README states what one repository can show: measured (time and tokens with intervals), guarded (`KILL` near the loss that
   erases the saving), bounded (the same change within 3 points stays open); "less reasoning" is the manipulation check.
+- go-json top-up result (pre-registered, 656 attempts, US$173 list price): Codex `medium` vs `high` −0.9 pp, 95% CI −3.4 to
+  +1.6, not proven; agent time −30%. Commits differ in effect beyond what 41 can absorb, so "one repository may be enough" is
+  withdrawn; a 3-point bound needs several repositories.
 - Pre-registration of a go-json top-up (41 commits × 8 fresh attempts per arm, two looks, critical-value floor fixed in
   advance): `evidence/go-json-topup-20261106/`.
 - The time gate no longer compares raw accepted counts (equal arms failed it about half the time); acceptance enters through
