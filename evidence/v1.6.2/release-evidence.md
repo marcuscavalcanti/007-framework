@@ -82,3 +82,15 @@ Amendment 1 hash abbreviation is immutable; `REVIEW-ERRATUM.md` corrects it.
 
 These revised bytes still require exact-commit checks and renewed independent
 review before qualification. Tests do not transform either FIX FIRST into SHIP.
+
+## Go lifecycle follow-up
+
+The review of 7ed54d8 also returned FIX FIRST: a known-red test could hide a
+package timeout when another test had started but never completed. A terminal
+package event alone was insufficient evidence. The adapter now tracks active
+tests through run/pause/continue and pass/fail/skip; any unfinished test leaves
+its package's passes unproven, including a contradictory successful package
+exit. Synthetic interleaving/repeated-run controls and a real Go timeout
+regression reproduce the earlier acceptance before this correction. Other
+packages and completed lifecycles retain partial grades. Exact revised checks
+and review status are recorded separately; the earlier verdict is preserved.
