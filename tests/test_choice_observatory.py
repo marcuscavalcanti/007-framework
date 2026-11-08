@@ -115,6 +115,18 @@ class ChoiceObservatoryTests(unittest.TestCase):
         result = self.obs.attribute(self.repo, rows, slack_s=0)
         self.assertEqual((result["sessions"]["root"], result["unattributed"]), ([sha], {}))
 
+    def test_each_attributed_commit_carries_the_model_and_effort_in_force_when_it_was_made(self):
+        first = commit(self.repo, T0 + 100, "a.txt", "a\n", "a")
+        second = commit(self.repo, T0 + 5000, "b.txt", "b\n", "b")
+        third = commit(self.repo, T0 + 55_000, "c.txt", "c\n", "c")
+        mixed = self.session("A", T0, T0 + 9000, model="mixed", effort="mixed",
+                             effort_segments=[[T0 + 50, "m", "high"], [T0 + 4000, "m2", "xhigh"]])
+        rows = {r["session_id"]: r for r in self.obs.observe(self.repo, [mixed, self.session("B", T0 + 50_000, T0 + 60_000)],
+                                                             now=T0 + DAY, slack_s=60)}
+        self.assertEqual(rows["A"]["commit_efforts"], {first: {"model": "m", "effort": "high"},
+                                                       second: {"model": "m2", "effort": "xhigh"}})
+        self.assertEqual(rows["B"]["commit_efforts"], {third: {"model": "m", "effort": "low"}})
+
     def test_each_session_states_its_evidence_level(self):
         sha = commit(self.repo, T0 + 100, "g.txt", "g\n", "work")
         sessions = [self.session("worked", T0, T0 + 200), self.session("idle", T0 + 90 * DAY, T0 + 90 * DAY + 10)]

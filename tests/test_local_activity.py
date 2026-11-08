@@ -267,6 +267,22 @@ class LocalActivityTests(unittest.TestCase):
                          {"root": ("root", "root", False), "worker": ("root", "worker", True), "review": ("root", "review", True),
                           "older": ("root", "older", True)})
 
+    def test_codex_effort_segments_follow_turn_context_and_a_mixed_session_is_labelled_mixed(self):
+        activity = self.module()
+        epoch = lambda text: int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "mixed.jsonl")
+            write_jsonl(path, codex_rows("mixed", Path(tmp)) + [
+                {"timestamp": "2026-08-30T14:10:00Z", "type": "turn_context", "payload": {"model": "gpt-5.6-sol", "effort": "xhigh"}},
+                {"timestamp": "2026-08-30T14:20:00Z", "type": "turn_context", "payload": {"model": "gpt-5.6-sol", "effort": "high"}}])
+            result = activity.parse_codex_session(path, NOW)
+            write_jsonl(path, codex_rows("one", Path(tmp)))
+            same = activity.parse_codex_session(path, NOW)
+        self.assertEqual((result["model"], result["effort"]), ("gpt-5.6-sol", "mixed"))
+        self.assertEqual(result["effort_segments"], [[epoch("2026-08-30T14:00:02Z"), "gpt-5.6-sol", "xhigh"],
+                                                     [epoch("2026-08-30T14:20:00Z"), "gpt-5.6-sol", "high"]])
+        self.assertEqual((same["effort"], len(same["effort_segments"])), ("xhigh", 1))
+
     def test_compressed_codex_logs_are_read_and_counted_as_unread_without_a_decoder(self):
         # 2819 of 2879 local rollouts are *.jsonl.zst: compression.zstd (3.14+), else the zstd binary, else a visible count
         activity = self.module()

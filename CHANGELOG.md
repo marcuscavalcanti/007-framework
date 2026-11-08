@@ -21,6 +21,17 @@ schemas, and the dashboard snapshot.
   root once `record` reads the child's log again. With this release's fixes, one `record` pass on the maintainer's machine took
   one repository from 8 attributed, 200 ambiguous and 43 unattributed commits to 198, 13 and 40.
 
+### Added
+
+- `effort_segments` (`[start, model, effort]`) from Codex `turn_context` and Claude assistant rows, stored by `record`; each
+  report row lists its attributed commits with the model and effort in force at commit time (`commit_efforts`).
+
+### Changed
+
+- A session whose turns used more than one model or effort is labelled `mixed` instead of its last value, so a mixed-model
+  session is no longer priced at one model's rate nor matched to one model's calibration. Claude's `<synthetic>` placeholder is
+  not a model.
+
 ## [1.6.1] - 2026-11-08
 
 Patch release: fixes and documentation; no new command or schema.

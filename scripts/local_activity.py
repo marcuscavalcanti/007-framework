@@ -213,6 +213,23 @@ def first_matching(path, predicate, max_bytes=262_144):
     return None
 
 
+def add_segment(segments, stamp, model, effort):
+    """Appends [start epoch, model, effort] when the route changes; a value a turn leaves out keeps the previous one."""
+    last = segments[-1] if segments else [None, None, None]
+    model = model if isinstance(model, str) and model else last[1]
+    effort = effort if isinstance(effort, str) and effort else last[2]
+    if (model, effort) != (last[1], last[2]):
+        segments.append([int(stamp.timestamp()) if stamp else None, model, effort])
+
+
+def labels(segments):
+    """The session's model and effort: its one value, "mixed" when its segments differ, "unmeasured" without any."""
+    def label(values):
+        found = {value for value in values if value}
+        return found.pop() if len(found) == 1 else "mixed" if found else "unmeasured"
+    return label(s[1] for s in segments), label(s[2] for s in segments)
+
+
 def counts(raw, keys):
     return tuple(int(safe_number(raw.get(key))) for key in keys)
 
@@ -227,7 +244,7 @@ class CodexLog:
 
     def __init__(self, path=None):
         self.meta, self.updated, self.last_task, self.previous = None, None, None, None
-        self.stamps, self.tokens, self.model, self.effort = set(), [], None, None
+        self.stamps, self.segments, self.tokens = set(), [], []
 
     def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
@@ -239,8 +256,7 @@ class CodexLog:
         if kind == "session_meta" and self.meta is None:
             self.meta = codex_identity(row, payload) or {}
         elif kind == "turn_context":
-            self.model = payload.get("model") or self.model
-            self.effort = payload.get("effort") or self.effort
+            add_segment(self.segments, stamp, payload.get("model"), payload.get("effort"))
         elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete"):
             self.last_task = payload["type"]
         elif kind == "event_msg" and payload.get("type") == "token_count":
@@ -278,14 +294,16 @@ class CodexLog:
             usage.update({key: max(0, snapshots[-1][1][i] - (baseline[i] if baseline else 0)) for i, key in enumerate(USAGE_KEYS)})
         else:
             usage["usage_complete"] = False
+        model, effort = labels(self.segments)
         return {
             **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at", "subagent")},
             "source": "codex",
             "runtime_provider": self.meta["provider"] or "openai",
             "updated_at": iso(self.updated or started),
             "status": "active" if self.last_task == "task_started" else "idle",
-            "model": self.model or "unmeasured",
-            "effort": self.effort or "unmeasured",
+            "model": model,
+            "effort": effort,
+            "effort_segments": list(self.segments),
             "usage": usage,
             "active_intervals": active_intervals(self.stamps, gap_s),
         }
@@ -325,7 +343,7 @@ class ClaudeLog:
         # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
         self.in_subagents, self.log_id = "subagents" in Path(path).parts, Path(path).stem
         self.meta, self.updated = None, None
-        self.stamps, self.messages, self.costs, self.model, self.effort = set(), [], [], None, None
+        self.stamps, self.segments, self.messages, self.costs = set(), [], [], []
 
     def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
@@ -343,8 +361,8 @@ class ClaudeLog:
         message = row.get("message") if kind == "assistant" else None
         if not isinstance(message, dict):
             return
-        self.model = message.get("model") or self.model
-        self.effort = row.get("effort") or self.effort
+        model = message.get("model")
+        add_segment(self.segments, stamp, None if isinstance(model, str) and model.startswith("<") else model, row.get("effort"))
         if stamp and isinstance(message.get("usage"), dict):
             raw = message["usage"]
             cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
@@ -376,6 +394,7 @@ class ClaudeLog:
                 baseline = latest
             else:
                 inside = True
+        model, effort = labels(self.segments)
         return {
             "session_id": meta["session_id"],
             "log_id": self.log_id,
@@ -385,8 +404,9 @@ class ClaudeLog:
             "started_at": meta["started_at"],
             "updated_at": iso(self.updated),
             "status": "active" if self.updated and (now - self.updated).total_seconds() <= 120 else "idle",
-            "model": self.model or "unmeasured",
-            "effort": self.effort or "unmeasured",
+            "model": model,
+            "effort": effort,
+            "effort_segments": list(self.segments),
             "usage": usage,
             "cost_usd_reported": latest - baseline if valid and inside and baseline is not None else None,
             "active_intervals": active_intervals(self.stamps, gap_s),

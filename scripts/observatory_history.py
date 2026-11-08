@@ -32,7 +32,7 @@ import effort_trial
 import local_activity
 
 FIELDS = ("source", "session_id", "project_id", "cwd", "model", "effort", "started_at", "updated_at",
-          "total_tokens", "reasoning_output_tokens", "active_intervals", "subagent", "log_id")
+          "total_tokens", "reasoning_output_tokens", "active_intervals", "subagent", "log_id", "effort_segments")
 HOME = Path.home() / ".007-framework"
 CALIBRATION_KEYS = ("project_id", "cli", "model", "analysis")
 NOT_OPTED_IN = {"opted_in": False, "answer": "outside observatory.projects: nothing is recorded or judged"}
@@ -196,7 +196,7 @@ def load(store):
 def record(store, rows):
     store = Path(store)
     seen = {}
-    parsed = lambda r: (r.get("log_id"), r.get("active_intervals"))
+    parsed = lambda r: (r.get("log_id"), r.get("active_intervals"), r.get("effort_segments"))
     for r in _rows(store):  # every stored row, not only the latest: an older log of the same session is not appended again
         seen.setdefault((r.get("source"), r.get("session_id"), r.get("updated_at")), []).append(parsed(r))
     # a row whose parse brings what the stored ones lack (intervals; a whole-log read; 1.7 fields) is appended once, never one
