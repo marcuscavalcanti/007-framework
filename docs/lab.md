@@ -10,7 +10,7 @@
 007 lab report --set lab/replay-set.json --results results
 ```
 
-Start from [`examples/lab.example.json`](../examples/lab.example.json). Only `run` calls a model. It stops before passing `--max-usd`, when a valid cell reports no cost, on a cell above `--stop-usd`, and once `--max-invalid` cells (default 3) are invalid; an invalid cell without a cost is charged its `--stop-usd` reserve. It resumes finished work and never retries a cell. `report` leaves invalid cells out and names them in `excluded_invalid`; a cell whose test report cannot be read counts as no test passing and is named in `unreadable_outcomes`. `mine` skips a commit with more hidden tests than the acceptance reader takes (2,000).
+Start from [`examples/lab.example.json`](../examples/lab.example.json). Only `run` calls a model. It dispatches a cell only while the spend so far plus a `--stop-usd` reserve for each cell in flight stays under `--max-usd`; a cell that costs more than its reserve can push the total past `--max-usd`, so set `--stop-usd` at or above the costliest expected attempt. It stops when a valid cell reports no cost, on a cell above `--stop-usd`, and once `--max-invalid` cells (default 3) are invalid; an invalid cell without a cost is charged its `--stop-usd` reserve. It resumes finished work and never retries a cell. `report` leaves invalid cells out and names them in `excluded_invalid`; a cell whose test report cannot be read counts as no test passing and is named in `unreadable_outcomes`. `mine` skips a commit with more hidden tests than the acceptance reader takes (2,000).
 
 - **Agents** are an argv template (`agent_command`) that writes a runner receipt.
 - **Tests** are an adapter: `node`, `pytest`, `unittest`, `go`, or `custom`, whose command writes `{test id: pass|fail|skip}` to `$LAB_RAW_REPORT`. With `go`, the agent's own `*_test.go` files go back to base before grading, so a test name it redeclares cannot break a package.
@@ -47,8 +47,11 @@ Sizes are per executor. Claude Opus 5.5 on the same go-json commits had about fi
 at 2 attempts per arm needs about 40 commits for 80% power when the arms are equal
 ([result](../evidence/go-json-claude-20261107/RESULT-CLAUDE.md)).
 
-Take the break-even inputs from a pilot or from published savings, never from the confirmatory attempts. Break-even is computed on acceptance while the verdict reads the reachable scale, so it is an approximation of the economic question, not the question itself. The sizes are normal
-approximations; the calibrated `PROVEN` rule is stricter, so run `feasibility` on your own pilot. `report` writes `report.md`,
+Take the break-even inputs from a pilot or from published savings, never from the confirmatory attempts. Break-even is computed on acceptance while the verdict reads the reachable scale, so it is an approximation of the economic question, not the question itself. The sizes,
+and those `feasibility` reports, are normal approximations: they ignore the calibrated critical value (stricter than 1.96) and the
+8-task minimum, so read them as lower bounds. `report` reads the margin from the set each time it runs: keep the set unchanged
+after the first attempt (hash it, as the pre-registrations here do). For a confirmatory run, freeze the reach set beforehand
+(`reach=`); the calibration's error rates come from simulations that take the reach set as given. `report` writes `report.md`,
 the verdict in plain words at the declared margin.
 
 ## Limits

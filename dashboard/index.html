@@ -50,7 +50,7 @@
             <div class="verdict-band-head"><h2 id="live-title">Active now, as 007 judges each session</h2><span class="verdict-live" id="live-status"><i aria-hidden="true"></i><span id="live-count">0 sessions</span></span></div>
             <p class="verdict-empty" id="live-empty" hidden>No active session right now.</p>
             <div class="verdict-scroll"><table class="verdict-table" id="live-table">
-              <thead><tr><th scope="col">Session</th><th scope="col">Model</th><th scope="col">Effort</th><th scope="col" class="num">Running</th><th scope="col" class="num">Tokens</th><th scope="col">007 says</th><th scope="col">Evidence</th></tr></thead>
+              <thead><tr><th scope="col">Session</th><th scope="col">Model</th><th scope="col">Effort</th><th scope="col" class="num">Age</th><th scope="col" class="num">Tokens</th><th scope="col">007 says</th><th scope="col">Evidence</th></tr></thead>
               <tbody id="live-rows"></tbody>
             </table></div>
             <h2 class="verdict-subhead">007 scores, last 30 days</h2>
@@ -59,7 +59,7 @@
 
           <section class="verdict-band" aria-labelledby="thesis-title">
             <h2 id="thesis-title">The claim, and how much of it holds here</h2>
-            <p class="thesis-line">The same <span id="claim-durable" class="claim-word">durable</span> <span id="claim-change" class="claim-word">change</span>, with <span id="claim-reasoning" class="claim-word">less reasoning</span>, <span id="claim-waiting" class="claim-word">less waiting</span> and <span id="claim-quota" class="claim-word">less quota</span>, proven in your repository.</p>
+            <p class="thesis-line">For the model you chose: does a lower effort bring <span id="claim-waiting" class="claim-word">less waiting</span> and <span id="claim-quota" class="claim-word">less quota</span> while keeping the same <span id="claim-change" class="claim-word">change</span> within a margin you declare? <span id="claim-durable" class="claim-word">Durability</span> comes later; <span id="claim-reasoning" class="claim-word">less reasoning</span> only shows the effort changed.</p>
             <div class="verdict-claims" id="verdict-claims"></div>
           </section>
 
@@ -105,7 +105,7 @@
 
         <section class="panel evidence-panel" aria-labelledby="causal-title">
           <div class="evidence-icon" aria-hidden="true">Δ</div><div>
-            <div class="panel-heading"><div><p class="panel-kicker">Controlled comparison · OLD × NEW</p><h2 id="causal-title">Where is there a demonstrated gain?</h2></div><span class="sample-pill" id="causal-strength">Loading</span></div>
+            <div class="panel-heading"><div><p class="panel-kicker">Controlled comparison · OLD × NEW</p><h2 id="causal-title">One historical task, two efforts</h2></div><span class="sample-pill" id="causal-strength">Loading</span></div>
             <p class="evidence-sample" id="causal-scope">Global historical experiment · does not measure the selected project's current gain.</p>
             <p id="causal-claim">Loading the OLD×NEW comparison…</p><p class="evidence-sample" id="causal-sample">Sample N/A</p><p class="evidence-pricing" id="causal-pricing">Cost N/A</p>
             <div class="causal-grid"><span><small>CONTROL · USD / accepted</small><strong id="causal-old-cost">N/A</strong><small id="causal-old-route">Route N/A</small></span><span><small>TREATMENT · USD / accepted</small><strong id="causal-new-cost">N/A</strong><small id="causal-new-route">Route N/A</small></span><span><small>Δ estimated cost</small><strong id="causal-cost-delta">N/A</strong></span><span><small>Δ time / accepted</small><strong id="causal-latency-delta">N/A</strong></span></div>

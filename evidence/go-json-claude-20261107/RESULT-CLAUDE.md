@@ -52,3 +52,7 @@ The sequence held:
 - The frozen reach set came from another executor.
 - 21% of partial changes pass all hidden tests.
 - Raw attempts are kept locally: they carry local paths, and they will be published separately.
+
+## Erratum (2026-11-08, from the 1.6.0 release review)
+"The statistic stays below 2.42 at any number of attempts" holds at the estimated spread (τ² ≈ 0.023, itself from 2 attempts per
+arm and noisy). It is a planning estimate, not a limit.

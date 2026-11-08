@@ -120,16 +120,14 @@ def extract(repo, rev, dest):
 
 
 def overlay(repo, tree, rev, files):
-    for name in files:
-        (tree / name).parent.mkdir(parents=True, exist_ok=True)
-        (tree / name).write_bytes(_git(repo, "show", f"{rev}:{name}"))
+    for name in files:  # hidden_target refuses a symlink anywhere on the path: a mined repository cannot redirect host writes
+        replay_eval.hidden_target(tree, name).write_bytes(_git(repo, "show", f"{rev}:{name}"))
 
 
 def collect(tree, spec, sandbox, env):
     """Every test -> outcome in `tree`, inside the sandbox when one is configured."""
-    (tree / ACCEPT).mkdir(exist_ok=True)
-    shutil.copy(HERE / "lab_accept.py", tree / ACCEPT / "lab_accept.py")
-    (tree / ACCEPT / "lab.json").write_text(json.dumps(spec))
+    shutil.copy(HERE / "lab_accept.py", replay_eval.hidden_target(tree, f"{ACCEPT}/lab_accept.py"))
+    replay_eval.hidden_target(tree, f"{ACCEPT}/lab.json").write_text(json.dumps(spec))
     with tempfile.TemporaryDirectory(prefix="lab-report-") as scratch:
         report = Path(scratch) / "report.json"
         argv = [p.replace("{cwd}", str(tree)) for p in sandbox or []] + [sys.executable, "-I", "-B", f"{ACCEPT}/lab_accept.py", "--collect", f"{ACCEPT}/lab.json"]
@@ -503,7 +501,9 @@ def sensitivity_summary(rows):
         per[tid][0] += 1
         per[tid][1] += not value[1]
     conformant = [r[0] for r in controls if isinstance(r[2], tuple) and r[2][0] and r[2][1] is not False]
-    tried = [r for r in rows if not r[1] and isinstance(r[2], tuple)]
+    # a rejected mutant means something only where the reference patch passes: an oracle that rejects everything is not sensitive
+    reference_ok = {r[0] for r in controls if isinstance(r[2], tuple) and r[2][0]}
+    tried = [r for r in rows if not r[1] and isinstance(r[2], tuple) and r[0] in reference_ok]
     rejected = sum(not r[2][0] for r in tried)
     return {"immediate": {"mutants": len(tried), "rejected": rejected, "sensitivity": rejected / len(tried) if tried else None,
                           "passed": len(tried) >= GATES["min_mutants"] and rejected / len(tried) >= GATES["min_sensitivity"]},
@@ -751,10 +751,11 @@ def false_proven(rows, task_dir, low, ref, seed, margin=None, reach=None, attemp
 
 def proven_critical(rows, task_dir, low, ref, seed, margin=None, reach=None, attempts=None):
     """The critical value PROVEN must beat: the upper GATES["false_proven"] point of `studentized` when `low` truly loses `margin` in
-    whole failed attempts, simulated from the run's own cells. On go-json it kept that loss under 1 % PROVEN at two attempts per arm
-    and at 2.6-3.4 % with eight, where the t interval reached 5.6 % (evidence/public-replay-20261105/RESULT-SKEW-INTERVAL.md): the
-    loss it guards against puts failures into the pooled cells and lowers the value. A planned run can take the larger of this and
-    a value fixed beforehand from earlier attempts (`attempts`), which held 2.4 % in simulation."""
+    whole failed attempts, simulated from the run's own cells. In go-json simulations at 3 points it kept that loss under 1 % PROVEN
+    at two attempts per arm and at 2.6-2.8 % with about eight, where the t interval reached 5.6 % and 3.4 %: the loss it guards
+    against puts failures into the pooled cells and lowers the value. Those rates hold for the scenarios simulated, with the reach
+    set taken as given: a confirmatory run should freeze `reach` beforehand. A planned run can take the larger of this and a value
+    fixed beforehand from earlier attempts (`attempts`), which held 2.4 % in simulation."""
     margin = GATES["reachable_margin"] if margin is None else margin
     draws = whole_loss_draws(rows, task_dir, low, ref, seed, margin, reach, attempts)
     if draws is None:
@@ -880,8 +881,12 @@ def report(config_path, results, next_results):
     config = json.loads(config_path.read_text())
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     rows = load_cells(results)
+    # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
+    orphans = sorted({p.name[:-len(".runner.json")] for p in results.glob("*.runner.json")} - {r["cell"] for r in rows})
     excluded = sorted(r["cell"] for r in rows if r["valid"] is not True)
     rows = [r for r in rows if r["valid"] is True]
+    if not rows:
+        raise ValueError(f"no valid cells to report ({len(excluded)} invalid, {len(orphans)} orphan receipts)")
     following = [r for r in load_cells(next_results) if r["valid"] is True] if next_results else []
     next_rows = {r["task"][:-len("-next")]: r for r in following}
     durable = {r["cell"]: bool(r["accepted"] and r["cell"] in next_rows and next_rows[r["cell"]]["accepted"]) for r in rows}
@@ -925,7 +930,7 @@ def report(config_path, results, next_results):
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
         tier["thesis"] = "UNPROVEN"
     aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a)) for a in (low, ref)}
-    result = {"schema": "007-lab/report/v6", "at": _now(), "verdict": tier, "excluded_invalid": excluded,
+    result = {"schema": "007-lab/report/v6", "at": _now(), "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES}
@@ -953,7 +958,7 @@ def summary(result, low, ref, attempts):
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
         "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits or models other than these.",
-        f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts, never retried.",
+        f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
         "",
     ])
 

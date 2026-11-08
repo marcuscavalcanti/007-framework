@@ -9,6 +9,10 @@ const integer = (value) => new Intl.NumberFormat("en-US", { notation: value >= 1
 const equivalentMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/A";
 const terminalMoney = (activity = {}) => activity.reported_cost_sessions ? `${activity.reported_cost_coverage < 1 ? "≥ " : ""}${money(activity.cost_usd_reported_sum)} · ${percent(activity.reported_cost_coverage)}` : "N/A";
 const activityTokens = (activity = {}) => `${integer(activity.tokens_total)}${activity.usage_incomplete_sessions > 0 ? " · partial" : ""}`;
+// worktrees of one repository share its folder name: the parent folder tells them apart
+const projectLabel = (project) => (state.snapshot?.projects || []).filter((p) => p.name === project.name).length > 1
+  ? `${project.name} · ${String(project.path || "").split("/").at(-2) || String(project.project_id).slice(0, 8)}` : project.name;
+const age = (minutes) => minutes == null ? "N/A" : minutes < 120 ? `${minutes} min` : minutes < 2880 ? `${Math.round(minutes / 60)} h` : `${Math.round(minutes / 1440)} d`;
 function localDateTime(value, asOf = state.transportError ? Date.now() : state.snapshot?.generated_at) {
   const date = typeof value === "string" ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return "N/A";
@@ -180,7 +184,7 @@ function renderMetrics(metrics) {
   setText("value-cost", economics?.cost_usd_known_tasks && economics.cost_usd_known_sum != null ? `${economics.cost_coverage < 1 || !economics.cohort_complete ? "≥ " : ""}${money(economics.cost_usd_known_sum)}` : "N/A");
   setText("value-cost-detail", economics ? `${costDetail} · ${economics.reasons.join("; ") || "complete cohort"}` : "No single economic cohort; check each project.");
   setText("value-open", metrics.active_tasks || 0);
-  setText("value-open-detail", `${metrics.blocked || 0} blocked · ${metrics.no_op || 0} no change · open tasks without terminal cost`);
+  setText("value-open-detail", `Started, no terminal receipt yet · finished: ${metrics.blocked || 0} blocked, ${metrics.no_op || 0} no change`);
 }
 
 function gateActual(gate) {
@@ -377,7 +381,9 @@ function renderTrial(trial) {
   const e = trial.enrollment || {};
   box.append(element("h3", null, `Effort trial · ${trial.trial_id} · ${trial.enabled ? "running" : "off"} · verdict: ${trial.verdict}`));
   const gates = Object.entries(trial.gates || {}).map(([k, v]) => `${k} ${v ? "ok" : "not yet"}`).join(" · ");
-  box.append(element("p", "observatory-answer", `Enrollment ${e.open ? "open" : `closed ${String(e.closed_at || "").slice(0, 10)}`}: sessions with an integrated commit by drawn arm: medium ${integer(e.per_arm?.medium)}, xhigh ${integer(e.per_arm?.xhigh)} (target ${integer(e.target)} per arm or until ${e.deadline || "N/A"}) · all drawn sessions: medium ${integer(trial.sessions?.medium)}, xhigh ${integer(trial.sessions?.xhigh)} · compliance ${pct(trial.compliance)} (needs ${pct(trial.min_compliance)}) · gates: ${gates}.`));
+  // a session without the hook inherits the arm in force, so sessions cluster in draws: never call them drawn
+  const enrollment = !trial.enabled ? "Enrollment paused (trial off)" : `Enrollment ${e.open ? "open" : `closed ${String(e.closed_at || "").slice(0, 10)}`}`;
+  box.append(element("p", "observatory-answer", `${enrollment}: sessions with an integrated commit by arm in force: medium ${integer(e.per_arm?.medium)}, xhigh ${integer(e.per_arm?.xhigh)} (target ${integer(e.target)} per arm or until ${e.deadline || "N/A"}) · all sessions by arm in force: medium ${integer(trial.sessions?.medium)}, xhigh ${integer(trial.sessions?.xhigh)}; sessions share draws, so they are not independent · compliance ${pct(trial.compliance)} (needs ${pct(trial.min_compliance)}) · gates: ${gates}.`));
   const primary = trial.primary, secondary = trial.secondary || {};
   if (primary === "blinded" || primary == null) {
     box.append(element("p", "observatory-answer", `Effort trial outcomes blinded until ${String(trial.blinded_until?.["30"] || "N/A").slice(0, 10)} (7-day secondaries: ${String(trial.blinded_until?.["7"] || "N/A").slice(0, 10)}); pre-registered readout if enrollment runs to its deadline, earlier once both arms reach the target. No rates, curves or differences before then.`));
@@ -432,9 +438,9 @@ function renderNavigation() {
     const button = element("button", `project-button${project.project_id === state.selectedProject ? " is-active" : ""}`);
     button.type = "button";
     button.id = `project-nav-${project.project_id}`;
-    button.setAttribute("aria-label", `Open project ${project.name}`);
+    button.setAttribute("aria-label", `Open project ${projectLabel(project)}`);
     const status = projectStatus(project);
-    button.append(element("span", `project-dot ${status}`), element("span", "project-name", project.name), element("span", "project-tasks", `${project.activity?.sessions || 0} sessions`));
+    button.append(element("span", `project-dot ${status}`), element("span", "project-name", projectLabel(project)), element("span", "project-tasks", `${project.activity?.sessions || 0} sessions`));
     button.addEventListener("click", () => { state.selectedProject = project.project_id; render(); });
     list.append(button);
     if (button.id === focused) button.focus({preventScroll:true});
@@ -453,7 +459,7 @@ function renderProjects() {
     const activity = project.activity || {};
     const row = document.createElement("tr");
     const cells = [
-      project.name,
+      projectLabel(project),
       statusLabel(projectStatus(project)),
       activity.sessions || 0,
       activityTokens(activity),
@@ -476,7 +482,7 @@ function renderProjects() {
 
 function recentTasks() {
   const project = selectedProject();
-  const rows = project ? project.recent_tasks.map((task) => ({...task, stale: state.transportError || project.stale})) : state.snapshot.projects.flatMap((item) => item.recent_tasks.map((task) => ({ ...task, project_name: item.name, stale: state.transportError || item.stale })));
+  const rows = project ? project.recent_tasks.map((task) => ({...task, stale: state.transportError || project.stale})) : state.snapshot.projects.flatMap((item) => item.recent_tasks.map((task) => ({ ...task, project_name: projectLabel(item), stale: state.transportError || item.stale })));
   return rows.sort((a, b) => String(b.completed_at || "").localeCompare(String(a.completed_at || ""))).slice(0, 20);
 }
 
@@ -496,7 +502,7 @@ function renderActivity(tasks) {
     const main = element("div", "activity-main");
     main.append(element("strong", "", task.task_id || "task without ID"), element("span", "", `${task.project_name || ""} · ${task.status || "N/A"} · ${taskRoute(task)}`));
     const cost = task.cost_usd != null && task.cost_source && task.cost_status ? `${money(task.cost_usd)} · ${task.cost_status} · ${task.cost_source}` : "cost N/A";
-    main.append(element("span", "", task.acceptance_summary && /^[a-f0-9]{64}$/.test(task.acceptance_sha256 || "") ? `declared acceptance · ${task.acceptance_summary.passed} PASS / ${task.acceptance_summary.failed} FAIL · authorship not authenticated` : "declared acceptance / not observed by the controller"));
+    main.append(element("span", "", task.acceptance_summary && /^[a-f0-9]{64}$/.test(task.acceptance_sha256 || "") ? `declared acceptance · ${task.acceptance_summary.passed} PASS / ${task.acceptance_summary.failed} FAIL · authorship not authenticated` : `declared ${task.status === "accepted" ? "acceptance" : "outcome"} / not observed by the controller`));
     const retained = task.retention;
     main.append(element("span", "", `${localDateTime(task.completed_at)} · ${task.stale ? "stale data · " : ""}contribution: declared terminal${task.matched_start ? " · closed a recorded start" : ""}${task.cost_usd != null ? " · cost reported" : ""}${retained?.inputs_recoverable === true ? " · input preserved at last check" : task.input_sha256 ? " · input reference" : ""}${retained?.candidate_recoverable === true ? " · candidate preserved at last check" : ""}${retained?.inputs_recoverable === true ? ` (${localDateTime(retained.checked_at)}; not current integrity)` : ""} · replay not qualified · causal gain not attributed`));
     row.append(main, element("span", "activity-meta", cost));
@@ -596,7 +602,7 @@ function renderEvidence() {
   const newWall = evidence?.new?.cell_wall_s || [];
   const identity = evidence?.served_identity || {};
   const verifiedIdentity = Number.isInteger(sample.cells) && sample.cells > 0 && identity.total_cells === sample.cells && identity.verified_cells === sample.cells;
-  setText("causal-strength", evidence?.status === "supported-task-local" ? "Local support" : "Not proven");
+  setText("causal-strength", evidence?.status === "supported-task-local" ? "One task" : "Not proven");
   setText("causal-sample", sample.tasks == null ? "Sample N/A" : `${sample.tasks} real task(s) · ${sample.accepted}/${sample.cells} accepted cells · ${verifiedIdentity ? "served identity verified" : `identity ${identity.verified_cells ?? "N/A"}/${identity.total_cells ?? "N/A"}; verification incomplete`}`);
   setText("causal-scope", "Global historical experiment · does not measure the selected project's current gain.");
   setText("causal-old-route", `${evidence?.old?.policy || "Route N/A"} · ${evidence?.old?.accepted ?? "N/A"}/${evidence?.old?.cells ?? "N/A"} accepted`);
@@ -616,8 +622,8 @@ function renderEvidence() {
 // ---- verdict home: what the evidence supports for the selected scope, never more
 const JUDGED = ["above-necessary", "good-choice", "no-cheaper-proven", "cannot-spend-less"];
 const SAYS = {
-  "above-necessary": (entry) => [`Above what was needed: ${entry.gain?.effort || "less"} is enough`, "warn"],
-  "good-choice": () => ["Good choice", "good"],
+  "above-necessary": (entry) => [`A lower effort matched: ${entry.gain?.effort || "less"}`, "warn"],
+  "good-choice": () => ["Matched the reference", "good"],
   "no-cheaper-proven": () => ["Nothing cheaper proven", "plain"],
   "cannot-spend-less": () => ["Lower effort not proven", "plain"],
 };
@@ -635,7 +641,7 @@ function sessionJudgement(session, project) {
 function liveSessions(projects, now) {
   return projects.flatMap((project) => (project.activity?.recent_sessions || []).filter((session) => session.status === "active").map((session) => {
     const started = Date.parse(session.started_at);
-    return { repo: project.name, model: session.model, effort: session.effort, tokens: session.usage?.total_tokens,
+    return { repo: projectLabel(project), model: session.model, effort: session.effort, tokens: session.usage?.total_tokens,
              minutes: Number.isFinite(started) ? Math.max(0, Math.round((now - started) / 60000)) : null, ...sessionJudgement(session, project) };
   }));
 }
@@ -671,7 +677,7 @@ function thesisClaims(best, report) {
   const sameVerdict = report?.same_change_reachable;
   const same = sameVerdict === "PROVEN" ? ["PROVEN", "good"] : sameVerdict === "KILL" ? ["FAILED", "bad"] : measured ? ["NOT PROVEN", "warn"] : ["NO EVIDENCE", "plain"];
   return [
-    { id: "claim-reasoning", claim: "Less reasoning", state: supported, evidence: measured ? "Effort changed what the model actually did." : "Run a replay on this repository." },
+    { id: "claim-reasoning", claim: "Less reasoning", state: measured ? ["CHECK", "plain"] : ["NO EVIDENCE", "plain"], evidence: measured ? "Manipulation check: the effort changed what the model did. Not a benefit by itself." : "Run a replay on this repository." },
     { id: "claim-waiting", claim: "Less waiting", state: supported, evidence: measured ? `${percent(best.entry.gain?.time_reduction)} less agent time per accepted change.` : "Run a replay on this repository." },
     { id: "claim-quota", claim: "Less quota", state: measured ? ["ESTIMATED", "warn"] : ["NO EVIDENCE", "plain"], evidence: measured ? `${percent(best.entry.gain?.cost_reduction)} less estimated cost per accepted change: a price estimate, not a quota meter.` : "Run a replay on this repository." },
     { id: "claim-change", claim: "The same change", state: same, evidence: sameVerdict === "PROVEN" ? "Non-inferior on behaviour the agent never saw." : sameVerdict === "KILL" ? "Lost more than the margin on behaviour the agent never saw." : measured ? "No accepted change lost, but no lab report bounds the loss." : "Run a replay on this repository." },
@@ -690,7 +696,8 @@ function renderLive(rows, generatedAt) {
   body.replaceChildren();
   for (const row of rows) {
     const line = element("tr");
-    const cells = [[row.repo], [row.model, "mono"], [row.effort, "mono"], [row.minutes == null ? "N/A" : `${row.minutes} min`, "mono num"], [row.tokens == null ? "N/A" : integer(row.tokens), "mono num"], [row.says, `tone-${row.tone}`], [row.level, "mono dim"]];
+    // ponytail: the collector reports 0 tokens for an incomplete usage record, so 0 reads N/A here
+    const cells = [[row.repo], [row.model, "mono"], [row.effort, "mono"], [age(row.minutes), "mono num"], [row.tokens ? integer(row.tokens) : "N/A", "mono num"], [row.says, `tone-${row.tone}`], [row.level, "mono dim"]];
     for (const [text, cls] of cells) line.append(element("td", cls, text));
     body.append(line);
   }
@@ -723,7 +730,7 @@ function renderLadder(best) {
     const bar = element("div", "ladder-bar");
     bar.style.width = `${slowest ? (arm.wall_per_accepted_s || 0) / slowest * 100 : 0}%`;
     track.append(bar);
-    const note = effort === best.effort ? ["enough", "good"] : effort === rows.at(-1)[0] ? ["reference", "plain"] : arm.accepted < top ? [`loses ${top - arm.accepted}`, "warn"] : ["", "plain"];
+    const note = effort === best.effort ? ["matched", "good"] : effort === rows.at(-1)[0] ? ["reference", "plain"] : arm.accepted < top ? [`loses ${top - arm.accepted}`, "warn"] : ["", "plain"];
     line.append(element("span", "mono", effort), track, element("span", "mono num", arm.wall_per_accepted_s == null ? "N/A" : `${arm.wall_per_accepted_s.toFixed(0)} s`), element("span", "mono num", `${arm.accepted}/${arm.units}`), element("span", `num tone-${note[1]}`, note[0]));
     box.append(line);
   }
@@ -739,11 +746,12 @@ function renderVerdict(project) {
   const durable = report?.durability === "PROVEN";
   const reach = project ? "" : ` · calibrated in ${projects.filter((item) => calibrationsOf([item]).length).length} of ${projects.length}`;
   setText("verdict-kicker", best ? `${best.calibration.model} · ${best.calibration.repository}${reach}` : `${scope} · no calibration yet`);
-  setText("verdict-title", best ? `${best.effort} is enough.` : "No verdict yet.");
-  setText("verdict-lede", best ? `Tests accept the same changes with ${percent(best.entry.gain?.time_reduction)} less agent time. ${durable ? "They also survived the next real change." : "Whether those changes last is not shown yet."}`
-    : "007 will not guess which effort is enough for your code. It replays your own commits at two efforts and tells you what the evidence supports.");
   const gain = best?.entry.gain;
   const arm = best?.calibration.arms?.[best.effort], reference = gain && best.calibration.arms?.[gain.against];
+  // a calibration is an equal accepted count (margin zero): it never bounds a loss, so the headline says "matched", not "enough"
+  setText("verdict-title", best ? `${best.effort} matched ${gain?.against || "the reference"}.` : "No verdict yet.");
+  setText("verdict-lede", best ? `Tests accepted as many changes${arm && reference ? ` (${arm.accepted} = ${reference.accepted})` : ""} with ${percent(gain?.time_reduction)} less agent time. An equal count does not bound a loss. ${durable ? "They also survived the next real change." : "Whether those changes last is not shown yet."}`
+    : "007 will not guess which effort is enough for your code. It replays your own commits at two efforts and tells you what the evidence supports.");
   byId("verdict-gains").replaceChildren(...(best ? [
     [signedPercent(gain?.time_reduction), "agent time", "per accepted change"],
     [signedPercent(gain?.cost_reduction), "cost", "per accepted change"],
@@ -757,8 +765,8 @@ function renderVerdict(project) {
   renderLadder(best);
   byId("verdict-advice").replaceChildren(...calibrations.map((calibration) => {
     const found = bestVerdict([calibration]);
-    return textBlock("verdict-advice-row", [["div", "mono", `${calibration.cli} · ${calibration.model} · ${calibration.repository}`], ["strong", `tone-${found ? "good" : "warn"}`, found ? `use ${found.effort}` : "keep your effort"],
-      ["small", null, found ? "No accepted change lost." : "No lower effort passed the gates."]]);
+    return textBlock("verdict-advice-row", [["div", "mono", `${calibration.cli} · ${calibration.model} · ${calibration.repository}`], ["strong", `tone-${found ? "good" : "warn"}`, found ? `${found.effort} matched` : "keep your effort"],
+      ["small", null, found ? "Same accepted count; a loss is not bounded." : "No lower effort passed the gates."]]);
   }));
   if (!calibrations.length) byId("verdict-advice").replaceChildren(element("p", "verdict-note", "No model calibrated in this scope."));
 }

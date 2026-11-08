@@ -6,6 +6,22 @@ All notable changes are documented here.
 
 ## [1.6.0] — candidate (2026-11-08)
 
+### Release review fixes
+
+- `007 lab sensitivity` counts a mutant only where the task's reference patch passes the oracle: an oracle that rejects
+  everything no longer looks sensitive. (go-json's 62 reference patches all passed, so its published gate is unchanged.)
+- `mine` and `collect` refuse a symlink anywhere on the path of a hidden test or of `.007-accept`, so a mined repository cannot
+  redirect writes outside the temporary tree (`replay_eval.hidden_target`, reused).
+- `report` names orphan receipts (an attempt with no result) and refuses to report when no valid cell remains.
+- Docs: `--max-usd` is a dispatch reservation, not a hard cap; planning sizes are normal approximations (lower bounds); the
+  calibration's error rates are simulation results with the reach set taken as given; keep the set and its margin unchanged
+  after the first attempt. "41 commits cannot reach a 3-point verdict" softened to a planning estimate, with errata in the
+  go-json results.
+- Dashboard: an equal accepted count reads "matched", never "enough" or "use"; the thesis line follows 1.6.0; less reasoning
+  is a manipulation check; the one-task v1.4 comparison is labelled as such; effort-trial sessions are counted by arm in force
+  (they share draws) and a disabled trial reads paused; blocked tasks no longer read as declared acceptances; worktrees with the
+  same folder name are told apart; live sessions show age and N/A for incomplete usage.
+
 ### Thesis D: minimum sufficient effort
 
 - Product thesis moved from "007 doctrine vs none" to the canonical minimum-intelligence thesis: the least reasoning effort that
@@ -20,8 +36,8 @@ All notable changes are documented here.
   inside a sandbox with a minimal environment.
 - Internal planning documents are no longer shipped in the public tree.
 - Thesis restated by what can prove each part: a repository measures the savings and guards against a large loss (`KILL`
-  when the whole interval is below -3 points); a 3-point bound needs more commits than one repository like go-json has (a
-  pooled public corpus), with one verdict per executor.
+  when the whole interval is below -3 points); a 3-point bound probably needs more commits than one repository like go-json
+  has (a pooled public corpus), with one verdict per executor.
 - Public pre-registered replay on go-json-experiment/json (Codex `medium` vs `high`, 62 commits): reasoning -67%, median agent
   time -32%, same change +1.3 pp (95% t interval -4.7 to +7.2), not proven. It did not reproduce the +9.4 pp post-hoc Codex gain.
 - `007 lab mine` skips commits with more hidden tests than the acceptance reader takes; `report` counts unreadable test

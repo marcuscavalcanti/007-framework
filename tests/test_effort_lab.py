@@ -266,6 +266,26 @@ class Gates(unittest.TestCase):
         self.assertEqual(self.v(self.c(reduction=.2), [-.04, .04])["thesis"], "NOT-SURVIVES")
         self.assertEqual(self.v(self.c(low=5), [-.04, .04])["time"], "SURVIVES")  # acceptance counts only through time per accepted change
 
+    def test_a_rejected_mutant_counts_only_where_the_reference_passes(self):
+        rows = [("A", True, (True, None)), ("B", True, (False, None))] + [("A", False, (False, None))] * 10 + [("B", False, (False, None))] * 10
+        immediate = lab.sensitivity_summary(rows)["immediate"]
+        self.assertEqual((immediate["mutants"], immediate["rejected"]), (10, 10))  # B's oracle rejects even the reference
+
+
+class MinerSafety(unittest.TestCase):
+    def test_a_mined_tree_cannot_redirect_writes_through_a_symlink(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            tree, outside = Path(scratch) / "tree", Path(scratch) / "outside"
+            tree.mkdir()
+            outside.mkdir()
+            (tree / "tests").symlink_to(outside)
+            with mock.patch.object(lab, "_git", return_value=b"x"), self.assertRaises(ValueError):
+                lab.overlay(None, tree, "rev", ["tests/test_a.py"])
+            (tree / ".007-accept").symlink_to(outside)
+            with self.assertRaises(ValueError):
+                lab.collect(tree, {}, None, None)
+            self.assertEqual(list(outside.iterdir()), [])
+
 
 class UnseenBehaviour(unittest.TestCase):
     rows = [{"task": "T", "arm": a, "acceptance_outcomes": {"always": "pass", "never": "fail", "split": s, "split2": s2}} for a, s, s2 in (("medium", "pass", "pass"), ("high", "fail", "pass"))] + \

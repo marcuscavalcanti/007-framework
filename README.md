@@ -40,11 +40,12 @@ until it is measured. The earlier wording, "the same durable change", is what a 
   fail outright, the t interval calls a 3-point loss `PROVEN` up to 5.6% of the time instead of 2.5%, so `report` takes
   `PROVEN`'s critical value from that loss simulated on the run's own attempts. `007 lab feasibility` computes the task count
   for your history before you spend.
-- **A 3-point bound needs more commits than one repository like go-json has.** The pre-registered test of "one repository may be
-  enough" ([pre-registration](evidence/go-json-topup-20261106/PREREG-TOPUP.md)) came out not proven, and the commits differ in
-  effect more than 41 of them can absorb (τ² 0.003–0.005, upper bounds 0.007–0.009, against 0.0047), so that claim is withdrawn.
-  At 8 attempts per arm a 3-point verdict takes about 55–70 reaching commits if the arms are equal and 110–145 if the true
-  difference is −0.9 points: several repositories, one verdict per executor.
+- **A 3-point bound probably needs more commits than one repository like go-json has.** The pre-registered test of "one
+  repository may be enough" ([pre-registration](evidence/go-json-topup-20261106/PREREG-TOPUP.md)) came out not proven, and the
+  spread between commits is about at or above what 41 of them can absorb (τ² 0.003–0.005 against a 0.0047 budget, bootstrap
+  upper bounds 0.007–0.009), so that claim is withdrawn. Planning estimates at go-json's noise, not limits: at 8 attempts per arm
+  a 3-point verdict takes about 55–70 reaching commits if the arms are equal and 110–145 if the true difference is −0.9 points,
+  that is, several repositories, one verdict per executor.
 - **Each executor gets its own verdict.** Claude Opus 5.5 `medium` vs `xhigh`, pre-registered on the same 41 go-json commits at
   a 10-point margin, 2 attempts per arm: −5.5 pp (95% t interval −11.8 to +0.7), not proven, with 67% less agent time and a 75%
   lower median cost ([result](evidence/go-json-claude-20261107/RESULT-CLAUDE.md)). Acceptance on the 36 commits any attempt
@@ -78,7 +79,8 @@ What the instrument learned, and now does by default:
 - **Read "same change" where both arms can be compared.** Reports use reachable behaviours (hidden tests red at base that some
   attempt passes), paired by task, with a symmetric interval rule — a point estimate never kills — and a pseudo A/A per arm.
   `PROVEN` must beat a critical value simulated from the run's own attempts with a loss of the declared margin as whole failed
-  attempts, so such a loss comes out `PROVEN` about 2.5% of the time.
+  attempts, so in go-json simulations such a loss comes out `PROVEN` about 2.5% of the time (reach set taken as given;
+  confirmatory runs freeze it beforehand).
 - **Filter weak specifications.** Commit messages make thin requirements: few tasks reach full acceptance. `007 lab sufficiency`
   drops tasks whose prompt alone cannot reach their tests.
 

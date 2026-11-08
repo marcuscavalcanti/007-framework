@@ -58,3 +58,11 @@ number of attempts.
 - 21% of partial changes pass all hidden tests.
 - Costs are list-price estimates.
 - Raw attempts are kept locally: they carry local paths, and they will be published separately.
+
+## Errata (2026-11-08, from the 1.6.0 release review)
+- **"41 commits cannot reach a 3-point verdict at any number of attempts" overstates.** The τ² point estimates (0.0028, 0.0049)
+  straddle the 0.0047 budget, and that budget marks 80% power, not impossibility. The supported reading is narrower: 41 commits
+  are unlikely to give a 3-point verdict at useful power, and the commit counts above are planning estimates at this noise.
+  The pre-registered withdrawal of "one repository may be enough" stands.
+- **Cost:** the per-arm totals (US$70.4 vs US$101.1) cover valid attempts only. The 4 invalid `high` attempts cost US$1.43, which
+  makes the US$172.98 total.

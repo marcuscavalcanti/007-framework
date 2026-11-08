@@ -524,7 +524,7 @@ test('live sessions carry the verdict for their own model and effort, and only a
   r.context.snapshotFixture = verdictSnapshot();
   const rows = vm.runInContext('liveSessions(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at))', r.context);
   assert.equal(rows.length, 2);
-  assert.equal(rows[0].says, 'Above what was needed: medium is enough');
+  assert.equal(rows[0].says, 'A lower effort matched: medium');  // an equal count never says "enough"
   assert.equal(rows[0].minutes, 30);
   assert.equal(rows[1].says, 'No evidence to change it');
   assert.equal(rows[1].minutes, null);
@@ -564,4 +564,6 @@ test('quota is never called supported from a price estimate', () => {
   r.context.snapshotFixture = verdictSnapshot();
   const quota = vm.runInContext('thesisClaims(bestVerdict(calibrationsOf(snapshotFixture.projects)), null).find((c) => c.id === "claim-quota").state[0]', r.context);
   assert.equal(quota, 'ESTIMATED');
+  const reasoning = vm.runInContext('thesisClaims(bestVerdict(calibrationsOf(snapshotFixture.projects)), null).find((c) => c.id === "claim-reasoning").state[0]', r.context);
+  assert.equal(reasoning, 'CHECK');  // the manipulation check is not a benefit
 });
