@@ -24,6 +24,8 @@ schemas, and the dashboard snapshot.
   common dir) instead of a project of its own.
 - A Claude session opened outside a repository maps to the first repository its rows move into (`cwds`), not only to its first
   row's directory.
+- The activity panel no longer freezes a session's status and its 24 h window while the log is unchanged: both are recomputed at
+  every read from the metadata kept per log.
 
 ### Added
 

@@ -589,8 +589,7 @@ class ActivityCollector:
         self.pricer = pricer or HeadroomPricer()
         self.lookback_hours = lookback_hours
         self.gap_s = float(activity_gap_minutes) * 60
-        self.cache = {}
-        self.cursors = {}  # path -> (inode, offset, parser) of a plain log still growing
+        self.cursors = {}  # path -> ((inode, size, mtime), offset, parser) of each Codex/Claude log read
         self.unreadable = set()  # *.jsonl.zst logs no decoder could read (reported, never skipped silently)
         self.identity_cache = {}
 
@@ -613,34 +612,33 @@ class ActivityCollector:
                     continue
 
     def parse(self, source, path, now):
-        stat = path.stat()
-        key = (stat.st_size, stat.st_mtime_ns)
-        cached = self.cache.get(path)
-        if cached and cached[0] == key:
-            return cached[1]
-        if source in LOGS:
-            # ponytail: a plain log that only grows (same inode, not shorter) is read on from where the last read stopped; an
-            # in-place rewrite to a longer file would be misread (Codex renames or compresses instead), a truncation starts over
-            inode, offset, log = self.cursors.pop(path, (None, 0, None))  # a failed read never leaves a half-fed cursor
-            if log is None or inode != stat.st_ino or offset > stat.st_size:
-                offset, log = 0, LOGS[source](path)
-            try:
-                offset = read_log(path, log, offset)
-                value = log.result(now, self.lookback_hours, self.gap_s)
-                if path.suffix != ".zst":
-                    self.cursors[path] = (stat.st_ino, offset, log)
-            except UnreadableLog:
-                self.unreadable.add(path)
-                value = None
-        elif source == "kimi":
-            value = parse_kimi_session(path, now, self.lookback_hours, self.gap_s)
-        else:
+        """The session of one log as of `now`. Only what the rows say is kept between calls (a cursor per Codex/Claude log); status
+        and the lookback window are recomputed every call, since they move with the clock even when the file does not."""
+        if source not in LOGS:
+            # ponytail: Kimi and Gemini logs are re-read on every call; give them a cursor like LOGS if a large one shows up
+            if source == "kimi":
+                return parse_kimi_session(path, now, self.lookback_hours, self.gap_s)
             slug = path.parents[1].name
             projects = json.loads((self.gemini_root / "projects.json").read_text()).get("projects", {})
             cwd = next((project for project, key in projects.items() if key == slug), None)
-            value = parse_gemini_session(path, cwd, now, self.lookback_hours, self.gap_s)
-        self.cache[path] = (key, value)
-        return value
+            return parse_gemini_session(path, cwd, now, self.lookback_hours, self.gap_s)
+        stat = path.stat()
+        known, offset, log = self.cursors.pop(path, ((None, None, None), 0, None))  # a failed read never leaves a half-fed cursor
+        # ponytail: a plain log that only grows (same inode, not shorter) is read on from where the last read stopped; an in-place
+        # rewrite to a longer file would be misread (Codex renames or compresses instead), a truncation starts over. A *.zst
+        # archive is read again only when it changes.
+        packed = path.suffix == ".zst"
+        stale = known != (stat.st_ino, stat.st_size, stat.st_mtime_ns) if packed else known[0] != stat.st_ino or offset > stat.st_size
+        if log is None or stale:
+            offset, log = 0, LOGS[source](path)
+        try:
+            if not packed or offset == 0:
+                offset = read_log(path, log, offset)
+        except UnreadableLog:
+            self.unreadable.add(path)
+            return None
+        self.cursors[path] = ((stat.st_ino, stat.st_size, stat.st_mtime_ns), offset, log)
+        return log.result(now, self.lookback_hours, self.gap_s)
 
     def identity(self, path):
         path = str(Path(path).resolve())

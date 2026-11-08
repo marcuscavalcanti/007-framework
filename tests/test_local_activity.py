@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -329,6 +329,22 @@ class LocalActivityTests(unittest.TestCase):
             result = collector.collect([{"project_id": "p", "path": str(repo)}], NOW)
         self.assertEqual(result["projects"]["p"]["sessions"], 1)
         self.assertEqual(result["projects"]["p"]["recent_sessions"][0]["cwds"], [tmp, str(repo / "sub")])
+
+    def test_status_and_window_move_with_the_clock_when_the_log_does_not_change(self):
+        # audit F05: a result cached by file size/mtime stayed "active" and kept tokens that had left the window
+        activity = self.module()
+        row = {"type": "assistant", "sessionId": "c", "message": {"id": "m1", "model": "claude-opus-5", "usage": {"input_tokens": 100, "output_tokens": 20}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_jsonl(root / "claude/c.jsonl", [{**row, "cwd": tmp, "timestamp": "2026-08-29T15:01:00Z"},
+                                                   {**row, "cwd": tmp, "timestamp": "2026-08-30T14:59:30Z",
+                                                    "message": {**row["message"], "id": "m2", "usage": {"input_tokens": 10, "output_tokens": 2}}}])
+            collector = activity.ActivityCollector(codex_root=root / "x", claude_root=root / "claude", kimi_root=root / "x",
+                                                   gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: []))
+            now = collector.parse("claude", root / "claude/c.jsonl", NOW)
+            later = collector.parse("claude", root / "claude/c.jsonl", NOW + timedelta(minutes=10))
+        self.assertEqual((now["status"], now["usage"]["total_tokens"]), ("active", 132))
+        self.assertEqual((later["status"], later["usage"]["total_tokens"]), ("idle", 12))
 
     def test_claude_usage_excludes_messages_before_window(self):
         activity = self.module()
