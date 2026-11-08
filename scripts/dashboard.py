@@ -3,6 +3,7 @@
 
 import json
 import copy
+import fnmatch
 import hashlib
 import math
 import os
@@ -1255,6 +1256,86 @@ def load_lab_report(config=None):
     return {**report["verdict"], "bound_to": binding if binding and all(isinstance(v, str) and v for v in binding.values()) else None}
 
 
+def lab_experiment(name, directories):
+    """007's own spend in `007 lab run` results: one attempt per cell with a runner receipt or a result. The runner reserves its
+    receipt before spending. Only an explicit pre-reservation refusal is priced at zero; missing cost/provenance stays unpriced.
+    Costs are the receipts' client estimates, not an invoice."""
+    attempts, stamps = {}, []
+    for directory in directories:
+        for file in os.listdir(directory):  # raises on a missing or unreadable directory, unlike glob
+            if file.endswith(".runner.json"):
+                raw = (directory / file).read_bytes()
+                receipt = json.loads(raw) if raw.strip() else {}  # empty: reserved, never finished
+                attempts.setdefault((directory, file.removesuffix(".runner.json")), {})["receipt"] = receipt if isinstance(receipt, dict) else {}
+            elif fnmatch.fnmatchcase(file, "*-r[0-9][0-9]-*.json"):
+                result = json.loads((directory / file).read_bytes())
+                item = attempts.setdefault((directory, file.removesuffix(".json")), {})
+                item["valid"] = isinstance(result, dict) and result.get("valid") is True
+                item["refused_before_spend"] = isinstance(result, dict) and result.get("valid") is False and result.get("runner_receipt_sha256") == "unmeasured"
+        try:
+            lines = (directory / "dispatch.jsonl").read_text().splitlines()
+        except FileNotFoundError:
+            lines = []
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue  # ponytail: a line cut by a killed run only loses a timestamp
+            if isinstance(row, dict):
+                stamps += [harness_report._instant(row.get(key)) for key in ("dispatched_at", "finished_at")]
+    stamps = sorted(stamp for stamp in stamps if stamp)
+    rows = attempts.values()
+    for item in rows:
+        receipt = item.get("receipt")
+        refused = receipt is None and item.get("refused_before_spend")
+        cost = 0 if refused else (receipt or {}).get("cost_usd")
+        source = (receipt or {}).get("cost_source")
+        accounted = refused or (is_known_label(source) and source != "unavailable")
+        item["cost"] = cost if accounted and is_number(cost) and cost >= 0 else None
+    priced = [item for item in rows if item["cost"] is not None]
+    return {
+        "name": name, "available": True, "error": None,
+        "first_attempt_at": stamps[0].isoformat() if stamps else None,
+        "last_attempt_at": stamps[-1].isoformat() if stamps else None,
+        "attempts": len(rows),
+        "valid": sum(item.get("valid") is True for item in rows),
+        "invalid": sum(item.get("valid") is False for item in rows),
+        "orphans": sum("valid" not in item for item in rows),
+        "cost_usd": round(sum(item["cost"] for item in priced), 6),
+        "invalid_cost_usd": round(sum(item["cost"] for item in priced if item.get("valid") is not True), 6),
+        "unpriced": len(rows) - len(priced),
+        "cost_sources": dict(Counter(item["receipt"]["cost_source"] for item in priced
+                                     if item.get("receipt") and is_known_label(item["receipt"].get("cost_source")))),
+    }
+
+
+def load_lab_ledger(config=None):
+    """Spend caused by 007 itself, per experiment in observatory.lab_ledger ([{"name", "results": dir or [dirs]}]), apart from
+    the user's own agent usage. Relative paths are relative to the config file; an entry that cannot be read is unavailable."""
+    path = Path(config) if config else observatory_history.HOME / "config.json"
+    ledger = {"configured": False, "error": None, "experiments": [], "total_cost_usd": 0, "total_complete": True}
+    try:
+        entries = observatory_history.read_config(path).get("observatory", {}).get("lab_ledger") or []
+    except (OSError, ValueError) as exc:
+        return {**ledger, "error": f"unreadable config: {exc}"[:300]}
+    for index, entry in enumerate(entries):
+        entry = entry if isinstance(entry, dict) else {}
+        name = entry["name"] if isinstance(entry.get("name"), str) and entry["name"] else f"lab_ledger[{index}]"
+        results = [entry.get("results")] if isinstance(entry.get("results"), str) else entry.get("results")
+        if not isinstance(results, list) or not results or not all(isinstance(item, str) and item for item in results):
+            ledger["experiments"].append({"name": name, "available": False, "error": "results must be a directory or a list of them"})
+            continue
+        try:
+            ledger["experiments"].append(lab_experiment(name, [Path(path.parent, Path(item).expanduser()) for item in results]))
+        except OSError:
+            ledger["experiments"].append({"name": name, "available": False, "error": "results directory unavailable"})
+        except ValueError:
+            ledger["experiments"].append({"name": name, "available": False, "error": "unreadable receipt or result"})
+    available = [item for item in ledger["experiments"] if item["available"]]
+    return {**ledger, "configured": bool(ledger["experiments"]), "total_cost_usd": round(sum(item["cost_usd"] for item in available), 6),
+            "total_complete": len(available) == len(ledger["experiments"]) and not any(item["unpriced"] for item in available)}
+
+
 def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provider=None, project_provider=None, curation_provider=None,
                    observatory_provider=None):
     entries, registry_errors = registry_entries(registry)
@@ -1298,6 +1379,7 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
         },
         "causal_evidence": load_causal_evidence(),
         "lab_report": load_lab_report(),
+        "lab_ledger": load_lab_ledger(),
         "curation": {key: value for key, value in curation.items() if key not in ("by_project", "proposals_by_project")},
     }
 

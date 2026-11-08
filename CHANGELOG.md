@@ -6,8 +6,36 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Added
+
+- `effort_segments` (`[start, model, effort]`) from Codex `turn_context` and Claude assistant rows, stored by `record`; each
+  report row lists its attributed commits with the model and effort in force at commit time (`commit_efforts`).
+
+- Dashboard snapshot field `lab_ledger`: the spend 007 itself caused, per experiment listed in the local config
+  (`observatory.lab_ledger: [{"name": ..., "results": "dir" or ["dir", ...]}]`, paths relative to the config file), kept apart
+  from the user's own agent usage. Per experiment: first and last attempt (from `dispatch.jsonl`), attempts, valid, invalid,
+  orphan receipts, USD with its sources, USD on attempts without a valid result; plus a total. Sums of `007 lab run` runner
+  receipts, a client estimate and not an invoice: an attempt without a cost is counted as unpriced (the total becomes a lower
+  bound), never as zero, and a missing or unreadable directory is reported unavailable instead of failing the read.
+- Dashboard panel "What each 007 experiment cost" shows that field under "Spend and cost", labelled as an estimate; with
+  nothing configured it says only "No 007 experiments configured".
+
+### Changed
+
+- A session whose turns used more than one model or effort is labelled `mixed` instead of its last value, so a mixed-model
+  session is no longer priced at one model's rate nor matched to one model's calibration. Claude's `<synthetic>` placeholder is
+  not a model.
+
+- Dashboard: "Full evidence and operations" now uses the verdict home's type scale, spacing, flat 6 px cards and colour tokens,
+  and its summary reads as a section header. Its panels are grouped under Spend and cost, Activity and coverage, Outcomes and
+  gates, and Data quality; route economics, authority counts, dataset counts and the case-evolution chart start collapsed.
+  Groups are h2 and panels h3, so the page keeps one h1 and no skipped heading level. Table headers are sentence case
+  everywhere, the live-session table included. No claim wording changed.
+
 ### Fixed
 
+- The lab spend ledger keeps a missing receipt or an amount without cost provenance unpriced. Zero is inferred only for the
+  runner's explicit pre-reservation refusal marker; a missing file by itself never completes the cost coverage.
 - Local session capture reads every Codex and Claude log whole, streaming row metadata with bounded memory, and reads a growing
   log on from a byte cursor. It read only the last 4 MiB of a Codex rollout (64 MiB for Claude) and counted the unread head as
   active: on the maintainer's machine one 541 MB rollout was a single 291 h activity interval instead of 35 (60 h), so it was
@@ -28,17 +56,6 @@ schemas, and the dashboard snapshot.
   every read from the metadata kept per log.
 - The passive Claude reader counts each response once (Claude Code repeats a response's usage on one row per content block: 52%
   of the maintainer's assistant rows), and a present but invalid token counter makes usage incomplete instead of zero.
-
-### Added
-
-- `effort_segments` (`[start, model, effort]`) from Codex `turn_context` and Claude assistant rows, stored by `record`; each
-  report row lists its attributed commits with the model and effort in force at commit time (`commit_efforts`).
-
-### Changed
-
-- A session whose turns used more than one model or effort is labelled `mixed` instead of its last value, so a mixed-model
-  session is no longer priced at one model's rate nor matched to one model's calibration. Claude's `<synthetic>` placeholder is
-  not a model.
 
 ## [1.6.2] - 2026-11-08
 

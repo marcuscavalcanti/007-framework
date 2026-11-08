@@ -174,6 +174,56 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(aggregate["cost_coverage"], 1.0)
         self.assertEqual(aggregate["cost_accounting_status"], "provisional")
 
+    def test_lab_ledger_sums_007_receipts_per_experiment_and_never_crashes_on_a_bad_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.json"
+            self.assertEqual(dashboard.load_lab_ledger(config)["configured"], False)  # no config file: nothing configured
+            first, second = root / "results", root / "next-results"
+            first.mkdir(), second.mkdir()
+            write = lambda path, value: path.write_text(value if isinstance(value, str) else json.dumps(value))
+            write(first / "t1-r01-low.json", {"valid": True})
+            write(first / "t1-r01-low.runner.json", {"cost_usd": 1.25, "cost_source": "client-estimate", "valid": True})
+            write(first / "t1-r01-high.json", {"valid": False})
+            write(first / "t1-r01-high.runner.json", {"cost_usd": 0.5, "cost_source": "client-estimate", "valid": False})
+            write(first / "t2-r01-low.runner.json", "")  # orphan: reserved, never finished
+            write(first / "t2-r01-high.json", {"valid": False, "runner_receipt_sha256": "unmeasured"})  # refused before spending
+            write(first / "dispatch.jsonl", '{"cell":"t1-r01-low","dispatched_at":"2026-11-01T10:00:00+00:00"}\n'
+                  '{"cell":"t1-r01-high","finished_at":"2026-11-02T09:00:00Z"}\n{"cut')
+            write(second / "t1-next-r01-low.json", {"valid": True})
+            write(second / "t1-next-r01-low.runner.json", {"cost_usd": 2, "cost_source": "rate-card-estimate"})
+            write(first / "report.json", {"valid": True})  # not a cell
+            write(config, {"observatory": {"lab_ledger": [
+                {"name": "chain", "results": ["results", str(second)]},
+                {"name": "gone", "results": "missing"},
+                {"name": "broken"}]}})
+            ledger = dashboard.load_lab_ledger(config)
+        chain, gone, broken = ledger["experiments"]
+        self.assertTrue(ledger["configured"])
+        self.assertEqual({key: chain[key] for key in ("attempts", "valid", "invalid", "orphans", "unpriced")},
+                         {"attempts": 5, "valid": 2, "invalid": 2, "orphans": 1, "unpriced": 1})
+        self.assertEqual((chain["cost_usd"], chain["invalid_cost_usd"]), (3.75, 0.5))
+        self.assertEqual(chain["cost_sources"], {"client-estimate": 2, "rate-card-estimate": 1})
+        self.assertEqual((chain["first_attempt_at"], chain["last_attempt_at"]),
+                         ("2026-11-01T10:00:00+00:00", "2026-11-02T09:00:00+00:00"))
+        self.assertEqual((gone["available"], gone["error"]), (False, "results directory unavailable"))
+        self.assertFalse(broken["available"])
+        self.assertEqual(ledger["total_cost_usd"], 3.75)
+        self.assertFalse(ledger["total_complete"])  # an orphan and two unavailable experiments: the total is a lower bound
+
+    def test_lab_ledger_does_not_price_a_missing_receipt_or_unattributed_amount_as_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "missing-r01-low.json").write_text(json.dumps({"valid": True}))
+            (root / "amount-r01-low.json").write_text(json.dumps({"valid": False}))
+            (root / "amount-r01-low.runner.json").write_text(json.dumps({"cost_usd": 7}))
+            config = root / "config.json"
+            config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": "fixture", "results": "."}]}}))
+            ledger = dashboard.load_lab_ledger(config)
+            self.assertEqual(ledger["experiments"][0]["unpriced"], 2)
+            self.assertFalse(ledger["total_complete"])
+            self.assertEqual(ledger["total_cost_usd"], 0)  # known subtotal, not a measured zero for these attempts
+
     def test_lab_report_carries_the_repository_cli_and_model_it_is_bound_to(self):
         # audit F09: a bare report path has no repository identity, so its verdict must not read as evidence for any repository
         with tempfile.TemporaryDirectory() as tmp:
