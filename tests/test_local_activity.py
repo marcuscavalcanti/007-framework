@@ -1,12 +1,14 @@
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -146,10 +148,11 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertFalse(result["usage"]["usage_complete"])
                 self.assertIsNone(activity.pricing_request(result))
 
-    def test_codex_clipped_tail_keeps_observed_tokens_without_complete_usage_or_price(self):
+    def test_codex_log_over_4_mib_is_read_whole_so_usage_is_complete_and_priced(self):
+        # a 527 MB rollout read only in its last 4 MiB reported 4 M tokens instead of 2.5 bn, unpriced
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "codex-clipped.jsonl")
+            path = Path(tmp, "codex-large.jsonl")
             rows = codex_rows("codex-clipped", Path(tmp))[:4] + [
                 {"timestamp": "2026-08-30T14:01:00Z", "type": "event_msg", "payload": {
                     "type": "token_count", "info": {
@@ -166,11 +169,9 @@ class LocalActivityTests(unittest.TestCase):
             write_jsonl(path, rows)
             result = activity.parse_codex_session(path, NOW)
 
-        self.assertEqual(result["usage"]["total_tokens"], 9)
-        self.assertFalse(result["usage"]["usage_complete"])
-        self.assertIsNone(activity.pricing_request(result))
-        self.assertEqual(activity.HeadroomPricer(runner=lambda _: self.fail("clipped usage was priced"))
-                         .quote([result])[0]["pricing_source"], "usage-incomplete")
+        self.assertEqual(result["usage"]["total_tokens"], 129)
+        self.assertTrue(result["usage"]["usage_complete"])
+        self.assertEqual(activity.pricing_request(result)["completion_tokens"], 22)
 
     def test_usage_completeness_is_visible_in_project_summary_without_promoting_cost(self):
         activity = self.module()
@@ -245,6 +246,121 @@ class LocalActivityTests(unittest.TestCase):
             write_jsonl(flagged, [{**row, "isSidechain": True}])
             marks = [activity.parse_claude_session(p, NOW)["subagent"] for p in (main, sub, flagged)]
         self.assertEqual(marks, [False, True, True])
+
+    def test_codex_children_and_reviews_report_their_root_session_as_subagents(self):
+        # 200 of 247 commits were "ambiguous" because each subagent and auto-review thread competed with the thread that spawned it
+        activity = self.module()
+        spawn = {"subagent": {"thread_spawn": {"parent_thread_id": "root", "depth": 1}}}
+        metas = {"root": {"thread_source": "user", "source": "vscode", "session_id": "root"},
+                 "worker": {"thread_source": "subagent", "source": spawn, "parent_thread_id": "root", "session_id": "root"},
+                 "review": {"thread_source": "guardian_review", "source": {"subagent": {"other": "guardian"}},
+                            "parent_thread_id": "worker", "session_id": "root"},
+                 "older": {"thread_source": "subagent", "source": spawn, "parent_thread_id": "root", "session_id": "older"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            results = {}
+            for thread, meta in metas.items():
+                rows = codex_rows(thread, Path(tmp))
+                rows[0]["payload"].update(meta)
+                write_jsonl(Path(tmp, f"{thread}.jsonl"), rows)
+                results[thread] = activity.parse_codex_session(Path(tmp, f"{thread}.jsonl"), NOW)
+        self.assertEqual({t: (r["session_id"], r["log_id"], r["subagent"]) for t, r in results.items()},
+                         {"root": ("root", "root", False), "worker": ("root", "worker", True), "review": ("root", "review", True),
+                          "older": ("root", "older", True)})
+
+    def test_codex_effort_segments_follow_turn_context_and_a_mixed_session_is_labelled_mixed(self):
+        activity = self.module()
+        epoch = lambda text: int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "mixed.jsonl")
+            write_jsonl(path, codex_rows("mixed", Path(tmp)) + [
+                {"timestamp": "2026-08-30T14:10:00Z", "type": "turn_context", "payload": {"model": "gpt-5.6-sol", "effort": "xhigh"}},
+                {"timestamp": "2026-08-30T14:20:00Z", "type": "turn_context", "payload": {"model": "gpt-5.6-sol", "effort": "high"}}])
+            result = activity.parse_codex_session(path, NOW)
+            write_jsonl(path, codex_rows("one", Path(tmp)))
+            same = activity.parse_codex_session(path, NOW)
+        self.assertEqual((result["model"], result["effort"]), ("gpt-5.6-sol", "mixed"))
+        self.assertEqual(result["effort_segments"], [[epoch("2026-08-30T14:00:02Z"), "gpt-5.6-sol", "xhigh"],
+                                                     [epoch("2026-08-30T14:20:00Z"), "gpt-5.6-sol", "high"]])
+        self.assertEqual((same["effort"], len(same["effort_segments"])), ("xhigh", 1))
+
+    def test_compressed_codex_logs_are_read_and_counted_as_unread_without_a_decoder(self):
+        # 2819 of 2879 local rollouts are *.jsonl.zst: compression.zstd (3.14+), else the zstd binary, else a visible count
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plain = root / "codex/rollout-z.jsonl"
+            write_jsonl(plain, codex_rows("z", root))
+            packed = Path(f"{plain}.zst")
+            binary = shutil.which("zstd")
+            if activity.ZSTD is not None:
+                packed.write_bytes(activity.ZSTD.compress(plain.read_bytes()))
+            elif binary:
+                subprocess.run([binary, "-q", str(plain), "-o", str(packed)], check=True)
+            else:
+                self.skipTest("no zstd encoder")
+            plain.unlink()
+            os.utime(packed, (NOW.timestamp(), NOW.timestamp()))
+
+            def collect(module, which):
+                with mock.patch.object(activity, "ZSTD", module), mock.patch.object(activity.shutil, "which", lambda _: which):
+                    result = activity.ActivityCollector(codex_root=root / "codex", claude_root=root / "x", kimi_root=root / "x",
+                                                        gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: [])
+                                                        ).collect([{"project_id": "p", "path": str(root)}], NOW)
+                return result["projects"]["p"]["sessions"], [error["error"] for error in result["errors"]]
+
+            if activity.ZSTD is not None:
+                self.assertEqual(collect(activity.ZSTD, None), (1, []))
+            if binary:
+                self.assertEqual(collect(None, binary), (1, []))
+            sessions, errors = collect(None, None)
+        self.assertEqual(sessions, 0)
+        self.assertEqual(errors, ["1 compressed log(s) not read: needs Python 3.14+ (compression.zstd) or the zstd binary"])
+
+    def test_claude_session_opened_outside_a_repository_maps_to_the_repository_its_rows_move_into(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, repo = Path(tmp), Path(tmp, "repo")
+            (repo / "sub").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            row = {"type": "user", "sessionId": "c", "timestamp": "2026-08-30T14:00:00Z"}
+            write_jsonl(root / "claude/c.jsonl", [{**row, "cwd": tmp}, {**row, "cwd": str(repo / "sub")}])
+            collector = activity.ActivityCollector(codex_root=root / "x", claude_root=root / "claude", kimi_root=root / "x",
+                                                   gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: []))
+            result = collector.collect([{"project_id": "p", "path": str(repo)}], NOW)
+        self.assertEqual(result["projects"]["p"]["sessions"], 1)
+        self.assertEqual(result["projects"]["p"]["recent_sessions"][0]["cwds"], [tmp, str(repo / "sub")])
+
+    def test_status_and_window_move_with_the_clock_when_the_log_does_not_change(self):
+        # audit F05: a result cached by file size/mtime stayed "active" and kept tokens that had left the window
+        activity = self.module()
+        row = {"type": "assistant", "sessionId": "c", "message": {"id": "m1", "model": "claude-opus-5", "usage": {"input_tokens": 100, "output_tokens": 20}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_jsonl(root / "claude/c.jsonl", [{**row, "cwd": tmp, "timestamp": "2026-08-29T15:01:00Z"},
+                                                   {**row, "cwd": tmp, "timestamp": "2026-08-30T14:59:30Z",
+                                                    "message": {**row["message"], "id": "m2", "usage": {"input_tokens": 10, "output_tokens": 2}}}])
+            collector = activity.ActivityCollector(codex_root=root / "x", claude_root=root / "claude", kimi_root=root / "x",
+                                                   gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: []))
+            now = collector.parse("claude", root / "claude/c.jsonl", NOW)
+            later = collector.parse("claude", root / "claude/c.jsonl", NOW + timedelta(minutes=10))
+        self.assertEqual((now["status"], now["usage"]["total_tokens"]), ("active", 132))
+        self.assertEqual((later["status"], later["usage"]["total_tokens"]), ("idle", 12))
+
+    def test_claude_counts_each_message_once_and_an_invalid_counter_is_unknown_not_zero(self):
+        # audit F06: Claude Code writes one row per content block of a response, each with its usage (52% of local rows repeat an
+        # earlier message id; the last row carries the final output count)
+        activity = self.module()
+        row = {"type": "assistant", "sessionId": "c", "timestamp": "2026-08-30T14:00:00Z"}
+        usage = lambda output: {"model": "claude-opus-5", "id": "m1", "usage": {"input_tokens": 100, "output_tokens": output}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "c.jsonl")
+            write_jsonl(path, [{**row, "cwd": tmp, "message": usage(5)}, {**row, "cwd": tmp, "message": usage(20)}])
+            once = activity.parse_claude_session(path, NOW)
+            write_jsonl(path, [{**row, "cwd": tmp, "message": {**usage(20), "usage": {"input_tokens": "invalid", "output_tokens": -10}}}])
+            invalid = activity.parse_claude_session(path, NOW)
+        self.assertEqual((once["usage"]["total_tokens"], once["usage"]["usage_complete"]), (120, True))
+        self.assertFalse(invalid["usage"]["usage_complete"])
+        self.assertIsNone(activity.pricing_request(invalid))
 
     def test_claude_usage_excludes_messages_before_window(self):
         activity = self.module()
@@ -414,10 +530,11 @@ class LocalActivityTests(unittest.TestCase):
         for result in results.values():
             self.assertTrue(all(isinstance(x, int) for pair in result["active_intervals"] for x in pair))
 
-    def test_clipped_log_counts_its_unread_head_as_active_so_it_can_only_add_ambiguity(self):
+    def test_log_over_4_mib_keeps_its_real_pauses_instead_of_one_interval_from_the_start(self):
+        # the unread head of a clipped log counted as active: one fake 291 h interval instead of 34 real ones (58 h)
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "codex-clipped.jsonl")
+            path = Path(tmp, "codex-large.jsonl")
             rows = codex_rows("codex-clipped", Path(tmp))[:1] + [
                 {"type": "response_item", "payload": {"padding": "x" * (4 * 1024 * 1024)}},
                 {"timestamp": "2026-08-30T18:02:00Z", "type": "turn_context", "payload": {"model": "m", "effort": "low"}},
@@ -425,7 +542,23 @@ class LocalActivityTests(unittest.TestCase):
             write_jsonl(path, rows)
             result = activity.parse_codex_session(path, NOW)
         start = int(datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc).timestamp())
-        self.assertEqual(result["active_intervals"], [[start, start + 4 * 3600 + 180]])
+        self.assertEqual(result["active_intervals"], [[start, start], [start + 4 * 3600 + 120, start + 4 * 3600 + 180]])
+
+    def test_collector_reads_a_growing_log_from_its_cursor_and_waits_for_a_torn_row(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex/grow.jsonl"
+            lines = [json.dumps(row) + "\n" for row in codex_rows("grow", root)]
+            collector = activity.ActivityCollector(codex_root=root / "codex", claude_root=root / "x", kimi_root=root / "x",
+                                                   gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: []))
+            path.parent.mkdir()
+            for chunk in ("".join(lines[:3]), "".join(lines[3:5]) + lines[5][:20], lines[5][20:]):
+                with path.open("a") as handle:
+                    handle.write(chunk)
+                collector.parse("codex", path, NOW)
+            self.assertEqual(collector.cursors[path][1], path.stat().st_size)
+            self.assertEqual(collector.parse("codex", path, NOW), activity.parse_codex_session(path, NOW))
 
     def test_collector_applies_the_activity_gap_parameter(self):
         activity = self.module()

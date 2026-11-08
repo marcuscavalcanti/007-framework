@@ -6,6 +6,40 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Fixed
+
+- Local session capture reads every Codex and Claude log whole, streaming row metadata with bounded memory, and reads a growing
+  log on from a byte cursor. It read only the last 4 MiB of a Codex rollout (64 MiB for Claude) and counted the unread head as
+  active: on the maintainer's machine one 541 MB rollout was a single 291 h activity interval instead of 35 (60 h), so it was
+  credited with commits made while it was idle, with 4 M tokens instead of 2.6 bn. Each stored row names its log (`log_id`) and
+  the store keeps a log's newest whole read, so the next `record` pass replaces a clipped interval.
+- Compressed Codex rollouts (`*.jsonl.zst`, 2,819 of 2,879 on the maintainer's machine) are read: `compression.zstd` on
+  Python 3.14+, else the `zstd` binary. Without either they are counted in `activity_errors` and in `record`'s output
+  (`unreadable_logs`), never skipped silently.
+- Codex subagent and auto-review (guardian) threads report their root session's id with `subagent: true`, as Claude subagent logs
+  do, so they no longer compete with the thread that spawned them for its commits; rows stored under a child's own id join the
+  root once `record` reads the child's log again. With this release's fixes, one `record` pass on the maintainer's machine took
+  one repository from 8 attributed, 200 ambiguous and 43 unattributed commits to 198, 13 and 40.
+- With `observatory.auto`, a Codex worktree (`~/.codex/worktrees/<name>/<repo>`) is the same project as its repository (git
+  common dir) instead of a project of its own.
+- A Claude session opened outside a repository maps to the first repository its rows move into (`cwds`), not only to its first
+  row's directory.
+- The activity panel no longer freezes a session's status and its 24 h window while the log is unchanged: both are recomputed at
+  every read from the metadata kept per log.
+- The passive Claude reader counts each response once (Claude Code repeats a response's usage on one row per content block: 52%
+  of the maintainer's assistant rows), and a present but invalid token counter makes usage incomplete instead of zero.
+
+### Added
+
+- `effort_segments` (`[start, model, effort]`) from Codex `turn_context` and Claude assistant rows, stored by `record`; each
+  report row lists its attributed commits with the model and effort in force at commit time (`commit_efforts`).
+
+### Changed
+
+- A session whose turns used more than one model or effort is labelled `mixed` instead of its last value, so a mixed-model
+  session is no longer priced at one model's rate nor matched to one model's calibration. Claude's `<synthetic>` placeholder is
+  not a model.
+
 ## [1.6.2] - 2026-11-08
 
 Patch release: the confirmed findings of an external audit of 1.6.1, the contribution rules, reviewer identity levels and

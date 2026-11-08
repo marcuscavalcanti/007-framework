@@ -172,14 +172,65 @@ class ObservatoryHistoryTests(unittest.TestCase):
     def test_one_session_id_over_several_logs_keeps_the_latest_row_with_the_union_of_their_intervals(self):
         # Claude subagent logs (<session>/subagents/agent-*.jsonl) carry the parent sessionId; the latest row alone can be a
         # 20-minute subagent, and its intervals alone would hand the main session's commits to another session (a guess)
-        main = self.session("a", "2026-10-25T18:05:00Z", model="main-model", active_intervals=[[T0, T0 + 60], [T0 + 9000, T0 + 9100]])
-        sub = self.session("a", "2026-10-25T04:05:00Z", model="sub-model", active_intervals=[[T0 + 30, T0 + 5000]])
+        main = self.session("a", "2026-10-25T18:05:00Z", model="main-model", source="claude",
+                            active_intervals=[[T0, T0 + 60], [T0 + 9000, T0 + 9100]])
+        sub = self.session("a", "2026-10-25T04:05:00Z", model="sub-model", source="claude", active_intervals=[[T0 + 30, T0 + 5000]])
         rows = self.hist.snapshot(FakeCollector([main, sub]), [], {"p1"}, None)
         self.assertEqual(self.hist.record(self.store, rows), 2)
         self.assertEqual(self.hist.record(self.store, rows), 0, "an older log's row is not appended again on every pass")
         loaded, = self.hist.load(self.store)
         self.assertEqual((loaded["updated_at"], loaded["model"]), ("2026-10-25T18:05:00Z", "main-model"))
         self.assertEqual(loaded["active_intervals"], [[T0, T0 + 5000], [T0 + 9000, T0 + 9100]])
+
+    def codex_row(self, sid, **extra):
+        return {"source": "codex", "session_id": sid, "project_id": "p1", "cwd": "/x", "model": "m", "effort": "high",
+                "started_at": T0, "updated_at": T0 + 9000, "total_tokens": 1, "reasoning_output_tokens": 0, **extra}
+
+    def test_a_whole_log_read_replaces_the_interval_a_clipped_tail_read_stored(self):
+        # 1.6 stored one fake 291 h interval for a 527 MB rollout read from its last 4 MiB; a union of rows would keep it forever
+        clipped = self.codex_row("a", active_intervals=[[T0, T0 + 9000]])
+        whole = self.codex_row("a", log_id="a", subagent=False, active_intervals=[[T0, T0 + 60], [T0 + 8000, T0 + 9000]])
+        self.assertEqual(self.hist.record(self.store, [clipped]), 1)
+        self.assertEqual(self.hist.record(self.store, [whole]), 1, "same updated_at, but the parse differs")
+        self.assertEqual(self.hist.record(self.store, [whole, clipped]), 0)
+        self.assertEqual(self.hist.load(self.store)[0]["active_intervals"], [[T0, T0 + 60], [T0 + 8000, T0 + 9000]])
+
+    def test_codex_children_and_reviews_join_their_root_session_even_when_stored_under_their_own_id(self):
+        repo = self.git_repo("project-delta", commit_at=T0 + 5000)
+        self.hist.record(self.store, [
+            self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("root", log_id="worker", subagent=True, model="m2", active_intervals=[[T0 + 4800, T0 + 5200]]),
+            self.codex_row("root", log_id="review", subagent=True, model="codex-auto-review", active_intervals=[[T0 + 4900, T0 + 5100]]),
+            self.codex_row("legacy", active_intervals=[[T0 + 4900, T0 + 5100]]),  # a child as 1.6 stored it, under its own id
+            self.codex_row("root", log_id="legacy", subagent=True, active_intervals=[[T0 + 4900, T0 + 5100]])])
+        row, = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual((row["session_id"], row["model"], len(row["commits"]), row["ambiguous_commits"]), ("root", "m", 1, []))
+
+    def test_a_linked_worktree_is_one_project_with_its_repository(self):
+        repo = self.git_repo("project-zeta")
+        worktree = Path(self.tmp.name, "worktrees", "w1", "project-zeta")
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(worktree)], cwd=repo, check=True, capture_output=True)
+        with mock.patch.object(self.hist, "TEMPORARY", ()):  # this test's repositories live in the temporary directory
+            self.assertEqual({self.hist.git_root(str(path)) for path in (repo, repo / "sub", worktree)}, {str(repo)})
+
+    def test_auto_follows_a_session_into_the_repository_its_rows_moved_to(self):
+        repo, home = self.git_repo("project-eta"), Path(self.tmp.name, "home")
+        home.mkdir()
+        session = self.session("a", "2026-10-22T10:05:00Z", project=None, cwd=str(home), cwds=[str(home), str(repo / "sub")])
+        with mock.patch.object(self.hist, "TEMPORARY", ()):
+            rows = self.hist.snapshot(FakeCollector([session]), [], allowed=set(), now=None, auto=True)
+        self.assertEqual([r["project_id"] for r in rows], [f"git:{repo}"])
+
+    def test_nothing_is_recorded_until_the_user_opts_in(self):
+        # the open-source default: observatory.auto is off; only a config naming projects (or auto: true) records anything
+        home = Path(self.tmp.name, "home")
+        home.mkdir()
+        result = subprocess.run([sys.executable, str(ROOT / "scripts" / "observatory_history.py"), "record", "--config",
+                                 str(home / "config.json"), "--store", str(self.store)],
+                                env={**os.environ, "HOME": str(home)}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(self.store.exists())
+        self.assertEqual(self.hist.allowed(self.hist.read_config(home / "config.json"), [], self.store), set())
 
     def test_report_runs_the_observatory_on_an_opted_in_project_and_refuses_others(self):
         repo = Path(self.tmp.name, "repo")

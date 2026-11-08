@@ -100,7 +100,8 @@ their full claim.
 
 Tools for this thesis: `scripts/effort_lab.py` (`007 lab`: mine, sensitivity, run, chain, report, feasibility, sufficiency),
 `scripts/line_trial.py` (per-run effort assignment and content-based line survival for a launcher),
-`scripts/choice_observatory.py` (session → commit attribution and line survival, with an explicit evidence level) and
+`scripts/choice_observatory.py` (session → commit attribution, with the model and effort in force at each commit, and line
+survival, with an explicit evidence level) and
 `scripts/effort_trial.py` (opt-in randomized default effort; **off by default**).
 
 > **1.6.0** (published 2026-11-08): adds `007 lab` and restates the thesis as a decision tested

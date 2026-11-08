@@ -4,8 +4,10 @@ Level 0: a session was observed (model, effort, times). Level 1: commits are att
 is mature. Attribution is a heuristic: a commit belongs to the one session of this repository whose active intervals (row
 timestamps, local_activity.active_intervals) +- slack hold its committer time; a session without intervals falls back to
 [start - slack, end + slack]; inside two sessions it is "ambiguous", never guessed. Commits come from every local branch and every
-worktree's HEAD (BRANCHES). Durability is line survival (git blame) on HEAD at the last commit before each window's cutoff; an
-attributed commit HEAD does not reach is "not merged": neither surviving nor reworked. Callers pass the project's sessions
+worktree's HEAD (BRANCHES). Rows sharing a session id (Claude subagent logs, Codex subagent and auto-review threads) are one
+owner; each attributed commit carries the model and effort in force at its time (commit_efforts, from effort_segments).
+Durability is line survival (git blame) on HEAD at the last commit before each window's cutoff; an attributed commit HEAD does
+not reach is "not merged": neither surviving nor reworked. Callers pass the project's sessions
 (local_activity maps cwd to project) and, as rivals, those of other projects on the same repository (a worktree registered apart).
 Level 3 (Calibrated): `calibrated` reads a holdout analysis (007-thesis-d-holdout-analysis/v1) configured for the session's
 project, CLI and model; `questions` turns one session into the dashboard's three questions. Level 2 and External are not built.
@@ -62,11 +64,13 @@ def _spans(session, slack_s):
 
 
 def attribute(repo, sessions, slack_s=600):
+    """Rows sharing a session id (its main log, Claude subagents, Codex children and reviews) are ONE owner, never rivals."""
     windows = [(s["session_id"], _spans(s, slack_s)) for s in sessions]
     result = {"sessions": {s["session_id"]: [] for s in sessions}, "unattributed": {},
-              "ambiguous": {s["session_id"]: [] for s in sessions}}
+              "ambiguous": {s["session_id"]: [] for s in sessions}, "committed_at": {}}
     for sha, when in reversed(_commits(repo)):  # oldest first
-        owners = [sid for sid, spans in windows if any(start <= when <= end for start, end in spans)]
+        result["committed_at"][sha] = when
+        owners = list(dict.fromkeys(sid for sid, spans in windows if any(start <= when <= end for start, end in spans)))
         if len(owners) == 1:
             result["sessions"][owners[0]].append(sha)
         else:
@@ -74,6 +78,14 @@ def attribute(repo, sessions, slack_s=600):
             for sid in owners:
                 result["ambiguous"][sid].append(sha)
     return result
+
+
+def route_at(session, when):
+    """{model, effort} in force at epoch `when`: the last of the session's effort_segments ([start, model, effort]) started by
+    then (the first one before any), else the session's own labels."""
+    segments = [s for s in session.get("effort_segments") or [] if s[0] is not None]
+    current = next((s for s in reversed(segments) if s[0] <= when), segments[0] if segments else None)
+    return {"model": current[1], "effort": current[2]} if current else {k: session.get(k) for k in ("model", "effort")}
 
 
 def _last(repo, shas):
@@ -148,6 +160,7 @@ def observe(repo, sessions, now, slack_s=600, windows=(7, 30), rivals=(), surviv
         rows.append({**{k: s.get(k) for k in ("session_id", "source", "model", "effort", "started_at", "updated_at",
                                                "total_tokens", "reasoning_output_tokens")},
                      "commits": shas, "unintegrated_commits": [sha for sha in shas if sha not in head],
+                     "commit_efforts": {sha: route_at(s, attribution["committed_at"][sha]) for sha in shas},
                      "ambiguous_commits": attribution["ambiguous"].get(s["session_id"], []),
                      "durability": dur, "evidence_level": 1 if mature else 0, **extra})
     return rows
