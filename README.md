@@ -449,8 +449,8 @@ longitudinal receipts. Exact boundaries and hashes are in
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). The rules for people and agents,
 including proof by contribution type and who decides, are in
-[AGENTS.md](AGENTS.md). Report vulnerabilities privately per
-[SECURITY.md](SECURITY.md).
+[AGENTS.md](AGENTS.md). Participation follows the [code of conduct](CODE_OF_CONDUCT.md). Report
+vulnerabilities privately per [SECURITY.md](SECURITY.md).
 
 ## License
 

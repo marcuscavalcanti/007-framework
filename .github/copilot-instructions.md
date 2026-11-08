@@ -56,6 +56,11 @@ Governance:
 - Thesis, doctrine and claims change only with the evidence above. A breaking
   change to the CLI, schemas or dashboard snapshot needs a major version
   (`RELEASING.md`).
+- Not adopted yet, by design: a separate governance document (add one when a
+  second maintainer or a sponsor joins), a required DCO sign-off (turn it on at
+  the first non-trivial outside contribution or when an adopter asks for
+  provenance), and a CLA (none while the project stays MIT with no plan to
+  relicense).
 
 ## Adversarial review policy
 

@@ -17,5 +17,6 @@ python3 -m py_compile scripts/*.py
 CI runs the same commands on Python 3.11, 3.12 and 3.13, without secrets, so a
 pull request from a fork gets the same checks.
 
-Report vulnerabilities privately ([SECURITY.md](SECURITY.md)), not in an issue.
+Participation follows the [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately
+([SECURITY.md](SECURITY.md)), not in an issue.
 Maintainers release by [RELEASING.md](RELEASING.md).
