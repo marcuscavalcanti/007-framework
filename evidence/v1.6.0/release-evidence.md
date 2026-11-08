@@ -40,7 +40,9 @@ Recorded before the tag. A later documentary commit is qualified separately, not
   - Route per `AGENTS.md`: Codex `gpt-6-astra`, `xhigh`, read-only, context on stdin.
   - One call on candidate `4326e56`, 586 s. The context was 152,204 bytes (SHA-256 `4b4a970d82c7203bdd32454f3c0dab5cf43765b9b29ad6645c01f14c1ee4b6bd`),
     authorized by the maintainer. It left out `replay_eval.py` and `dashboard/app.js` for size.
-  - The Codex CLI stream does not report the served model, so the reviewer's identity is unverified. Under `AGENTS.md` that is a
+  - Codex reports the served model only by exception: a `model rerouted: A -> B` item when the server's model differs from
+    the request. A match is silent, and the served effort is never reported (codex-rs 0.165.0 source). This stream had no
+    reroute, so the reviewer's served identity is unverified, not contradicted. Under `AGENTS.md` that is a
     failed validation, with no second call and no substitute; this review does not qualify the release.
   - Its findings were read as unverified input and each was checked against the code and data:
     - **Fixed, with tests that fail on the old code:**

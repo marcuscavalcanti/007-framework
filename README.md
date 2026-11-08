@@ -85,7 +85,7 @@ What the instrument learned, and now does by default:
   drops tasks whose prompt alone cannot reach their tests.
 
 Not proven: durability, a 3-point bound for any executor, other repositories or languages, any population claim. Served
-effort is not reported by either CLI (a reasoning-token manipulation check is the only evidence the effort changed). Costs are API-equivalent estimates, not invoices.
+effort is not reported by either CLI (a reasoning-token manipulation check is the only evidence the effort changed), and Codex reports the served model only when it reroutes a request, which fails the run. Costs are API-equivalent estimates, not invoices.
 Raw records of the replays on private repositories stay private because they contain business code; the summaries above are
 their full claim.
 

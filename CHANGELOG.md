@@ -18,6 +18,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - `mine` and `collect` refuse a symlink anywhere on the path of a hidden test or of `.007-accept`, so a mined repository cannot
   redirect writes outside the temporary tree (`replay_eval.hidden_target`, reused).
 - `report` names orphan receipts (an attempt with no result) and refuses to report when no valid cell remains.
+- Codex runs record a server reroute (`model rerouted: A -> B`, the only served-model signal the Codex CLI emits) as the served
+  model, so a rerouted run fails as `served-model-mismatch` instead of passing as unverified.
 - Docs: `--max-usd` is a dispatch reservation, not a hard cap; planning sizes are normal approximations (lower bounds); the
   calibration's error rates are simulation results with the reach set taken as given; keep the set and its margin unchanged
   after the first attempt. "41 commits cannot reach a 3-point verdict" softened to a planning estimate, with errata in the
