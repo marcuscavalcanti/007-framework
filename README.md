@@ -2,9 +2,17 @@
 
 **Evidence-bounded orchestration for reliable agentic coding.**
 
-007 Framework is a small, provider-neutral skill that tells a coding agent how
-to choose the cheapest executor likely to succeed, make the smallest safe
-change, prove the outcome, and report uncertainty without inventing telemetry.
+007 Framework is a provider-neutral toolkit for agentic coding, not an agent. It
+drives the agent CLIs you already use (Codex, Claude Code) and adds three things:
+
+- **`007 lab`** replays your own commits at two reasoning efforts, headless, and
+  tells you, against a margin you declare, whether the lower effort pays in your
+  repository (beta).
+- **A skill** (`SKILL.md`) gives your agents the doctrine: choose the cheapest
+  executor likely to succeed, make the smallest safe change, prove the outcome,
+  and report uncertainty without inventing telemetry.
+- **`007 run`, `record`, `route` and `dashboard`** observe real tasks, require a
+  terminal receipt, route to the cheapest measured executor, and report locally.
 
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
@@ -13,8 +21,9 @@ code that looks finished but must be rewritten, repaired, or explained again.
 
 **Thesis: for the model you chose, `007 lab` shows in your own repository whether a lower reasoning effort pays.** It measures
 the agent time and tokens saved, and tests, against a margin you declare before spending, whether the lower effort loses more
-of the behaviour your commits' own tests check. One verdict per executor and repository; durability is not part of the claim
-until it is measured. The earlier wording, "the same durable change", is what a 3-point margin tests, and that stays open:
+of the behaviour your commits' own tests check, for tasks specified the way your commits are (the commit message plus the
+names its tests pin). One verdict per executor, repository and specification form; durability is not part of the claim until
+it is measured. `007 lab` is beta: two public pre-registered runs, Go only, no `PROVEN` yet. The earlier wording, "the same durable change", is what a 3-point margin tests, and that stays open:
 
 - **Declare the margin by the decision you face.** The loss that would cancel the saving (about 10 points of acceptance at a 30%
   saving) is cheap to test for Codex: roughly 20 commits that reach new behaviour at 2 attempts per arm. Claude's commits

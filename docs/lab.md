@@ -56,6 +56,9 @@ the verdict in plain words at the declared margin.
 
 ## Limits
 
-Commit messages often under-specify what their tests pin. A generated contract states names and strings, never behaviour, but tests can stay out of reach. Tests that fail in every cell carry no signal and leave the metric.
+A verdict holds for the specification form the set used (by default the commit message plus a contract of names its tests
+pin) and is not a claim about other forms, such as written signatures or a skeleton. Filters that keep well-specified tasks
+(`min_message`, the reach set, `sufficiency`) select tasks where the specification is already enough, which pulls a verdict
+toward "equal". Commit messages often under-specify what their tests pin. A generated contract states names and strings, never behaviour, but tests can stay out of reach. Tests that fail in every cell carry no signal and leave the metric.
 
 Durability is harder than it looks. In the repository where this was built, five instruments failed their own sensitivity gates, so durability was not testable there. Proving a binary outcome non-inferior at -5 points needs 235 to 1039 changes per arm, depending on the base rate. Treat `durable` as unproven unless `report` says otherwise.
