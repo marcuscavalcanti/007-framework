@@ -13,6 +13,14 @@ schemas, and the dashboard snapshot.
   issue templates with security reports routed to private reporting; a short `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1 by
   reference). `CONTRIBUTING.md` now points to `AGENTS.md`.
 
+### Fixed
+
+- `007 lab` acceptance no longer passes a test whose suite failed around it (audit 2026-11-08, F01). A `unittest` class or module
+  fixture error (`tearDownClass`, `tearDownModule`) and a `go` package that fails while none of its tests did (`TestMain`'s exit, a
+  panic or fatal error outside a test) used to be dropped, so the tests read `pass` and the cell could be accepted. Those tests now
+  read `error`, in mining and grading alike; a failing test still owns its own package's failure, so tests red at base are graded as
+  before. Tasks mined earlier keep their hash-bound copy of `lab_accept.py`.
+
 ## [1.6.1] - 2026-11-08
 
 Patch release: fixes and documentation; no new command or schema.

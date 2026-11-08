@@ -1,6 +1,7 @@
 """Per-test acceptance for `007 lab`. Stdlib only: it is copied into each candidate tree and runs inside the acceptance sandbox.
 
-Accepted = every hidden test passes and no baseline test regresses (key "__module__"). No test output is kept.
+Accepted = every hidden test passes and no baseline test regresses (key "__module__"). A test whose class, module or package
+fails outside any test reads "error", not "pass". No test output is kept.
 Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report)
 """
 import json
@@ -22,21 +23,30 @@ NODE_REPORTER = """export default async function* (source) {
 }
 """
 UNITTEST_RUNNER = """import json, os, sys, unittest
-out = {}
+out, broken = {}, []
+def where(module):
+    return os.path.relpath(getattr(module, "__file__", "?") or "?", sys.argv[2])
 def key(test):
-    module = sys.modules.get(type(test).__module__)
-    path = os.path.relpath(getattr(module, "__file__", "?") or "?", sys.argv[2])
-    return f"{path} :: 0 :: {type(test).__name__}.{getattr(test, '_testMethodName', str(test))}"
+    return f"{where(sys.modules.get(type(test).__module__))} :: 0 :: {type(test).__name__}.{getattr(test, '_testMethodName', str(test))}"
+def scope(holder):  # "tearDownClass (pkg.mod.Case)" or "setUpModule (pkg.mod)" -> the key prefix of the tests it covers; "" = all
+    names = holder.description.rpartition(" (")[2].rstrip(")").split(".")
+    for i in range(len(names), 0, -1):
+        module = sys.modules.get(".".join(names[:i]))
+        if module is not None:
+            return f"{where(module)} :: 0 :: " + (names[-1] + "." if i < len(names) else "")
+    return ""
 class Result(unittest.TestResult):
     def addSuccess(self, test): out[key(test)] = "pass"
     def addFailure(self, test, err): out[key(test)] = "fail"
-    def addError(self, test, err): out[key(test)] = "fail"
+    def addError(self, test, err):
+        if isinstance(test, unittest.TestCase): out[key(test)] = "fail"
+        else: broken.append(scope(test))  # a class or module fixture failed outside any test
     def addSkip(self, test, reason): out[key(test)] = "skip"
     def addSubTest(self, test, subtest, err):
         if err is not None: out[key(test)] = "fail"
 suite = unittest.defaultTestLoader.discover(sys.argv[3], pattern=sys.argv[4], top_level_dir=".")
 suite.run(Result())
-json.dump(out, open(sys.argv[1], "w"))
+json.dump([out, broken], open(sys.argv[1], "w"))
 """
 
 
@@ -46,6 +56,13 @@ def _run(argv, cwd, env):
 
 def _worst(final, key, outcome):
     final[key] = "fail" if outcome == "fail" or final.get(key) == "fail" else outcome
+
+
+def _charge(final, broken):
+    """A pass inside a class, module or package that failed outside any of its tests is no pass. It reads "error", apart from a
+    test's own "fail", so a test already red at base stays outside the grade. `broken` holds key prefixes; "" covers every test."""
+    broken = tuple(broken)
+    return {k: "error" if v == "pass" and k.startswith(broken) else v for k, v in final.items()}
 
 
 def node(root, cwd, config, env, scratch):
@@ -66,7 +83,8 @@ def unittest_(root, cwd, config, env, scratch):
     report = scratch / "unittest.json"
     pattern = Path(config["tests"]).name
     _run([sys.executable, "-B", "-c", UNITTEST_RUNNER, str(report), str(root), str(Path(config["tests"]).parent), pattern], cwd, env)
-    return json.loads(report.read_text()) if report.exists() else {}
+    out, broken = json.loads(report.read_text()) if report.exists() else ({}, [])
+    return _charge(out, broken)
 
 
 def pytest(root, cwd, config, env, scratch):
@@ -82,15 +100,23 @@ def pytest(root, cwd, config, env, scratch):
 
 def go(root, cwd, config, env, scratch):
     result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
-    final = {}
+    final, failed, red = {}, set(), set()
     for line in result.stdout.decode(errors="replace").splitlines():
         try:
             e = json.loads(line)
         except ValueError:
             continue
-        if e.get("Test") and e.get("Action") in ("pass", "fail", "skip"):
+        if e.get("Action") not in ("pass", "fail", "skip"):
+            continue
+        if e.get("Test"):
             _worst(final, f"{e['Package']} :: 0 :: {e['Test']}", e["Action"])
-    return final
+            if e["Action"] == "fail":
+                red.add(e["Package"])
+        elif e["Action"] == "fail":
+            failed.add(e["Package"])
+    # A package that failed while none of its tests did (TestMain's exit, a panic or fatal error outside a test, the timeout)
+    # leaves its passes unproven. ponytail: one red test owns the package's failure, so it can hide a second, unattributed cause.
+    return _charge(final, (f"{package} :: " for package in failed - red))
 
 
 def custom(root, cwd, config, env, scratch):
