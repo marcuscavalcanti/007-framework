@@ -2,11 +2,14 @@
 
 ## Supported version
 
-Security fixes target the latest tagged release.
+Security fixes target the latest tagged release only; older releases do not get
+fixes.
 
 ## Report a vulnerability
 
-Use GitHub's private vulnerability reporting for this repository. Do not open a
+Use GitHub's
+[private vulnerability reporting](https://github.com/marcuscavalcanti/007-framework/security/advisories/new)
+for this repository. Do not open a
 public issue containing credentials, private prompts, customer data, hidden test
 bodies, or an exploit against a live system.
 

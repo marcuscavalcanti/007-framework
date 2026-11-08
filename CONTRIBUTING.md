@@ -1,26 +1,22 @@
 # Contributing
 
-Contributions should reduce rework without expanding the framework by default.
+The rules for people and agents are in [AGENTS.md](AGENTS.md): proof by
+contribution type, evidence integrity, privacy, licensing and review. Copilot
+reads the same file as `.github/copilot-instructions.md`, and Claude Code reads
+it through `CLAUDE.md`; a test fails if the copy drifts.
 
-## Before opening a change
+## Quick start
 
-1. Describe the observed failure or user outcome.
-2. Search for an existing rule, script, or platform feature.
-3. Keep one behavior per change and state the proof level.
-4. Add the smallest regression check that would fail without the change.
-
-Run:
+Python 3.11+ and Git; no other dependency.
 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 -m py_compile scripts/*.py
 ```
 
-Doctrine changes need stronger evidence than prose: a real failure, frozen
-OLD×NEW task, pre-registered acceptance rule, and results that preserve
-non-target behavior. New provider instructions require verified runtime
-receipts and must remain outside the provider-neutral core when possible.
+CI runs the same commands on Python 3.11, 3.12 and 3.13, without secrets, so a
+pull request from a fork gets the same checks.
 
-Do not submit secrets, customer data, hidden acceptance tests, private repository
-snapshots, raw model transcripts, or generated benchmark outputs containing
-private code.
+Participation follows the [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately
+([SECURITY.md](SECURITY.md)), not in an issue.
+Maintainers release by [RELEASING.md](RELEASING.md).

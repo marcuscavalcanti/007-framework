@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/marcuscavalcanti/007-framework/security/advisories/new
+    about: Report it privately. Never post credentials, private prompts, customer data or an exploit in a public issue.
