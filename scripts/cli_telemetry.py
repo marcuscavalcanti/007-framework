@@ -10,6 +10,10 @@ import sys
 import time
 from pathlib import Path
 
+# Codex reports the served model only by exception, as an item: "model rerouted: <requested> -> <served> (<reason>)"
+# (codex-rs exec event_processor_with_jsonl_output.rs, from the server's openai-model header). A match is silent.
+CODEX_REROUTE = re.compile(r"model rerouted: [A-Za-z0-9_.:/-]{1,160} -> ([A-Za-z0-9_.:/-]{1,160}) \(\w+\)")
+
 
 def validate_command(provider, command):
     if not command or Path(command[0]).name != provider:
@@ -124,6 +128,10 @@ class NativeTelemetry:
                 self.add_usage(row.get("usage"))
                 self.completed += 1
                 self.started = False
+            if self.provider == "codex" and kind == "item.completed" and isinstance(row.get("item"), dict) and row["item"].get("type") == "error":
+                rerouted = CODEX_REROUTE.fullmatch(str(row["item"].get("message", "")))
+                if rerouted:  # the served model differs from the request: the runner then fails it as served-model-mismatch
+                    self.models[rerouted.group(1)] = {}
             if self.provider == "codex" and kind in ("error", "turn.failed"):
                 raise ValueError(native_error_class(row))
             if self.provider == "claude" and kind == "result":

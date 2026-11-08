@@ -1,0 +1,7 @@
+{
+ "critical_floor": 2.4167555815898094,
+ "margin": 0.1,
+ "attempts_per_arm": 2,
+ "draws": 100000,
+ "seed": 20261108
+}

@@ -1,0 +1,132 @@
+"""Per-test acceptance for `007 lab`. Stdlib only: it is copied into each candidate tree and runs inside the acceptance sandbox.
+
+Accepted = every hidden test passes and no baseline test regresses (key "__module__"). No test output is kept.
+Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report)
+"""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import xml.etree.ElementTree as ElementTree
+
+TIMEOUT_S = 800
+NODE_REPORTER = """export default async function* (source) {
+  for await (const e of source) {
+    if (e.type !== 'test:pass' && e.type !== 'test:fail') continue;
+    const d = e.data;
+    const outcome = e.type === 'test:fail' ? 'fail' : d.skip !== undefined || d.todo !== undefined ? 'skip' : 'pass';
+    yield JSON.stringify({ o: outcome, f: d.file, n: d.name, d: d.nesting }) + '\\n';
+  }
+}
+"""
+UNITTEST_RUNNER = """import json, os, sys, unittest
+out = {}
+def key(test):
+    module = sys.modules.get(type(test).__module__)
+    path = os.path.relpath(getattr(module, "__file__", "?") or "?", sys.argv[2])
+    return f"{path} :: 0 :: {type(test).__name__}.{getattr(test, '_testMethodName', str(test))}"
+class Result(unittest.TestResult):
+    def addSuccess(self, test): out[key(test)] = "pass"
+    def addFailure(self, test, err): out[key(test)] = "fail"
+    def addError(self, test, err): out[key(test)] = "fail"
+    def addSkip(self, test, reason): out[key(test)] = "skip"
+    def addSubTest(self, test, subtest, err):
+        if err is not None: out[key(test)] = "fail"
+suite = unittest.defaultTestLoader.discover(sys.argv[3], pattern=sys.argv[4], top_level_dir=".")
+suite.run(Result())
+json.dump(out, open(sys.argv[1], "w"))
+"""
+
+
+def _run(argv, cwd, env):
+    return subprocess.run(argv, cwd=cwd, env=env, capture_output=True, timeout=TIMEOUT_S)
+
+
+def _worst(final, key, outcome):
+    final[key] = "fail" if outcome == "fail" or final.get(key) == "fail" else outcome
+
+
+def node(root, cwd, config, env, scratch):
+    reporter, events = scratch / "reporter.mjs", scratch / "events.jsonl"
+    reporter.write_text(NODE_REPORTER)
+    tests = sorted(str(p) for p in root.glob(config["tests"]))
+    _run([shutil.which("node", path=env["PATH"]), "--test", "--test-concurrency=4", "--test-timeout=120000", f"--test-reporter={reporter}",
+          f"--test-reporter-destination={events}", *tests], cwd, env)
+    final, prefix = {}, str(root.resolve()) + "/"
+    for line in events.read_text().splitlines() if events.exists() else []:
+        e = json.loads(line)
+        clean = lambda text: text.replace(prefix, "").replace(str(root) + "/", "")
+        _worst(final, f"{clean(e.get('f') or '?')} :: {e['d']} :: {clean(e['n'])}", e["o"])
+    return final
+
+
+def unittest_(root, cwd, config, env, scratch):
+    report = scratch / "unittest.json"
+    pattern = Path(config["tests"]).name
+    _run([sys.executable, "-B", "-c", UNITTEST_RUNNER, str(report), str(root), str(Path(config["tests"]).parent), pattern], cwd, env)
+    return json.loads(report.read_text()) if report.exists() else {}
+
+
+def pytest(root, cwd, config, env, scratch):
+    report = scratch / "junit.xml"
+    _run([sys.executable, "-m", "pytest", "-q", "-o", "junit_family=xunit1", f"--junitxml={report}", config["tests"]], cwd, env)
+    final = {}
+    if report.exists():
+        for case in ElementTree.parse(report).getroot().iter("testcase"):
+            bad = case.find("failure") is not None or case.find("error") is not None
+            _worst(final, f"{case.get('file', '?')} :: 0 :: {case.get('classname')}.{case.get('name')}", "fail" if bad else "skip" if case.find("skipped") is not None else "pass")
+    return final
+
+
+def go(root, cwd, config, env, scratch):
+    result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
+    final = {}
+    for line in result.stdout.decode(errors="replace").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("Test") and e.get("Action") in ("pass", "fail", "skip"):
+            _worst(final, f"{e['Package']} :: 0 :: {e['Test']}", e["Action"])
+    return final
+
+
+def custom(root, cwd, config, env, scratch):
+    """config["command"] writes {test id: pass|fail|skip} to $LAB_RAW_REPORT."""
+    raw = scratch / "raw.json"
+    _run(config["command"], cwd, {**env, "LAB_RAW_REPORT": str(raw)})
+    return json.loads(raw.read_text()) if raw.exists() else {}
+
+
+ADAPTERS = {"node": node, "unittest": unittest_, "pytest": pytest, "go": go, "custom": custom}
+
+
+def suite(root, config, scratch):
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "home").mkdir(exist_ok=True)
+    (scratch / "tmp").mkdir(exist_ok=True)
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(scratch / "home"), "TMPDIR": str(scratch / "tmp"), "LANG": "C", "CI": "1", "NODE_ENV": "test", **config.get("env", {})}
+    for command in config.get("prepare", []):
+        _run(command, root, env)
+    return ADAPTERS[config["adapter"]](root, root / config.get("cwd", "."), config, env, scratch)
+
+
+def main(argv):
+    root, report = Path.cwd(), Path(os.environ["ACCEPT_REPORT"])
+    collect = argv[0] == "--collect"
+    config = json.loads(Path(argv[1 if collect else 0]).read_text())
+    final = suite(root, config, report.parent / "lab")
+    if collect:
+        report.write_text(json.dumps(final))
+        return 0
+    hidden, baseline = (json.loads(Path(p).read_text()) for p in argv[1:3])
+    result = {name: final.get(name, "error") for name in hidden}
+    result["__module__"] = "fail" if any(final.get(name) != "pass" for name in baseline) else "pass"
+    report.write_text(json.dumps(result, sort_keys=True))
+    return 0 if all(v == "pass" for v in result.values()) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#07111f">
-  <title>007 Framework — Evidence Cockpit</title>
+  <meta name="theme-color" content="#101315">
+  <title>007 — Minimum sufficient effort</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
@@ -16,7 +16,7 @@
     <aside class="sidebar">
       <div class="brand-lockup">
         <div class="brand-mark" aria-hidden="true"><span>007</span></div>
-        <div><strong>EVIDENCE COCKPIT</strong><span>Reliable agentic delivery</span></div>
+        <div><strong>007</strong><span>Minimum sufficient effort</span></div>
       </div>
       <nav class="project-navigation" aria-label="Project navigation">
         <p class="nav-label">Scope</p>
@@ -36,6 +36,56 @@
       <div class="error-banner" id="error-banner" role="alert" hidden></div>
 
       <div class="content" id="dashboard-content" aria-busy="true">
+        <section class="verdict-home" id="verdict-home">
+          <div class="verdict-hero">
+            <div>
+              <p class="verdict-kicker" id="verdict-kicker">Waiting for data</p>
+              <h1 class="verdict-title" id="verdict-title">No verdict yet.</h1>
+              <p class="verdict-lede" id="verdict-lede"></p>
+            </div>
+            <div class="verdict-gains" id="verdict-gains"></div>
+          </div>
+
+          <section class="verdict-band" aria-labelledby="live-title">
+            <div class="verdict-band-head"><h2 id="live-title">Active now, as 007 judges each session</h2><span class="verdict-live" id="live-status"><i aria-hidden="true"></i><span id="live-count">0 sessions</span></span></div>
+            <p class="verdict-empty" id="live-empty" hidden>No active session right now.</p>
+            <div class="verdict-scroll"><table class="verdict-table" id="live-table">
+              <thead><tr><th scope="col">Session</th><th scope="col">Model</th><th scope="col">Effort</th><th scope="col" class="num">Age</th><th scope="col" class="num">Tokens</th><th scope="col">007 says</th><th scope="col">Evidence</th></tr></thead>
+              <tbody id="live-rows"></tbody>
+            </table></div>
+            <h2 class="verdict-subhead">007 scores, last 30 days</h2>
+            <div class="verdict-scores" id="verdict-scores"></div>
+          </section>
+
+          <section class="verdict-band" aria-labelledby="thesis-title">
+            <h2 id="thesis-title">The claim, and how much of it holds here</h2>
+            <p class="thesis-line">For the model you chose: does a lower effort bring <span id="claim-waiting" class="claim-word">less waiting</span> and <span id="claim-quota" class="claim-word">less quota</span> while keeping the same <span id="claim-change" class="claim-word">change</span> within a margin you declare? <span id="claim-durable" class="claim-word">Durability</span> comes later; <span id="claim-reasoning" class="claim-word">less reasoning</span> only shows the effort changed.</p>
+            <div class="verdict-claims" id="verdict-claims"></div>
+          </section>
+
+          <section class="verdict-band" id="ladder-band" aria-labelledby="ladder-title">
+            <div class="verdict-band-head"><h2 id="ladder-title">Effort ladder</h2><span>Agent time per accepted change</span></div>
+            <div class="verdict-scroll"><div class="effort-ladder" id="effort-ladder"></div></div>
+          </section>
+
+          <section class="verdict-band verdict-split">
+            <div><h2>Advice by model</h2><div id="verdict-advice"></div></div>
+            <div><h2>Prove it on your own code</h2><p class="verdict-note">Headless. Any Git repository, any agent. The source repository is never written. Durable means the change survives the next real change to the same code.</p>
+<pre class="verdict-code"><code>007 lab mine --config lab.json --out lab
+007 lab sensitivity --set lab/replay-set.json
+007 lab run --set lab/replay-set.json --out results \
+  --replicates 3 --max-calls 84 --max-usd 60
+007 lab chain --set lab/replay-set.json \
+  --results results --out next
+007 lab run --set next/replay-set.json --out next-results \
+  --replicates 1 --max-calls 84 --max-usd 60
+007 lab report --set lab/replay-set.json \
+  --results results --next-results next-results</code></pre></div>
+          </section>
+          <p class="verdict-foot">Gates fixed before each run. A blind instrument reports no information, never a pass.</p>
+        </section>
+
+        <details class="evidence-details" id="evidence-details"><summary>Full evidence and operations</summary>
         <section class="hero-panel" aria-labelledby="view-title">
           <div class="hero-copy">
             <div class="eyebrow"><span></span> Evidence-based engineering</div>
@@ -55,7 +105,7 @@
 
         <section class="panel evidence-panel" aria-labelledby="causal-title">
           <div class="evidence-icon" aria-hidden="true">Δ</div><div>
-            <div class="panel-heading"><div><p class="panel-kicker">Controlled comparison · OLD × NEW</p><h2 id="causal-title">Where is there a demonstrated gain?</h2></div><span class="sample-pill" id="causal-strength">Loading</span></div>
+            <div class="panel-heading"><div><p class="panel-kicker">Controlled comparison · OLD × NEW</p><h2 id="causal-title">One historical task, two efforts</h2></div><span class="sample-pill" id="causal-strength">Loading</span></div>
             <p class="evidence-sample" id="causal-scope">Global historical experiment · does not measure the selected project's current gain.</p>
             <p id="causal-claim">Loading the OLD×NEW comparison…</p><p class="evidence-sample" id="causal-sample">Sample N/A</p><p class="evidence-pricing" id="causal-pricing">Cost N/A</p>
             <div class="causal-grid"><span><small>CONTROL · USD / accepted</small><strong id="causal-old-cost">N/A</strong><small id="causal-old-route">Route N/A</small></span><span><small>TREATMENT · USD / accepted</small><strong id="causal-new-cost">N/A</strong><small id="causal-new-route">Route N/A</small></span><span><small>Δ estimated cost</small><strong id="causal-cost-delta">N/A</strong></span><span><small>Δ time / accepted</small><strong id="causal-latency-delta">N/A</strong></span></div>
@@ -161,6 +211,7 @@
           <article class="panel diagnostics-panel"><div class="panel-heading"><div><p class="panel-kicker">Can we trust the dashboard?</p><h2>Data quality</h2></div><span class="diagnostic-count" id="diagnostic-count">0</span></div><ul id="diagnostic-list"></ul></article>
         </section>
 
+        </details>
         <section class="empty-state" id="empty-state" hidden><div class="empty-radar" aria-hidden="true"><span></span></div><p class="panel-kicker">No project registered</p><h2>Connect the first project</h2><p>Run it inside a Git repository. The cockpit will pick up the project on the next cycle.</p><code>007 init</code></section>
       </div>
     </main>

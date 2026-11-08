@@ -1,0 +1,48 @@
+{
+ "tau2_point": {
+  "moments": 0.0027830732025347815,
+  "covariance": 0.00486413581584428
+ },
+ "tau2_upper95_bootstrap": {
+  "moments": 0.006853852363523007,
+  "covariance": 0.009324039686940665
+ },
+ "halves": {
+  "replicates 1-4": {
+   "mean": 0.0065773149614613,
+   "ci95": [
+    -0.01992324203307138,
+    0.03307787195599398
+   ]
+  },
+  "replicates 5-8": {
+   "mean": -0.024783549783549783,
+   "ci95": [
+    -0.06560539057704848,
+    0.016038291009948906
+   ]
+  }
+ },
+ "arms": {
+  "medium": {
+   "cells": 328,
+   "accepted": 181,
+   "median_agent_wall_s": 178.67000000000002,
+   "median_cost_usd": 0.20273259999999999,
+   "total_cost_usd": 70.4355948
+  },
+  "high": {
+   "cells": 324,
+   "accepted": 186,
+   "median_agent_wall_s": 256.76,
+   "median_cost_usd": 0.2957946,
+   "total_cost_usd": 101.1143728
+  }
+ },
+ "tasks_for_80pct_at_8_per_arm": {
+  "tau2=0.0028, true diff +0.000": 53,
+  "tau2=0.0028, true diff -0.009": 108,
+  "tau2=0.0049, true diff +0.000": 71,
+  "tau2=0.0049, true diff -0.009": 145
+ }
+}

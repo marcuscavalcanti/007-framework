@@ -1,0 +1,116 @@
+{
+ "look": 1,
+ "cells_valid": 324,
+ "decision": "CONTINUE",
+ "sequence": {
+  "manipulation": {
+   "medium": 935.5,
+   "high": 2825.0,
+   "passed": true
+  },
+  "time": {
+   "saving": 0.31312453392990314,
+   "ci95": [
+    0.24068732487225986,
+    0.3462104885057471
+   ],
+   "passed": true
+  }
+ },
+ "primary": {
+  "P": {
+   "tasks": 41,
+   "mean": 0.0065773149614613,
+   "ci95": [
+    -0.01992324203307138,
+    0.03307787195599398
+   ],
+   "statistic": 2.7895824514369068,
+   "verdict": "CONTINUE"
+  },
+  "B": {
+   "tasks": 41,
+   "mean": 0.0065773149614613,
+   "ci95": [
+    -0.01992324203307138,
+    0.03307787195599398
+   ],
+   "statistic": 2.7895824514369068,
+   "verdict": "CONTINUE"
+  }
+ },
+ "secondary": {
+  "product_reach": {
+   "P": {
+    "tasks": 40,
+    "mean": 0.003963970057720053,
+    "ci95": [
+     -0.02387226314468463,
+     0.03180020326012473
+    ],
+    "statistic": 2.4679557142581587,
+    "verdict": "CONTINUE"
+   },
+   "B": {
+    "tasks": 40,
+    "mean": 0.003963970057720053,
+    "ci95": [
+     -0.02387226314468463,
+     0.03180020326012473
+    ],
+    "statistic": 2.4679557142581587,
+    "verdict": "CONTINUE"
+   }
+  },
+  "solvable_acceptance": {
+   "tasks": 25,
+   "mean": -0.04666666666666666,
+   "sd": 0.19702650695894816,
+   "ci95": [
+    -0.12799920873932047,
+    0.034665875405987145
+   ]
+  },
+  "timeouts_as_failures": null,
+  "tau2": {
+   "sigma2": 0.014750008835324992,
+   "tau2_moments": -0.00047587714880550393,
+   "tau2_covariance": 0.001588136858082614,
+   "covariance_tasks": 41,
+   "budget_41_tasks": 0.0047
+  },
+  "similarity_to_reference": {
+   "medium": {
+    "median": 0.1355,
+    "over_0_8": 5
+   },
+   "high": {
+    "median": 0.111,
+    "over_0_8": 5
+   }
+  },
+  "invalid_per_arm": {
+   "medium": 0,
+   "high": 4
+  },
+  "failure_classes": [
+   "none",
+   "runner-invalid"
+  ],
+  "requested": [
+   [
+    "gpt-6.1-sol",
+    "high",
+    "high"
+   ],
+   [
+    "gpt-6.1-sol",
+    "medium",
+    "medium"
+   ]
+  ],
+  "settings_sha256": [
+   null
+  ]
+ }
+}

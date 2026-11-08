@@ -38,6 +38,14 @@ class NativeTelemetryTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(result["usage"]["total_tokens"], 12)
 
+    def test_a_codex_reroute_is_the_served_model_and_other_error_items_are_not(self):
+        rows = [{"type": "thread.started", "thread_id": "t"}, {"type": "turn.started"},
+                {"type": "item.completed", "item": {"type": "error", "message": "Code Mode is unavailable"}},
+                {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 2}}]
+        self.assertEqual(self.parse("codex", rows)["model_usage"], {})  # a matching model is silent: nothing is claimed
+        rerouted = {"type": "item.completed", "item": {"type": "error", "message": "model rerouted: gpt-6.1-sol -> gpt-5.2 (HighRiskCyberActivity)"}}
+        self.assertEqual(self.parse("codex", rows[:3] + [rerouted] + rows[3:])["model_usage"], {"gpt-5.2": {}})
+
     def module(self):
         try:
             return importlib.import_module("cli_telemetry")

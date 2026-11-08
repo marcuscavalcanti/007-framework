@@ -67,7 +67,10 @@ class ReviewRouteTests(unittest.TestCase):
         # no apps/plugins/hooks/memory/agents/browser; same features Marcus's other reviewer sessions disable on this binary.
         disabled = {argv[i + 1] for i in range(len(argv) - 1) if argv[i] == "--disable"}
         self.assertLessEqual({"shell_tool", "unified_exec", "apps", "plugins", "hooks", "memories", "multi_agent", "browser_use",
-                              "computer_use", "in_app_browser"}, disabled)
+                              "computer_use", "in_app_browser", "code_mode_host"}, disabled)
+        # The runner that launches the review must accept this exact argv (repeated --disable was refused after r42 R2).
+        import native_runner
+        self.assertEqual(native_runner.native_request("codex", argv), (["gpt-6-astra"], ["xhigh"], ["openai"]))
         self.assertIn(["-c", 'web_search="disabled"'], [argv[i:i + 2] for i in range(len(argv) - 1)])
         self.assertIn("--ignore-rules", argv)
         self.assertIsNone(codex["budget_control"])

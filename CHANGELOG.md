@@ -1,14 +1,40 @@
 # Changelog
 
-All notable changes are documented here.
+All notable changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
+follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html): the public interface is the `007` CLI, the receipt and report
+schemas, and the dashboard snapshot.
 
 ## [Unreleased]
+
+## [1.6.0] - 2026-11-08
+
+Minor release: new commands and schemas are additive, and v1 receipts stay valid. Behaviour changes are listed under
+"Migration and proof boundaries".
+
+### Release review fixes
+
+- `007 lab sensitivity` counts a mutant only where the task's reference patch passes the oracle: an oracle that rejects
+  everything no longer looks sensitive. (go-json's 62 reference patches all passed, so its published gate is unchanged.)
+- `mine` and `collect` refuse a symlink anywhere on the path of a hidden test or of `.007-accept`, so a mined repository cannot
+  redirect writes outside the temporary tree (`replay_eval.hidden_target`, reused).
+- `report` names orphan receipts (an attempt with no result) and refuses to report when no valid cell remains.
+- Codex runs record a server reroute (`model rerouted: A -> B`, the only served-model signal the Codex CLI emits) as the served
+  model, so a rerouted run fails as `served-model-mismatch` instead of passing as unverified.
+- Docs: `--max-usd` is a dispatch reservation, not a hard cap; planning sizes are normal approximations (lower bounds); the
+  calibration's error rates are simulation results with the reach set taken as given; keep the set and its margin unchanged
+  after the first attempt. "41 commits cannot reach a 3-point verdict" softened to a planning estimate, with errata in the
+  go-json results.
+- Dashboard: an equal accepted count reads "matched", never "enough" or "use"; the thesis line follows 1.6.0; less reasoning
+  is a manipulation check; the one-task v1.4 comparison is labelled as such; effort-trial sessions are counted by arm in force
+  (they share draws) and a disabled trial reads paused; blocked tasks no longer read as declared acceptances; worktrees with the
+  same folder name are told apart; live sessions show age and N/A for incomplete usage.
 
 ### Thesis D: minimum sufficient effort
 
 - Product thesis moved from "007 doctrine vs none" to the canonical minimum-intelligence thesis: the least reasoning effort that
   keeps accepted, durable changes, measured per repository. README states the bounded evidence (holdout: Codex `medium` matched
   `xhigh` with ~52% less time; Claude `medium` failed the zero margin; harder tasks at ceiling, Codex only, exploratory).
+- Add `007 --version` (from `SKILL.md`, the single version source) and list `lab` in `007 -h`.
 - Add `choice_observatory.py`: sessions attributed to commits by activity intervals (ambiguous commits are never guessed), line
   survival at 7/30 days, and an evidence level on every judgment; `touch_rate.survival` extracted for reuse.
 - Add `effort_trial.py`/`effort_trial_analysis.py` for an opt-in randomized field trial of default effort (off by default;
@@ -17,8 +43,55 @@ All notable changes are documented here.
   before spending, option allowlist with user configuration sources off, error classes (rate limit vs transient), acceptance run
   inside a sandbox with a minimal environment.
 - Internal planning documents are no longer shipped in the public tree.
+- Thesis restated by what can prove each part: a repository measures the savings and guards against a large loss (`KILL`
+  when the whole interval is below -3 points); a 3-point bound probably needs more commits than one repository like go-json
+  has (a pooled public corpus), with one verdict per executor.
+- Public pre-registered replay on go-json-experiment/json (Codex `medium` vs `high`, 62 commits): reasoning -67%, median agent
+  time -32%, same change +1.3 pp (95% t interval -4.7 to +7.2), not proven. It did not reproduce the +9.4 pp post-hoc Codex gain.
+- `007 lab mine` skips commits with more hidden tests than the acceptance reader takes; `report` counts unreadable test
+  reports as no test passing and names them in `unreadable_outcomes`.
+- README states what one repository can show: measured (time and tokens with intervals), guarded (`KILL` near the loss that
+  erases the saving), bounded (the same change within 3 points stays open); "less reasoning" is the manipulation check.
+- Pre-registration of Claude Opus 5.5 `medium` vs `xhigh` on the same 41 go-json commits, margin 10 points (the decision
+  margin), 2 fresh attempts per arm, critical-value floor fixed in advance: `evidence/go-json-claude-20261107/`.
+- Claude result: −5.5 pp (95% t interval −11.8 to +0.7), not proven at the 10-point margin; agent time −67%, median cost −75%;
+  acceptance on solved commits −11.1 pp (secondary). The between-commit spread was about five times Codex's, so README and
+  `docs/lab.md` now give margin sizes per executor.
+- `007 lab mine` no longer drops a commit that deletes a test or fixture file: hidden files are only those present at the
+  commit (`git log --numstat` lists deleted files too). Found mining BurntSushi/toml, where it dropped 3 of 96 candidates.
+- Pre-registration of a Codex `medium` vs `high` pilot on five pooled zero-dependency Go repositories, margin 5 points: it fixes
+  the reach set, the noise and a go/no-go rule, and the confirmatory rules in advance: `evidence/codex-5pp-20261108/`.
+- Thesis D restated as a decision: `007 lab` shows whether a lower effort pays, against a margin the set declares before any
+  attempt (`compare.margin`, default 3 points, at most 20): break-even, "effectively the same" at 5, research precision at 3.
+  `report` also writes `report.md`, the verdict in plain words. Durability leaves the claim until it is measured.
+- go-json top-up result (pre-registered, 656 attempts, US$173 list price): Codex `medium` vs `high` −0.9 pp, 95% CI −3.4 to
+  +1.6, not proven; agent time −30%. Commits differ in effect beyond what 41 can absorb, so "one repository may be enough" is
+  withdrawn; a 3-point bound needs several repositories.
+- Pre-registration of a go-json top-up (41 commits × 8 fresh attempts per arm, two looks, critical-value floor fixed in
+  advance): `evidence/go-json-topup-20261106/`.
+- The time gate no longer compares raw accepted counts (equal arms failed it about half the time); acceptance enters through
+  time per accepted change and the same-change verdict. `reach_rates`, `reachable_diffs` and `proven_critical` accept a frozen
+  reach set (`reach=`), and `proven_critical` an attempt count (`attempts=`), so a pre-registered run fixes its denominator and a
+  critical-value floor from earlier attempts.
+- `007 lab run` takes `--max-invalid`; an invalid cell whose call reported no cost is charged its reserve instead of stopping the
+  run at the first provider error, and a cell the runner refused before writing its receipt is reported invalid instead of
+  breaking `report`. `line_trial` counts files a run created.
+- Grading no longer lets the agent's own Go tests break a package: files matching a task's `reset_to_base` (`*_test.go` for
+  the go adapter) go back to base before the hidden tests land.
+- `same_change` (point estimate on tests that split cells, about one false `KILL` in three under no difference) is now only a
+  diagnostic; `same_change_reachable` governs and its `KILL` kills the thesis. Its `PROVEN` must beat a critical value
+  simulated from the run's own cells with a 3-point loss of whole failed attempts (`proven_critical`): the t interval proved
+  such a loss up to 5.6% of the time on go-json, and bootstrap-t and Johnson's skew-corrected t did worse (up to 9.8%). The t
+  interval now uses t at every task count. Report schema v6.
+- Dashboard: "the same change" reads `same_change_reachable` and never shows a green state without a proving report; "less
+  quota" is its own claim, `ESTIMATED`, because it comes from a price estimate.
+- go-json evidence, without a model: re-graded with the fix, the per-attempt noise halves (6 of 231 attempts changed) and the
+  verdict stays not proven (+1.5 pp, CI −3.2 to +6.2); the planted-defect check, which had been a stub, now ran and passes
+  (79% of partial changes rejected). Under the calibrated rule, two attempts per arm almost never prove; about eight per arm on
+  the same 41 commits would prove equal arms about three times in four if commits do not differ in effect.
+  README and docs restate what one repository can show.
 
-### Evidence and replay candidate
+### Evidence and replay
 
 - Treat persisted acceptance/authority labels as declarations, not authenticated
   controller authorship. Original receipts and declared outcomes are preserved;
@@ -74,8 +147,7 @@ All notable changes are documented here.
 
 ### Migration and proof boundaries
 
-- Receipt v1 files are not rewritten. Keep the prior installation for rollback;
-  this candidate has not been installed, integrated or released.
+- Receipt v1 files are not rewritten. Keep the prior installation for rollback.
 - Amount-only v1 receipts remain valid and descriptive but no longer qualify
   measured route ranking or readiness. Supply explicit reconciled cost portions
   prospectively; this is declaration coherence, not authenticated billing or ROI.
@@ -87,10 +159,11 @@ All notable changes are documented here.
   Fresh LLM generations and newly captured local fixtures may differ.
 - Costs in synthetic tests are literal fixture data, not charges or savings.
   No new real OLD×NEW benefit, reliable-result cost or net financial ROI is claimed.
-- Final native canaries, prospective cases, financial bounds, independent review,
-  installation/rollback, public content audit and release CI remain open.
+- Still open: final native canaries, prospective cases, financial bounds and
+  installation/rollback. Release CI passed; the independent review failed identity
+  validation ([release record](evidence/v1.6.0/release-evidence.md)).
 
-## [1.5.2] — local candidate (2026-10-06)
+## [1.5.2] - 2026-10-06
 
 - remove the inherited body minimum width that caused whole-page overflow at
   320px with a classic scrollbar; sampled wider layouts remain unchanged;
@@ -105,7 +178,7 @@ All notable changes are documented here.
   is not publication, new ROI evidence or D7/D30 qualification. See
   [proof and remaining gates](evidence/v1.5.2/release-evidence.md).
 
-## [1.5.1] — source changes (2026-10-06)
+## [1.5.1] - 2026-10-06
 
 - prioritize accepted changes, measured repair rounds, terminal cost and open
   tasks in a Headroom-inspired dashboard; no assets or implementation copied;
@@ -130,7 +203,7 @@ All notable changes are documented here.
   verification remain distinct from source qualification. See
   [qualification](evidence/v1.5.1/release-evidence.md).
 
-## [1.5.0]
+## [1.5.0] - 2026-10-06
 
 - include stable version metadata, documentation and a separate public manifest;
 - preserve the RC runtime, dependencies and historical causal artifacts byte-for-byte;
@@ -143,7 +216,7 @@ All notable changes are documented here.
 - publication requires explicit identity review, final-byte gates, a clean
   committed candidate, approval, authorization and tag/artifact read-back.
 
-## [1.5.0-rc.2] - Unreleased candidate
+## [1.5.0-rc.2] - candidate, never tagged
 
 ### Added
 
@@ -279,3 +352,12 @@ All notable changes are documented here.
 - rejected external-provider credential doctrine;
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
+
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.2...v1.6.0
+[1.5.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.1.0...v1.4.0
+[1.1.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.0.0

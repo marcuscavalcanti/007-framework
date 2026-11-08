@@ -3,7 +3,8 @@
 
 Usage: native_runner.py --cli codex|claude --receipt PATH --provider P --model M --effort E -- <native argv>
 The prompt arrives on stdin and is passed through. The receipt records only what the JSON stream proves: neither CLI reports the
-served effort or provider and Codex does not report the served model, so those stay None (never copied from the request).
+served effort or provider, and Codex reports the served model only when the server reroutes it (recorded, so the run fails as a
+mismatch); otherwise those stay None (never copied from the request).
 Stream content is never echoed or stored; only its sha256 and the normalized usage are kept.
 """
 import argparse
@@ -82,7 +83,8 @@ def native_request(cli, command):
             i += 1
         else:
             raise ValueError("unlisted option or argument refused")
-    flags = [flag for flag, _ in pairs if flag != "-c"]
+    # `--disable` is repeatable natively and only switches a feature off, so repeating it cannot override a checked option.
+    flags = [flag for flag, _ in pairs if flag not in ("-c", "--disable")]
     keys = [item.split("=", 1)[0] for flag, item in pairs if flag == "-c"]
     if len(flags) != len(set(flags)) or len(keys) != len(set(keys)):
         raise ValueError("repeated option refused")  # review r42 R2: native last-occurrence parsing could override a checked one

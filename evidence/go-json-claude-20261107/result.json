@@ -1,0 +1,117 @@
+{
+ "cells_valid": 163,
+ "decision": "NOT-PROVEN",
+ "sequence": {
+  "manipulation": {
+   "medium": 2806,
+   "xhigh": 26521.5,
+   "passed": true
+  },
+  "time": {
+   "saving": 0.6694038849136148,
+   "ci95": [
+    0.5995597017648417,
+    0.7268711176458686
+   ],
+   "passed": true
+  }
+ },
+ "primary": {
+  "P": {
+   "tasks": 41,
+   "mean": -0.055326787034104104,
+   "ci95": [
+    -0.11798325416999475,
+    0.0073296801017865496
+   ],
+   "statistic": 1.4409989605386833,
+   "critical_fresh": 2.374901402216789,
+   "critical_floor": 2.4167555815898094,
+   "critical": 2.4167555815898094,
+   "verdict": "NOT-PROVEN"
+  },
+  "B": {
+   "tasks": 41,
+   "mean": -0.055326787034104104,
+   "ci95": [
+    -0.11798325416999475,
+    0.0073296801017865496
+   ],
+   "statistic": 1.4409989605386833,
+   "critical_fresh": 2.3641065372533516,
+   "critical_floor": 2.4167555815898094,
+   "critical": 2.4167555815898094,
+   "verdict": "NOT-PROVEN"
+  }
+ },
+ "secondary": {
+  "product_reach": {
+   "P": {
+    "tasks": 41,
+    "mean": -0.08875108711357106,
+    "ci95": [
+     -0.15659393438586788,
+     -0.020908239841274226
+    ],
+    "statistic": 0.33511114344241605,
+    "critical_fresh": 2.2775208046763398,
+    "critical_floor": 2.4167555815898094,
+    "critical": 2.4167555815898094,
+    "verdict": "NOT-PROVEN"
+   },
+   "B": {
+    "tasks": 41,
+    "mean": -0.08875108711357106,
+    "ci95": [
+     -0.15659393438586788,
+     -0.020908239841274226
+    ],
+    "statistic": 0.33511114344241605,
+    "critical_fresh": 2.291741724125903,
+    "critical_floor": 2.4167555815898094,
+    "critical": 2.4167555815898094,
+    "verdict": "NOT-PROVEN"
+   }
+  },
+  "solvable_acceptance": {
+   "tasks": 36,
+   "mean": -0.1111111111111111,
+   "sd": 0.29546842014263947,
+   "ci95": [
+    -0.21108318945770194,
+    -0.011139032764520287
+   ]
+  },
+  "tau2": {
+   "sigma2": 0.01668634332248496,
+   "tau2_moments": 0.0225151254203232,
+   "tau2_covariance": 0.023676370557052375,
+   "covariance_tasks": 40,
+   "budget_41_tasks": 0.0047
+  },
+  "invalid_per_arm": {
+   "medium": 1,
+   "xhigh": 0
+  },
+  "failure_classes": [
+   "none",
+   "runner-invalid"
+  ],
+  "median_cost_usd": {
+   "medium": 0.5682964,
+   "xhigh": 2.2718499999999997
+  },
+  "requested": [
+   [
+    "claude-opus-5-5",
+    "medium",
+    "medium"
+   ],
+   [
+    "claude-opus-5-5",
+    "xhigh",
+    "xhigh"
+   ]
+  ]
+ }
+}

@@ -175,6 +175,17 @@ def no_evidence(reason, **extra):
     return {"level": None, "badge": None, "verdict": "no-evidence", "answer": f"{NO_EVIDENCE}: {reason}", **extra}
 
 
+def arms(analysis):
+    """Effort -> counts of one analysis, ordered low to high, for the effort ladder. {} when unreadable."""
+    try:
+        contrasts = {key.partition("_vs_")[0]: value for key, value in analysis["contrasts"].items()}
+        ref = next(iter(analysis["contrasts"])).partition("_vs_")[2]
+        found = {ref: next(iter(contrasts.values()))[ref], **{e: c[e] for e, c in contrasts.items()}}
+        return {e: found[e] for e in sorted(found, key=LADDER.index)}
+    except (AttributeError, KeyError, StopIteration, TypeError, ValueError):
+        return {}
+
+
 def calibrated(analysis, effort, ci=None):
     """Question 3 at level 3 for a session at `effort`, from one holdout analysis (contrasts "<effort>_vs_<reference>").
     `ci` (optional, schema 007-ci-report/v1) adds the 90/95/99% intervals: acceptance difference and time/cost reduction.

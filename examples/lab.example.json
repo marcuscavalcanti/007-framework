@@ -1,0 +1,19 @@
+{
+  "repo": "/absolute/path/to/your/repository",
+  "repo_key": "source",
+  "branch": "main",
+  "adapter": "pytest",
+  "tests": "tests",
+  "prepare": [],
+  "seed": 7,
+  "want": 24,
+  "require_next": false,
+  "acceptance_env": {"PATH": "/usr/bin:/bin"},
+  "agent_command": ["provider-adapter", "--cwd", "{cwd}", "--prompt-file", "{prompt_file}", "--model", "{model}", "--effort", "{effort}", "--runner-receipt", "{runner_receipt}"],
+  "arms": {
+    "medium": {"provider": "your-provider", "model": "your-model", "effort": "medium", "doctrine": ""},
+    "high": {"provider": "your-provider", "model": "your-model", "effort": "high", "doctrine": ""}
+  },
+  "compare": {"candidate": "medium", "reference": "high"},
+  "served_identity": "requested-only"
+}

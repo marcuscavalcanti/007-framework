@@ -21,7 +21,7 @@ HOME = Path.home() / ".007-framework"
 EFFORTS = {"codex": ("none", "minimal", "low", "medium", "high", "xhigh", "max"), "claude": ("low", "medium", "high", "xhigh"),
            "kimi": ("low", "high", "max")}  # gemini exposes no effort setting: observed only, never randomized
 OBSERVATORY = {"projects", "auto", "exclude", "lookback_hours", "activity_gap_minutes", "calibrations", "effort_trial", "evidence",
-               "durability_windows_days", "attribution_slack_s", "_note", "_note_auto"}
+               "durability_windows_days", "attribution_slack_s", "lab_report", "_note", "_note_auto"}
 TRIAL = {"enabled", "arms", "seed", "repos", "agents", "trial_id", "claude_model"}
 EVIDENCE = {"confidence", "min_n", "margin", "min_gain"}
 FIXED = {"levels", "badges", "level_semantics"}

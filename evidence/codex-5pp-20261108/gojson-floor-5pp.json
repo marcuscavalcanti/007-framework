@@ -1,0 +1,17 @@
+earlier_231 {'cells': 231, 'floor': 2.1870784671794463}
+topup_652 {'cells': 652, 'floor': 2.197566414978024}
+{
+ "margin": 0.05,
+ "attempts_per_arm": 8,
+ "draws": 100000,
+ "seed": 20261109,
+ "earlier_231": {
+  "cells": 231,
+  "floor": 2.1870784671794463
+ },
+ "topup_652": {
+  "cells": 652,
+  "floor": 2.197566414978024
+ },
+ "critical_floor": 2.197566414978024
+}

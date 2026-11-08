@@ -974,9 +974,17 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     return (4 if checks and any(check["exit"] != 0 for check in checks) else 0), destination
 
 
+def version():
+    """SKILL.md is the single version source; test_package pins the dashboard to it."""
+    match = re.search(r"(?m)^  version: (\S+)$", (Path(__file__).resolve().parents[1] / "SKILL.md").read_text())
+    return match.group(1) if match else "unknown"
+
+
 def parser():
     result = argparse.ArgumentParser(description="007 Framework local tooling")
+    result.add_argument("--version", action="version", version=f"007 {version()}")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("lab", help="replay your commits at two efforts (007 lab -h)", add_help=False)  # dispatched in main
     init = commands.add_parser("init", help="register a Git project for 007 telemetry")
     init.add_argument("--repo", default=".")
     init.add_argument("--registry", type=Path, default=default_registry_path())
@@ -1020,7 +1028,7 @@ def run_dashboard(host, port, registry, open_browser=True, *, curation_checkpoin
     import dashboard
 
     static_dir = Path(__file__).resolve().parents[1] / "dashboard"
-    server = dashboard.create_server(host, port, registry, static_dir, curation_checkpoint=curation_checkpoint, curation_vault=curation_vault)
+    server = dashboard.create_server(host, port, registry, static_dir, curation_checkpoint=curation_checkpoint, curation_vault=curation_vault, background=True)
     url = f"http://{host}:{server.server_port}"
     print(f"007 dashboard: {url}")
     if open_browser:
@@ -1035,6 +1043,10 @@ def run_dashboard(host, port, registry, open_browser=True, *, curation_checkpoin
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["lab"]:
+        import effort_lab
+        return effort_lab.main(argv[1:])
     args = parser().parse_args(argv)
     try:
         if args.command == "init":
