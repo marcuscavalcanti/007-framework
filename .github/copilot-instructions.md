@@ -77,8 +77,8 @@ There is no fallback model: the route fails closed.
 - Both host markers present means nested sessions: the caller must declare the
   host; never guess.
 - Fail-closed: if the host is neither Claude nor Codex, or the reviewer's CLI is
-  absent, there is no route. A launched review that fails, or whose served
-  identity cannot be verified, also records a failed validation and stops: no
+  absent, there is no route. A launched review that fails, or whose identity
+  level (below) is `failed`, also records a failed validation and stops: no
   second call and no substitute model or effort.
 - Known limits, recorded rather than hidden: the Codex CLI has no USD budget
   flag; neither CLI stream reports served effort.
@@ -86,9 +86,38 @@ There is no fallback model: the route fails closed.
   per-repository authorization.
 
 Reviews remain bound to the exact sanitized context path and SHA-256 authorized
-by the user. If there is no route, or the served identity cannot be verified,
-record a failed validation and stop; do not fall back to a different model or
-effort.
+by the user. If there is no route, record a failed validation and stop; do not
+fall back to a different model or effort.
+
+Reviewer identity levels (revision 2026-11-08, Marcus).
+`review_route.identity_level` computes the level from the review's JSON stream:
+
+- `verified`: the CLI reports the served model and every reported model is the
+  routed one (Claude CLI `modelUsage`). Served effort stays unreported.
+- `pinned-no-reroute`, recorded verbatim as "requested model pinned, no reroute
+  observed, served identity unverified". All of these hold:
+  - the routed model and effort are fixed in the review argv, with user config
+    ignored;
+  - the stream is from a CLI that reports a server-side model change (Codex
+    `exec --json`: a `model rerouted: A -> B` item);
+  - the stream completed (`turn.completed`, no `error` or `turn.failed` event);
+  - no reroute appeared.
+  
+  The served model stays `null`; it is never copied from the request.
+- `failed`: any other case, including a reroute, a different or missing reported
+  model, or an incomplete stream. Record a failed validation; no second call.
+
+A review qualifies a release as follows:
+
+- `verified` qualifies it.
+- `pinned-no-reroute` qualifies it only as "qualified with unverified reviewer
+  identity". The release notes and release record state that level verbatim.
+- `failed` does not qualify it.
+
+These levels exist only for the release review. They never apply to experiment
+arms, coding executors, lab receipts or `replay_eval` served-identity checks, and
+they never fill served identity from the request. They are not retroactive: the
+1.6.0 review keeps its recorded failed validation.
 
 This policy governs the independent reviewer only. It does not change causal
 experiment arms, coding executors, historical receipts, or frozen evidence.

@@ -21,6 +21,21 @@ class ReviewRouteTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.fail("review route is missing")
 
+    def test_identity_level_never_takes_served_identity_from_the_request(self):
+        level, codex, claude = self.module().identity_level, {"cli": "codex", "model": "gpt-6-astra"}, {"cli": "claude", "model": "claude-opus-5-5"}
+        done = [{"type": "thread.started"}, {"type": "turn.started"}, {"type": "item.completed", "item": {"type": "error", "message": "Code Mode is unavailable"}},
+                {"type": "turn.completed", "usage": {}}]
+        self.assertEqual(level(codex, done), "pinned-no-reroute")  # a silent match is pinned, never verified
+        rerouted = {"type": "item.completed", "item": {"type": "error", "message": "model rerouted: gpt-6-astra -> gpt-5.2 (HighRiskCyberActivity)"}}
+        self.assertEqual(level(codex, done[:2] + [rerouted] + done[2:]), "failed")
+        self.assertEqual(level(codex, done[:2]), "failed")  # incomplete stream
+        self.assertEqual(level(codex, done + [{"type": "turn.failed"}]), "failed")
+        result = {"type": "result", "subtype": "success", "is_error": False, "modelUsage": {"claude-opus-5-5": {}}}
+        self.assertEqual(level(claude, [result]), "verified")
+        self.assertEqual(level(claude, [{**result, "modelUsage": {"claude-opus-5-5": {}, "claude-haiku-5-5": {}}}]), "failed")
+        self.assertEqual(level(claude, [{**result, "modelUsage": {}}]), "failed")
+        self.assertEqual(level({"cli": "kimi"}, [result]), "failed")
+
     def test_host_session_from_markers_and_ambiguity_is_refused(self):
         host = self.module().host_session
         self.assertEqual(host({"CLAUDECODE": "1"}), "claude")
