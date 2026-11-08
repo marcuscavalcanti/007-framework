@@ -349,6 +349,21 @@ class ReplayCaptureTests(unittest.TestCase):
                                         vault_root=self.vault)
         self.assertFalse(self.vault.exists())
 
+    def test_denied_action_in_a_captured_project_closes_the_case_without_running_anything(self):
+        # audit F04 where it always fired: a capture config always binds acceptance, so every denied action lost its receipt
+        cli, command, config = self.incomplete_run("deny", "pass")
+        authority = self.root / "authority.json"
+        authority.write_text(json.dumps({"schema": "007-framework/authority/v1", "allow": ["test"], "deny": ["deploy"]}))
+        status, destination = cli.run_task(self.repo, "deny", self.repo / "outcome.json", command, authority_file=authority,
+                                           action="deploy", capture_config_file=config, vault_root=self.vault)
+        self.assertEqual(status, 3)
+        self.assertEqual((self.repo / "tracked.py").read_bytes(), b"value = 2\n")  # the executor never ran
+        self.assertEqual(json.loads(destination.read_text())["acceptance_evidence"], "not-executed")
+        task = json.loads((self.repo / ".007/tasks/deny.task.json").read_text())
+        marker = json.loads((self.repo / ".007/project.json").read_text())
+        self.assertEqual(self.module().qualify_case(self.vault, marker["project_id"], "deny", task["replay_ref"])["state"],
+                         "case-retained")
+
     def incomplete_run(self, name, tail):
         cli = importlib.import_module("framework_cli")
         cli.init_project(self.repo, self.root / "registry.json")

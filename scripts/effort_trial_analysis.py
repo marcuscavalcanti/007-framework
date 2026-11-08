@@ -145,11 +145,14 @@ def _sum(vectors):
 
 
 def _curve(vector):
-    """Kaplan-Meier product over the summed at-risk/deaths vector; stops at the first day nobody is at risk."""
+    """Kaplan-Meier product over the summed at-risk/deaths vector. Nobody at risk after every line died is an observed extinction:
+    S stays 0 to the horizon. Nobody at risk with S > 0 means censoring: the curve stops (unknown, never extrapolated)."""
     curve, s = [], 1.0
     for day in range(HORIZON):
         at_risk, deaths = vector[day], vector[HORIZON + day]
         if not at_risk:
+            if s == 0:
+                curve += [0.0] * (HORIZON - day)
             break
         s *= 1 - deaths / at_risk
         curve.append(s)

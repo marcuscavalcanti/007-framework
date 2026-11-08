@@ -294,6 +294,50 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(event["outcome"], "blocked")
             self.assertIsNone(event["exit_code"])
 
+    def test_denied_action_with_acceptance_records_the_contract_as_not_executed(self):
+        # audit F04: the block was right, but recording demanded acceptance results that were never produced, so the lifecycle
+        # kept a start and an event with no terminal receipt
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp, "repo")
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            self.assertEqual(self.run_cli("init", "--repo", str(repo), "--registry", str(Path(tmp, "projects.json"))).returncode, 0)
+            authority, acceptance = Path(tmp, "authority.json"), Path(tmp, "acceptance.json")
+            authority.write_text(json.dumps({"schema": "007-framework/authority/v1", "allow": ["test"], "deny": ["deploy"]}))
+            touch = "from pathlib import Path; Path({!r}).touch()".format
+            acceptance.write_text(json.dumps({"schema": "007-framework/acceptance/v1",
+                                              "commands": [[sys.executable, "-c", touch("gate.ran")], ["true"]]}))
+
+            result = self.run_cli("run", "--repo", str(repo), "--task-id", "deny-gate", "--receipt", "blocked.json",
+                                  "--authority-file", str(authority), "--action", "deploy",
+                                  "--acceptance-file", str(acceptance), "--", sys.executable, "-c", touch("sentinel"))
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertFalse((repo / "sentinel").exists())
+            self.assertFalse((repo / "gate.ran").exists())
+            stored = json.loads((repo / ".007/receipts/deny-gate.receipt.json").read_text())
+            self.assertEqual((stored["status"], stored["proof_reached"]), ("blocked", "controller-blocked-before-execution"))
+            self.assertEqual(stored["acceptance_evidence"], "not-executed")
+            self.assertEqual(stored["acceptance_summary"], {"passed": 0, "failed": 0, "not_executed": 2})
+            self.assertEqual(stored["acceptance_sha256"], hashlib.sha256(acceptance.read_bytes()).hexdigest())
+            self.assertEqual(stored["checks"], [{"command": "007 authority deploy", "exit": 3}])
+            self.assertEqual(stored["authority_summary"]["protected_blocks"], 1)
+            dashboard = self.module("dashboard")
+            self.assertTrue(dashboard.is_preventive_controller_block(stored))
+            self.assertFalse(dashboard.has_bound_acceptance(stored))
+            self.assertNotIn("acceptance_evidence", dashboard.safe_task(stored))
+
+            # control: without the controller's blocked event the same receipt cannot skip the contract
+            cli = self.module("framework_cli")
+            cli.begin_task(repo, "manual-gate", acceptance_file=acceptance)
+            manual = Path(tmp, "manual.json")
+            manual.write_text(json.dumps({**{k: v for k, v in stored.items() if not k.startswith(("acceptance", "authority"))
+                                             and k not in ("boundary_events", "completed_at", "project_id")},
+                                          "task_id": "manual-gate"}))
+            with self.assertRaisesRegex(ValueError, "requires controller-observed results"):
+                cli.record_receipt(repo, manual)
+            self.assertFalse((repo / ".007/receipts/manual-gate.receipt.json").exists())
+
     def test_run_records_allowed_action_as_controlled(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "repo")

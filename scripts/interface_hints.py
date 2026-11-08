@@ -1,10 +1,11 @@
 """Replay prompt interface hints: the public signature lines a commit added or changed in its sources, never bodies (no model)."""
+import io
 import re
 import subprocess
+import tokenize
 
 # ponytail: Python def/class signatures only; other languages are out of scope until a non-Python repo is replayed.
 SIGNATURE = re.compile(r"^(async\s+)?def\s+[A-Za-z]\w*\s*\(.*|^class\s+[A-Za-z]\w*.*")  # [A-Za-z] first: `_private` names never match
-COMMENT = re.compile(r"\s+#[^\"']*$")  # ponytail: a comment holding a quote is kept; worst case a garbled hint, never a body line
 MAX_LINES = 20
 GIT_ENV = {"PATH": "/usr/bin:/bin", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "LANG": "C"}
 HEADER = "Interface expected by the change (signatures only; implement the behaviour yourself):"
@@ -15,21 +16,32 @@ def _added(line):
 
 
 def _signature(lines, start):
-    """Join a multi-line signature from the consecutive added lines of its hunk, up to the line ending with ':'."""
-    parts = []
+    """The signature from the consecutive added lines of its hunk, cut at its top-level ':' (Python's own tokenizer, so strings and
+    comments cannot fool it): a one-line body never leaks, and a next line is read only while the header is still open."""
+    parts, ends = [], {}
     for line in lines[start:start + MAX_LINES]:
         if not _added(line):
             break
-        text = line[1:].strip()
-        code = COMMENT.sub("", text)
-        # one-liners (`def f(x): return x`) and closed lines stay single: an unclosed bracket is required before following lines are read
-        if not parts and (code.endswith(":") or code.count("(") + code.count("[") <= code.count(")") + code.count("]")):
-            return text
-        if code:
-            parts.append(code)
-        if code.endswith(":"):
-            return " ".join(parts)
-    return " ".join(parts) + " …"
+        parts.append(line[1:].strip())
+        depth, ends = 0, {}
+        try:
+            for token in tokenize.generate_tokens(io.StringIO("\n".join(parts) + "\n").readline):
+                if token.type in (tokenize.COMMENT, tokenize.NL):
+                    continue
+                if token.type == tokenize.NEWLINE:  # the statement closed without a header ':': keep it as found
+                    return _text(parts, ends)
+                ends[token.end[0]] = token.end[1]
+                if token.type == tokenize.OP and token.string == ":" and depth == 0:
+                    return _text(parts, ends)
+                if token.type == tokenize.OP:
+                    depth += (token.string in ("(", "[", "{")) - (token.string in (")", "]", "}"))
+        except (tokenize.TokenError, SyntaxError):  # still open (or unreadable): only the tokens read so far are kept
+            pass
+    return _text(parts, ends) + " …"
+
+
+def _text(parts, ends):
+    return " ".join(parts[row - 1][:end] for row, end in sorted(ends.items()))
 
 
 def hints(repo, parent, commit, sources):

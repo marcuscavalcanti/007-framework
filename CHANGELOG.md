@@ -28,6 +28,24 @@ schemas, and the dashboard snapshot.
   2026-11-08, F11). It stays byte-identical because the pre-registration's `SHA256SUMS` bound it; an `ERRATUM.md` and the object
   alone (`gojson-floor-5pp.clean.json`) are added and hashed in `SHA256SUMS`. No figure changes: `freeze_pilot.py` uses the floor as
   a constant. A test now parses every `*.json` under `evidence/` and verifies every `evidence/*/SHA256SUMS` line.
+- `interface_hints` cuts a signature at its top-level `:` with Python's tokenizer, so a one-line definition
+  (`def f(x): return x`) or a multi-line header whose last line carries a body no longer copies the body (or, in the multi-line
+  case, the following added lines) into a hint that promises signatures only (external audit F08). The one replay set built
+  with hints (20 tasks of this repository, 62 hints) gets the same hints under the fix; no published result used the helper.
+- The effort field trial's Kaplan-Meier curve stays at 0 to the horizon once every line at risk has died, instead of ending
+  there: S(30) read "unknown" for an arm whose lines all died, and the bootstrap dropped every such draw as not estimable, which
+  favoured the less durable arm. A curve still stops where censoring leaves nobody at risk with S > 0 (external audit F07).
+  The trial is disabled and its outcomes were never unblinded, so no result changes.
+- `007 run` with a denied `--action` and an acceptance contract (always the case under a capture config) persists its blocked
+  terminal receipt again: recording demanded acceptance results that a blocked task never produces, so only the start and the
+  event remained (external audit F04). The receipt now marks the contract as not run, an additive `receipt/v1` state:
+  `acceptance_evidence: "not-executed"`, the contract hash, and `acceptance_summary.not_executed`. The blocked path also passes
+  the caller's replay vault to `record`.
+- `007 run --native-cli` no longer publishes a receipt whose declared `served_model` the native stream contradicts: telemetry
+  only replaced usage, time and cost, so a Claude stream reporting one model could sit beside a receipt declaring another
+  (external audit F03). When the stream names models (Claude `modelUsage`, a Codex reroute target), the declared model must be
+  one of them; otherwise the run exits 2 with the telemetry kept and no terminal receipt. Declared and observed identity stay
+  in separate fields. No published evidence holds a receipt with native telemetry.
 
 ## [1.6.1] - 2026-11-08
 
