@@ -129,6 +129,25 @@ class PackageContractTests(unittest.TestCase):
         current_claims = (ROOT / "README.md").read_text() + (ROOT / "docs/evidence.md").read_text()
         self.assertNotRegex(current_claims.lower(), r"controlled (mechanism|decision|result)")
 
+    def test_evidence_json_parses_and_every_evidence_ledger_verifies(self):
+        # Audit 2026-11-08, F11: a published *.json opened with two lines of simulation progress. It stays byte-identical, since
+        # SHA256SUMS bound it before the paid pilot; its erratum adds the object alone. Every other evidence JSON must parse.
+        frozen = ROOT / "evidence/codex-5pp-20261108/gojson-floor-5pp.json"
+        broken = []
+        for path in sorted((ROOT / "evidence").rglob("*.json")):
+            try:
+                json.loads(path.read_text())
+            except ValueError:
+                broken.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(broken, [frozen.relative_to(ROOT).as_posix()])
+        self.assertEqual(b"".join(frozen.read_bytes().splitlines(keepends=True)[2:]),
+                         frozen.with_name("gojson-floor-5pp.clean.json").read_bytes())
+        for ledger in sorted((ROOT / "evidence").glob("*/SHA256SUMS")):
+            for line in ledger.read_text().splitlines():
+                digest, name = line.split("  ", 1)
+                with self.subTest(file=f"{ledger.parent.name}/{name}"):
+                    self.assertEqual(hashlib.sha256((ledger.parent / name).read_bytes()).hexdigest(), digest)
+
     def test_replay_example_is_valid_json(self):
         import json
         example = json.loads((ROOT / "examples" / "replay-set.example.json").read_text())

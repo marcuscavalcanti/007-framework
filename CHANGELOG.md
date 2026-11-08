@@ -24,6 +24,10 @@ schemas, and the dashboard snapshot.
   diffed the index against `HEAD`, so a commit left it without the change (and with a spurious deletion of the prompt file when
   the agent committed everything), and the change counts read the index, so `git add` alone zeroed them. Both now diff against the
   snapshot commit recorded before the agent starts. Acceptance always graded the work tree and is unchanged.
+- `evidence/codex-5pp-20261108/gojson-floor-5pp.json` opens with two lines of simulation progress, so it is not valid JSON (audit
+  2026-11-08, F11). It stays byte-identical because the pre-registration's `SHA256SUMS` bound it; an `ERRATUM.md` and the object
+  alone (`gojson-floor-5pp.clean.json`) are added and hashed in `SHA256SUMS`. No figure changes: `freeze_pilot.py` uses the floor as
+  a constant. A test now parses every `*.json` under `evidence/` and verifies every `evidence/*/SHA256SUMS` line.
 
 ## [1.6.1] - 2026-11-08
 
