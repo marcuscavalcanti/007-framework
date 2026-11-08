@@ -19,6 +19,10 @@ schemas, and the dashboard snapshot.
   (`def f(x): return x`) or a multi-line header whose last line carries a body no longer copies the body (or, in the multi-line
   case, the following added lines) into a hint that promises signatures only (external audit F08). The one replay set built
   with hints (20 tasks of this repository, 62 hints) gets the same hints under the fix; no published result used the helper.
+- The effort field trial's Kaplan-Meier curve stays at 0 to the horizon once every line at risk has died, instead of ending
+  there: S(30) read "unknown" for an arm whose lines all died, and the bootstrap dropped every such draw as not estimable, which
+  favoured the less durable arm. A curve still stops where censoring leaves nobody at risk with S > 0 (external audit F07).
+  The trial is disabled and its outcomes were never unblinded, so no result changes.
 
 ## [1.6.1] - 2026-11-08
 
