@@ -6,6 +6,17 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Changed
+
+- Reviewer identity levels (`AGENTS.md`, `review_route.identity_level`): `verified`, `pinned-no-reroute` ("requested model
+  pinned, no reroute observed, served identity unverified") and `failed`. A `pinned-no-reroute` review qualifies a release only
+  as "qualified with unverified reviewer identity"; the levels never apply to experiments and never fill served identity from
+  the request. Not retroactive.
+- `RELEASING.md`: an announcement may report any verdict of a technically qualified release; NOT-PROVEN never states the thesis
+  as proven, and a pilot's GO means only that a confirmation is feasible.
+- Amendment 1 to the Codex 5-point pilot pre-registration (`evidence/codex-5pp-20261108/AMENDMENT-1.md`), published before any
+  pilot attempt; the original pre-registration and its hash are unchanged.
+
 ### Added
 
 - Contribution rules in `AGENTS.md`, copied to `.github/copilot-instructions.md` and read by Claude Code through `CLAUDE.md`
