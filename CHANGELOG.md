@@ -63,7 +63,6 @@ flag or schema field is renamed or removed. See [the release record](evidence/v1
   (external audit F03). When the stream names models (Claude `modelUsage`, a Codex reroute target), the declared model must be
   one of them; otherwise the run exits 2 with the telemetry kept and no terminal receipt. Declared and observed identity stay
   in separate fields. No published evidence holds a receipt with native telemetry.
-
 - Dashboard: a `007 lab report` verdict no longer reads as evidence for whichever repository is selected (external audit F09).
   The report names no repository, so `observatory.lab_report` now takes `{"path", "project_id", "cli", "model"}`, the keys of a
   calibration, and the thesis panel applies the verdict only to that calibration. A bare path still loads but binds nothing, so
