@@ -92,10 +92,13 @@ Tools for this thesis: `scripts/effort_lab.py` (`007 lab`: mine, sensitivity, ru
 `scripts/choice_observatory.py` (session → commit attribution and line survival, with an explicit evidence level) and
 `scripts/effort_trial.py` (opt-in randomized default effort; **off by default**).
 
-> **1.5.2 local candidate:** fixes the inherited 320px page overflow and adds a
-> browser-assisted visibility selfcheck. The source delta has exact-commit CI
-> and a context-only independent review; later documentation is qualified
-> separately. Not a published release; see its
+> **1.6.0 candidate:** adds `007 lab` and restates the thesis as a decision tested
+> against a margin declared before spending. Public pre-registered evidence so far:
+> Codex on go-json not proven at 3 points, Claude on go-json not proven at 10
+> points. See its [qualification record](evidence/v1.6.0/release-evidence.md).
+
+> **1.5.2** (published 2026-10-06): fixes the inherited 320px page overflow and adds
+> a browser-assisted visibility selfcheck; see its
 > [bounded proof and remaining gates](evidence/v1.5.2/release-evidence.md).
 
 > **1.5.1 evidence:** the qualified runtime and dashboard passed Linux CI on

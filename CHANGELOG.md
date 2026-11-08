@@ -4,6 +4,8 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
+## [1.6.0] — candidate (2026-11-08)
+
 ### Thesis D: minimum sufficient effort
 
 - Product thesis moved from "007 doctrine vs none" to the canonical minimum-intelligence thesis: the least reasoning effort that
