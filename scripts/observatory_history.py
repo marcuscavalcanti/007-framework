@@ -2,8 +2,8 @@
 """Thesis D step 2: keep session METADATA beyond the 24 h log lookback so durability (7/30 days) can mature.
 
 Only projects the user opted in (config `observatory.projects`) are recorded, or, with `observatory.auto: true`, every project with
-an active session (registered in 007, or any git repository by its root, id "git:<root>") except `observatory.exclude` (names or
-ids); only FIELDS are stored, never conversation content (active_intervals are row timestamps merged across pauses of at most
+an active session (registered in 007, or any git repository by its root, id "git:<root>"; a linked worktree is its repository)
+except `observatory.exclude` (names or ids); only FIELDS are stored, never conversation content (active_intervals are row timestamps merged across pauses of at most
 `observatory.activity_gap_minutes`, default 30). `observatory.lookback_hours` (default 168) bounds each record pass.
 The store is append-only JSONL; a session is appended again only when its updated_at changes, or when the stored row predates
 active_intervals and a fresh parse brings them; readers keep the latest row, with the union of the session's intervals.
@@ -40,12 +40,17 @@ TEMPORARY = ("/var/folders/", "/private/var/", "/tmp/", "/private/tmp/")  # expe
 
 
 def git_root(cwd):
-    """The repository root of a session's cwd, or None (not a directory, not git, or a temporary workspace)."""
+    """The repository root of a session's cwd, or None (not a directory, not git, or a temporary workspace). A linked worktree
+    (e.g. ~/.codex/worktrees/<name>/<repo>) maps to its main repository through the git common dir, so it is one project."""
     if not isinstance(cwd, str) or not cwd or cwd.startswith(TEMPORARY) or not Path(cwd).is_dir():
         return None
-    out = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    root = out.stdout.strip()
-    return str(Path(root).resolve()) if out.returncode == 0 and root and not root.startswith(TEMPORARY) else None
+    out = subprocess.run(["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
+                         capture_output=True, text=True)
+    common, _, top = out.stdout.strip().partition("\n")
+    if out.returncode or not top:
+        return None
+    root = str(Path(common).parent.resolve() if Path(common).name == ".git" else Path(top).resolve())
+    return None if root.startswith(TEMPORARY) else root
 
 
 def _excluded(project, path, exclude):

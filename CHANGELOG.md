@@ -20,6 +20,8 @@ schemas, and the dashboard snapshot.
   do, so they no longer compete with the thread that spawned them for its commits; rows stored under a child's own id join the
   root once `record` reads the child's log again. With this release's fixes, one `record` pass on the maintainer's machine took
   one repository from 8 attributed, 200 ambiguous and 43 unattributed commits to 198, 13 and 40.
+- With `observatory.auto`, a Codex worktree (`~/.codex/worktrees/<name>/<repo>`) is the same project as its repository (git
+  common dir) instead of a project of its own.
 
 ### Added
 

@@ -206,6 +206,13 @@ class ObservatoryHistoryTests(unittest.TestCase):
         row, = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
         self.assertEqual((row["session_id"], row["model"], len(row["commits"]), row["ambiguous_commits"]), ("root", "m", 1, []))
 
+    def test_a_linked_worktree_is_one_project_with_its_repository(self):
+        repo = self.git_repo("project-zeta")
+        worktree = Path(self.tmp.name, "worktrees", "w1", "project-zeta")
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(worktree)], cwd=repo, check=True, capture_output=True)
+        with mock.patch.object(self.hist, "TEMPORARY", ()):  # this test's repositories live in the temporary directory
+            self.assertEqual({self.hist.git_root(str(path)) for path in (repo, repo / "sub", worktree)}, {str(repo)})
+
     def test_report_runs_the_observatory_on_an_opted_in_project_and_refuses_others(self):
         repo = Path(self.tmp.name, "repo")
         repo.mkdir()
