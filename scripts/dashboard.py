@@ -28,7 +28,7 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/A", "N/D", "unknown", None}  # "N/D": legacy receipts, still accepted
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (

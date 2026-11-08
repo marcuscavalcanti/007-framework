@@ -77,10 +77,10 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.6\.1$")
-        self.assertIn('VERSION = "1.6.1"', (ROOT / "scripts/dashboard.py").read_text())
+        self.assertRegex(skill, r"(?m)^  version: 1\.6\.2$")
+        self.assertIn('VERSION = "1.6.2"', (ROOT / "scripts/dashboard.py").read_text())
         shown = subprocess.run([sys.executable, str(ROOT / "bin/007"), "--version"], capture_output=True, text=True, check=True).stdout
-        self.assertEqual(shown.strip(), "007 1.6.1")
+        self.assertEqual(shown.strip(), "007 1.6.2")
 
     def test_agent_rule_copies_match(self):
         self.assertEqual((ROOT / ".github/copilot-instructions.md").read_bytes(), (ROOT / "AGENTS.md").read_bytes())

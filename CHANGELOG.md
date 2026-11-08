@@ -6,6 +6,11 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-08
+
+Patch release: the confirmed findings of an external audit of 1.6.1, and the contribution rules. Additive only: no command,
+flag or schema field is renamed or removed. See [the release record](evidence/v1.6.2/release-evidence.md).
+
 ### Added
 
 - Contribution rules in `AGENTS.md`, copied to `.github/copilot-instructions.md` and read by Claude Code through `CLAUDE.md`
@@ -423,7 +428,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.1...v1.5.2
