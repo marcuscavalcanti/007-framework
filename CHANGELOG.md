@@ -6,6 +6,14 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Fixed
+
+- Local session capture reads every Codex and Claude log whole, streaming row metadata with bounded memory, and reads a growing
+  log on from a byte cursor. It read only the last 4 MiB of a Codex rollout (64 MiB for Claude) and counted the unread head as
+  active: on the maintainer's machine one 541 MB rollout was a single 291 h activity interval instead of 35 (60 h), so it was
+  credited with commits made while it was idle, with 4 M tokens instead of 2.6 bn. Each stored row names its log (`log_id`) and
+  the store keeps a log's newest whole read, so the next `record` pass replaces a clipped interval.
+
 ## [1.6.1] - 2026-11-08
 
 Patch release: fixes and documentation; no new command or schema.

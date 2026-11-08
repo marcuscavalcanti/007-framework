@@ -172,14 +172,28 @@ class ObservatoryHistoryTests(unittest.TestCase):
     def test_one_session_id_over_several_logs_keeps_the_latest_row_with_the_union_of_their_intervals(self):
         # Claude subagent logs (<session>/subagents/agent-*.jsonl) carry the parent sessionId; the latest row alone can be a
         # 20-minute subagent, and its intervals alone would hand the main session's commits to another session (a guess)
-        main = self.session("a", "2026-10-25T18:05:00Z", model="main-model", active_intervals=[[T0, T0 + 60], [T0 + 9000, T0 + 9100]])
-        sub = self.session("a", "2026-10-25T04:05:00Z", model="sub-model", active_intervals=[[T0 + 30, T0 + 5000]])
+        main = self.session("a", "2026-10-25T18:05:00Z", model="main-model", source="claude",
+                            active_intervals=[[T0, T0 + 60], [T0 + 9000, T0 + 9100]])
+        sub = self.session("a", "2026-10-25T04:05:00Z", model="sub-model", source="claude", active_intervals=[[T0 + 30, T0 + 5000]])
         rows = self.hist.snapshot(FakeCollector([main, sub]), [], {"p1"}, None)
         self.assertEqual(self.hist.record(self.store, rows), 2)
         self.assertEqual(self.hist.record(self.store, rows), 0, "an older log's row is not appended again on every pass")
         loaded, = self.hist.load(self.store)
         self.assertEqual((loaded["updated_at"], loaded["model"]), ("2026-10-25T18:05:00Z", "main-model"))
         self.assertEqual(loaded["active_intervals"], [[T0, T0 + 5000], [T0 + 9000, T0 + 9100]])
+
+    def codex_row(self, sid, **extra):
+        return {"source": "codex", "session_id": sid, "project_id": "p1", "cwd": "/x", "model": "m", "effort": "high",
+                "started_at": T0, "updated_at": T0 + 9000, "total_tokens": 1, "reasoning_output_tokens": 0, **extra}
+
+    def test_a_whole_log_read_replaces_the_interval_a_clipped_tail_read_stored(self):
+        # 1.6 stored one fake 291 h interval for a 527 MB rollout read from its last 4 MiB; a union of rows would keep it forever
+        clipped = self.codex_row("a", active_intervals=[[T0, T0 + 9000]])
+        whole = self.codex_row("a", log_id="a", subagent=False, active_intervals=[[T0, T0 + 60], [T0 + 8000, T0 + 9000]])
+        self.assertEqual(self.hist.record(self.store, [clipped]), 1)
+        self.assertEqual(self.hist.record(self.store, [whole]), 1, "same updated_at, but the parse differs")
+        self.assertEqual(self.hist.record(self.store, [whole, clipped]), 0)
+        self.assertEqual(self.hist.load(self.store)[0]["active_intervals"], [[T0, T0 + 60], [T0 + 8000, T0 + 9000]])
 
     def test_report_runs_the_observatory_on_an_opted_in_project_and_refuses_others(self):
         repo = Path(self.tmp.name, "repo")

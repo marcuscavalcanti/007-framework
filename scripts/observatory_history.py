@@ -32,7 +32,7 @@ import effort_trial
 import local_activity
 
 FIELDS = ("source", "session_id", "project_id", "cwd", "model", "effort", "started_at", "updated_at",
-          "total_tokens", "reasoning_output_tokens", "active_intervals", "subagent")
+          "total_tokens", "reasoning_output_tokens", "active_intervals", "subagent", "log_id")
 HOME = Path.home() / ".007-framework"
 CALIBRATION_KEYS = ("project_id", "cli", "model", "analysis")
 NOT_OPTED_IN = {"opted_in": False, "answer": "outside observatory.projects: nothing is recorded or judged"}
@@ -151,13 +151,21 @@ def _union(intervals):
 
 
 def load(store):
-    """The latest row of each session; its active_intervals are the union over all its rows, because one session id spans
-    several logs (Claude subagents under <session>/subagents/ carry the parent sessionId) and the latest may be a subagent's."""
-    latest, main, spans, last = {}, {}, {}, {}
+    """The latest row of each session; its active_intervals are the union over all its logs, because one session id spans
+    several logs (Claude subagents under <session>/subagents/ carry the parent sessionId) and the latest may be a
+    subagent's. A log named by its row (log_id; a Codex row before it is its own thread) speaks through its
+    newest row with intervals, which reads the whole log: a 1.6 parse of a large log, clipped to its tail, is replaced."""
+    rows = _rows(store)
+    latest, main, spans, logs, last = {}, {}, {}, {}, {}
     newer = lambda row, kept: kept is None or choice_observatory._ts(row["updated_at"]) >= choice_observatory._ts(kept["updated_at"])
-    for row in _rows(store):
+    for row in rows:
+        codex = row.get("source") == "codex"
         key = (row.get("source"), row.get("session_id"))
-        spans.setdefault(key, []).extend(row.get("active_intervals") or [])
+        log = row.get("log_id") or (row.get("session_id") if codex else None)
+        if log is None:
+            spans.setdefault(key, []).extend(row.get("active_intervals") or [])
+        elif row.get("active_intervals") and newer(row, logs.get((key, log))):
+            logs[(key, log)] = row
         if newer(row, latest.get(key)):
             latest[key] = row
         # model, effort, start and tokens come from the session's own log, never from a subagent's; a row stored before the
@@ -168,18 +176,22 @@ def load(store):
             main[key] = (rank, row)
         stamp = choice_observatory._ts(row["updated_at"])
         last[key] = row["updated_at"] if key not in last or stamp >= choice_observatory._ts(last[key]) else last[key]
-    return [{**(main[key][1] if key in main else row), "updated_at": last[key], "active_intervals": _union(spans[key]) or None}
-            for key, row in latest.items()]
+    for (key, _), row in logs.items():
+        spans.setdefault(key, []).extend(row["active_intervals"])
+    return [{**(main[key][1] if key in main else row), "session_id": key[1], "updated_at": last[key],
+             "active_intervals": _union(spans.get(key, [])) or None} for key, row in latest.items()]
 
 
 def record(store, rows):
     store = Path(store)
     seen = {}
+    parsed = lambda r: (r.get("log_id"), r.get("active_intervals"))
     for r in _rows(store):  # every stored row, not only the latest: an older log of the same session is not appended again
-        key = (r.get("source"), r.get("session_id"), r.get("updated_at"))
-        seen[key] = seen.get(key, False) or bool(r.get("active_intervals"))
+        seen.setdefault((r.get("source"), r.get("session_id"), r.get("updated_at")), []).append(parsed(r))
+    # a row whose parse brings what the stored ones lack (intervals; a whole-log read; 1.7 fields) is appended once, never one
+    # without intervals
     new = [r for r in rows if (had := seen.get((r["source"], r["session_id"], r["updated_at"]))) is None
-           or (not had and r.get("active_intervals"))]  # a row from before active_intervals gains them once
+           or (r.get("active_intervals") and parsed(r) not in had)]
     if new:
         store.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with open(store, "a") as handle:

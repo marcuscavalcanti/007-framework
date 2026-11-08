@@ -146,10 +146,11 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertFalse(result["usage"]["usage_complete"])
                 self.assertIsNone(activity.pricing_request(result))
 
-    def test_codex_clipped_tail_keeps_observed_tokens_without_complete_usage_or_price(self):
+    def test_codex_log_over_4_mib_is_read_whole_so_usage_is_complete_and_priced(self):
+        # a 527 MB rollout read only in its last 4 MiB reported 4 M tokens instead of 2.5 bn, unpriced
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "codex-clipped.jsonl")
+            path = Path(tmp, "codex-large.jsonl")
             rows = codex_rows("codex-clipped", Path(tmp))[:4] + [
                 {"timestamp": "2026-08-30T14:01:00Z", "type": "event_msg", "payload": {
                     "type": "token_count", "info": {
@@ -166,11 +167,9 @@ class LocalActivityTests(unittest.TestCase):
             write_jsonl(path, rows)
             result = activity.parse_codex_session(path, NOW)
 
-        self.assertEqual(result["usage"]["total_tokens"], 9)
-        self.assertFalse(result["usage"]["usage_complete"])
-        self.assertIsNone(activity.pricing_request(result))
-        self.assertEqual(activity.HeadroomPricer(runner=lambda _: self.fail("clipped usage was priced"))
-                         .quote([result])[0]["pricing_source"], "usage-incomplete")
+        self.assertEqual(result["usage"]["total_tokens"], 129)
+        self.assertTrue(result["usage"]["usage_complete"])
+        self.assertEqual(activity.pricing_request(result)["completion_tokens"], 22)
 
     def test_usage_completeness_is_visible_in_project_summary_without_promoting_cost(self):
         activity = self.module()
@@ -414,10 +413,11 @@ class LocalActivityTests(unittest.TestCase):
         for result in results.values():
             self.assertTrue(all(isinstance(x, int) for pair in result["active_intervals"] for x in pair))
 
-    def test_clipped_log_counts_its_unread_head_as_active_so_it_can_only_add_ambiguity(self):
+    def test_log_over_4_mib_keeps_its_real_pauses_instead_of_one_interval_from_the_start(self):
+        # the unread head of a clipped log counted as active: one fake 291 h interval instead of 34 real ones (58 h)
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "codex-clipped.jsonl")
+            path = Path(tmp, "codex-large.jsonl")
             rows = codex_rows("codex-clipped", Path(tmp))[:1] + [
                 {"type": "response_item", "payload": {"padding": "x" * (4 * 1024 * 1024)}},
                 {"timestamp": "2026-08-30T18:02:00Z", "type": "turn_context", "payload": {"model": "m", "effort": "low"}},
@@ -425,7 +425,23 @@ class LocalActivityTests(unittest.TestCase):
             write_jsonl(path, rows)
             result = activity.parse_codex_session(path, NOW)
         start = int(datetime(2026, 8, 30, 14, 0, tzinfo=timezone.utc).timestamp())
-        self.assertEqual(result["active_intervals"], [[start, start + 4 * 3600 + 180]])
+        self.assertEqual(result["active_intervals"], [[start, start], [start + 4 * 3600 + 120, start + 4 * 3600 + 180]])
+
+    def test_collector_reads_a_growing_log_from_its_cursor_and_waits_for_a_torn_row(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codex/grow.jsonl"
+            lines = [json.dumps(row) + "\n" for row in codex_rows("grow", root)]
+            collector = activity.ActivityCollector(codex_root=root / "codex", claude_root=root / "x", kimi_root=root / "x",
+                                                   gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: []))
+            path.parent.mkdir()
+            for chunk in ("".join(lines[:3]), "".join(lines[3:5]) + lines[5][:20], lines[5][20:]):
+                with path.open("a") as handle:
+                    handle.write(chunk)
+                collector.parse("codex", path, NOW)
+            self.assertEqual(collector.cursors[path][1], path.stat().st_size)
+            self.assertEqual(collector.parse("codex", path, NOW), activity.parse_codex_session(path, NOW))
 
     def test_collector_applies_the_activity_gap_parameter(self):
         activity = self.module()

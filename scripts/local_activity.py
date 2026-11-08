@@ -127,23 +127,41 @@ class HeadroomPricer:
         ]
 
 
-def json_rows(path, max_bytes=None, from_tail=False):
-    path = Path(path)
-    with path.open("rb") as handle:
-        if max_bytes and from_tail and path.stat().st_size > max_bytes:
-            handle.seek(-max_bytes, os.SEEK_END)
-            handle.readline()
-        read = 0
-        for raw in handle:
-            read += len(raw)
-            if max_bytes and not from_tail and read > max_bytes:
+def log_lines(path, offset=0):
+    """Raw lines of a log from byte `offset`."""
+    with Path(path).open("rb") as handle:
+        handle.seek(offset)
+        yield from handle
+
+
+def json_rows(path, max_bytes=None):
+    read = 0
+    for raw in log_lines(path):
+        read += len(raw)
+        if max_bytes and read > max_bytes:
+            break
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            yield value
+
+
+def read_log(path, parser, offset=0):
+    """Feeds `parser` every row of `path` after byte `offset` and returns the offset after the last whole row: a torn last row (still
+    being written) waits for the next read, so a growing log is read once in total, with memory bounded by its metadata."""
+    for raw in log_lines(path, offset):
+        try:
+            row = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if not raw.endswith(b"\n"):
                 break
-            try:
-                value = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if isinstance(value, dict):
-                yield value
+            row = None
+        offset += len(raw)
+        if isinstance(row, dict):
+            parser.feed(row)
+    return offset
 
 
 def active_intervals(stamps, gap_s=GAP_S, cap=MAX_INTERVALS):
@@ -157,15 +175,6 @@ def active_intervals(stamps, gap_s=GAP_S, cap=MAX_INTERVALS):
     return [[points[a], points[b - 1]] for a, b in zip(bounds, bounds[1:])] if points else []
 
 
-def clipped_intervals(stamps, gap_s, started):
-    """Intervals of a log read only from its tail: the unread head (start .. first tail stamp) counts as active, so a clipped log
-    can add ambiguity, never a single owner by guess."""
-    intervals = active_intervals(stamps, gap_s)
-    if intervals and started:
-        intervals[0][0] = min(intervals[0][0], int(started.timestamp()))
-    return intervals
-
-
 def first_matching(path, predicate, max_bytes=262_144):
     for row in json_rows(path, max_bytes=max_bytes):
         if predicate(row):
@@ -173,178 +182,185 @@ def first_matching(path, predicate, max_bytes=262_144):
     return None
 
 
-def parse_codex_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
-    now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=lookback_hours)
-    meta = first_matching(path, lambda row: row.get("type") == "session_meta")
-    if not meta:
-        return None
-    payload = meta.get("payload", {})
-    session_id, cwd = payload.get("id"), payload.get("cwd")
-    if not isinstance(session_id, str) or not isinstance(cwd, str):
-        return None
-    model = effort = None
-    usage = empty_usage()
-    usage_limit = 4 * 1024 * 1024
-    usage["usage_complete"] = Path(path).stat().st_size <= usage_limit
-    usage["input_includes_cache"] = True
-    updated = iso_datetime(meta.get("timestamp") or payload.get("timestamp"))
-    last_task_event = None
-    snapshots = []
-    increments = []
-    increment_missing = False
-    previous_total = None
-    stamps = []
-    for row in json_rows(path, max_bytes=usage_limit, from_tail=True):
+def counts(raw, keys):
+    return tuple(int(safe_number(raw.get(key))) for key in keys)
+
+
+def iso(stamp):
+    return stamp.isoformat().replace("+00:00", "Z") if stamp else None
+
+
+class CodexLog:
+    """Metadata of one Codex rollout, fed row by row (never content), so a growing log is read once."""
+
+    def __init__(self, path=None):
+        self.meta, self.updated, self.last_task, self.previous = None, None, None, None
+        self.stamps, self.tokens, self.model, self.effort = set(), [], None, None
+
+    def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
         if stamp:
-            stamps.append(stamp.timestamp())
-        if stamp and (updated is None or stamp > updated):
-            updated = stamp
-        if row.get("type") == "turn_context":
-            context = row.get("payload", {})
-            model = context.get("model") or model
-            effort = context.get("effort") or effort
-        event = row.get("payload", {}) if row.get("type") == "event_msg" else {}
-        if event.get("type") in ("task_started", "task_complete"):
-            last_task_event = event.get("type")
-        if event.get("type") == "token_count":
-            info = event.get("info")
+            self.stamps.add(int(stamp.timestamp()))
+            self.updated = max(self.updated or stamp, stamp)
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        kind = row.get("type")
+        if kind == "session_meta" and self.meta is None:
+            self.meta = codex_identity(row, payload) or {}
+        elif kind == "turn_context":
+            self.model = payload.get("model") or self.model
+            self.effort = payload.get("effort") or self.effort
+        elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete"):
+            self.last_task = payload["type"]
+        elif kind == "event_msg" and payload.get("type") == "token_count":
+            info = payload.get("info")
             if not isinstance(info, dict):
-                increment_missing |= bool(stamp and stamp >= cutoff)
-                continue
-            total = info.get("total_token_usage", {})
-            if total and total == previous_total:
-                continue
-            previous_total = total
-            snapshots.append((stamp, {
-                "input_tokens": int(safe_number(total.get("input_tokens"))),
-                "cached_input_tokens": int(safe_number(total.get("cached_input_tokens"))),
-                "cache_write_input_tokens": int(safe_number(total.get("cache_write_input_tokens"))),
-                "output_tokens": int(safe_number(total.get("output_tokens"))),
-                "reasoning_output_tokens": int(safe_number(total.get("reasoning_output_tokens"))),
-                "total_tokens": int(safe_number(total.get("total_tokens"))),
-            }))
-            if stamp and stamp >= cutoff:
-                last = info.get("last_token_usage")
-                if isinstance(last, dict):
-                    increments.append({key: int(safe_number(last.get(key))) for key in USAGE_KEYS})
-                else:
-                    increment_missing = True
-    started = iso_datetime(payload.get("timestamp") or meta.get("timestamp"))
-    if increments:
-        for key in USAGE_KEYS:
-            usage[key] = sum(value.get(key, 0) for value in increments)
-        usage["usage_complete"] &= not increment_missing
-    elif snapshots:
-        latest = snapshots[-1][1]
-        baseline = None
-        if started and started < cutoff:
-            before = [value for stamp, value in snapshots if stamp and stamp <= cutoff]
-            if before:
-                baseline = before[-1]
-            else:
-                inside = [value for stamp, value in snapshots if stamp and stamp > cutoff]
-                if inside:
-                    baseline = inside[0]
-                    usage["usage_complete"] = False
-        for key in USAGE_KEYS:
-            usage[key] = max(0, latest.get(key, 0) - (baseline or {}).get(key, 0))
-    else:
-        usage["usage_complete"] = False
-    # shortcut: clipped tails stay partial; qualify a window cursor before pricing them.
-    clipped = Path(path).stat().st_size > usage_limit
-    usage["usage_complete"] &= not clipped
-    return {
-        "session_id": session_id,
-        "source": "codex",
-        "runtime_provider": payload.get("model_provider") or "openai",
-        "cwd": cwd,
-        "started_at": payload.get("timestamp") or meta.get("timestamp"),
-        "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
-        "status": "active" if last_task_event == "task_started" else "idle",
-        "model": model or "unmeasured",
-        "effort": effort or "unmeasured",
-        "usage": usage,
-        "active_intervals": clipped_intervals(stamps, gap_s, started) if clipped else active_intervals(stamps, gap_s),
-    }
+                self.tokens.append((stamp, None, None))
+                return
+            total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else {}
+            if total and total == self.previous:
+                return
+            self.previous = total
+            last = info.get("last_token_usage")
+            self.tokens.append((stamp, counts(total, USAGE_KEYS), counts(last, USAGE_KEYS) if isinstance(last, dict) else None))
+
+    def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
+        if not self.meta:
+            return None
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=lookback_hours)
+        usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True}
+        inside = [(total, last) for stamp, total, last in self.tokens if stamp and stamp >= cutoff]
+        increments = [last for total, last in inside if total is not None and last is not None]
+        snapshots = [(stamp, total) for stamp, total, _ in self.tokens if total is not None]
+        started = iso_datetime(self.meta["started_at"])
+        if increments:
+            usage.update({key: sum(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
+            usage["usage_complete"] = all(total is not None and last is not None for total, last in inside)
+        elif snapshots:
+            baseline = None
+            if started and started < cutoff:
+                before = [value for stamp, value in snapshots if stamp and stamp <= cutoff]
+                after = [value for stamp, value in snapshots if stamp and stamp > cutoff]
+                baseline = before[-1] if before else after[0] if after else None
+                usage["usage_complete"] = bool(before) or not after
+            usage.update({key: max(0, snapshots[-1][1][i] - (baseline[i] if baseline else 0)) for i, key in enumerate(USAGE_KEYS)})
+        else:
+            usage["usage_complete"] = False
+        return {
+            **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at")},
+            "source": "codex",
+            "runtime_provider": self.meta["provider"] or "openai",
+            "updated_at": iso(self.updated or started),
+            "status": "active" if self.last_task == "task_started" else "idle",
+            "model": self.model or "unmeasured",
+            "effort": self.effort or "unmeasured",
+            "usage": usage,
+            "active_intervals": active_intervals(self.stamps, gap_s),
+        }
 
 
-def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookback_hours=24, gap_s=GAP_S):
-    now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=lookback_hours)
-    meta = first_matching(path, lambda row: row.get("type") in ("user", "assistant"), max_bytes=1024 * 1024)
-    if not meta:
+def codex_identity(row, payload):
+    """Session fields of a rollout's first session_meta."""
+    thread, cwd = payload.get("id"), payload.get("cwd")
+    if not isinstance(thread, str) or not isinstance(cwd, str):
         return None
-    session_id, cwd = meta.get("sessionId"), meta.get("cwd")
-    if not isinstance(session_id, str) or not isinstance(cwd, str):
-        return None
-    usage = empty_usage()
-    complete = Path(path).stat().st_size <= max_usage_bytes
-    usage["usage_complete"] = complete
-    usage["input_includes_cache"] = False
-    model = effort = None
-    cost_baseline = 0 if iso_datetime(meta.get("timestamp")) and iso_datetime(meta["timestamp"]) >= cutoff else None
-    latest_cost, cost_inside, cost_valid = None, False, complete
-    updated = iso_datetime(meta.get("timestamp"))
-    rows = json_rows(path) if complete else json_rows(path, max_bytes=4 * 1024 * 1024, from_tail=True)
-    stamps = []
-    for row in rows:
+    return {"session_id": thread, "log_id": thread, "cwd": cwd,
+            "started_at": payload.get("timestamp") or row.get("timestamp"), "provider": payload.get("model_provider")}
+
+
+def parse_codex_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
+    log = CodexLog()
+    read_log(path, log)
+    return log.result(now, lookback_hours, gap_s)
+
+
+CLAUDE_USAGE = ("input_tokens", "cache_read_input_tokens", "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens",
+                "output_tokens", "thinking_tokens")
+
+
+class ClaudeLog:
+    """Metadata of one Claude Code log, fed row by row."""
+
+    def __init__(self, path):
+        # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
+        self.in_subagents, self.log_id = "subagents" in Path(path).parts, Path(path).stem
+        self.meta, self.updated = None, None
+        self.stamps, self.messages, self.costs, self.model, self.effort = set(), [], [], None, None
+
+    def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
         if stamp:
-            stamps.append(stamp.timestamp())
+            self.stamps.add(int(stamp.timestamp()))
+            self.updated = max(self.updated or stamp, stamp)
+        kind = row.get("type")
+        if self.meta is None and kind in ("user", "assistant"):
+            self.meta = {"session_id": row.get("sessionId"), "cwd": row.get("cwd"), "started_at": row.get("timestamp"),
+                         "sidechain": row.get("isSidechain") is True}
         cost = row.get("total_cost_usd")
-        if row.get("type") == "result" and stamp:
-            if type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0:
-                cost_valid = False
-            else:
-                cost_valid &= latest_cost is None or cost >= latest_cost
-                latest_cost = float(cost)
-                if stamp <= cutoff:
-                    cost_baseline = latest_cost
-                else:
-                    cost_inside = True
-        if stamp and (updated is None or stamp > updated):
-            updated = stamp
-        message = row.get("message") if row.get("type") == "assistant" else None
+        if kind == "result" and stamp:
+            valid = type(cost) in (int, float) and math.isfinite(cost) and cost >= 0
+            self.costs.append((stamp, float(cost) if valid else None))
+        message = row.get("message") if kind == "assistant" else None
         if not isinstance(message, dict):
-            continue
-        model = message.get("model") or model
-        effort = row.get("effort") or effort
-        if not complete or not stamp or stamp < cutoff or not isinstance(message.get("usage"), dict):
-            continue
-        raw = message["usage"]
-        cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
-        usage["input_tokens"] += int(safe_number(raw.get("input_tokens")))
-        usage["cached_input_tokens"] += int(safe_number(raw.get("cache_read_input_tokens")))
-        usage["cache_write_5m_input_tokens"] += int(safe_number(cache.get("ephemeral_5m_input_tokens")))
-        usage["cache_write_1h_input_tokens"] += int(safe_number(cache.get("ephemeral_1h_input_tokens")))
-        usage["output_tokens"] += int(safe_number(raw.get("output_tokens")))
-        details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
-        usage["reasoning_output_tokens"] += int(safe_number(details.get("thinking_tokens")))
-    usage["cache_write_input_tokens"] = usage["cache_write_5m_input_tokens"] + usage["cache_write_1h_input_tokens"]
-    usage["total_tokens"] = (
-        usage["input_tokens"] + usage["cached_input_tokens"]
-        + usage["cache_write_input_tokens"] + usage["output_tokens"]
-    ) if complete else 0
-    active = bool(updated and (now - updated).total_seconds() <= 120)
-    return {
-        "session_id": session_id,
-        "source": "claude",
-        "runtime_provider": "anthropic",
-        "cwd": cwd,
-        "started_at": meta.get("timestamp"),
-        "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
-        "status": "active" if active else "idle",
-        "model": model or "unmeasured",
-        "effort": effort or "unmeasured",
-        "usage": usage,
-        "cost_usd_reported": latest_cost - cost_baseline if cost_valid and cost_inside and cost_baseline is not None else None,
-        "active_intervals": active_intervals(stamps, gap_s) if complete else
-        clipped_intervals(stamps, gap_s, iso_datetime(meta.get("timestamp"))),
-        # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
-        "subagent": "subagents" in Path(path).parts or meta.get("isSidechain") is True,
-    }
+            return
+        self.model = message.get("model") or self.model
+        self.effort = row.get("effort") or self.effort
+        if stamp and isinstance(message.get("usage"), dict):
+            raw = message["usage"]
+            cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
+            details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
+            self.messages.append((stamp, counts({**details, **cache, **raw}, CLAUDE_USAGE)))
+
+    def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
+        meta = self.meta
+        if not meta or not isinstance(meta["session_id"], str) or not isinstance(meta["cwd"], str):
+            return None
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=lookback_hours)
+        usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": False}
+        sums = [sum(column) for column in zip(*(value for stamp, value in self.messages if stamp >= cutoff))] or [0] * 6
+        (usage["input_tokens"], usage["cached_input_tokens"], usage["cache_write_5m_input_tokens"],
+         usage["cache_write_1h_input_tokens"], usage["output_tokens"], usage["reasoning_output_tokens"]) = sums
+        usage["cache_write_input_tokens"] = usage["cache_write_5m_input_tokens"] + usage["cache_write_1h_input_tokens"]
+        usage["total_tokens"] = usage["input_tokens"] + usage["cached_input_tokens"] + usage["cache_write_input_tokens"] + usage["output_tokens"]
+        started = iso_datetime(meta["started_at"])
+        baseline = 0 if started and started >= cutoff else None
+        latest, inside, valid = None, False, True
+        for stamp, cost in self.costs:
+            if cost is None:
+                valid = False
+                continue
+            valid &= latest is None or cost >= latest
+            latest = cost
+            if stamp <= cutoff:
+                baseline = latest
+            else:
+                inside = True
+        return {
+            "session_id": meta["session_id"],
+            "log_id": self.log_id,
+            "source": "claude",
+            "runtime_provider": "anthropic",
+            "cwd": meta["cwd"],
+            "started_at": meta["started_at"],
+            "updated_at": iso(self.updated),
+            "status": "active" if self.updated and (now - self.updated).total_seconds() <= 120 else "idle",
+            "model": self.model or "unmeasured",
+            "effort": self.effort or "unmeasured",
+            "usage": usage,
+            "cost_usd_reported": latest - baseline if valid and inside and baseline is not None else None,
+            "active_intervals": active_intervals(self.stamps, gap_s),
+            "subagent": self.in_subagents or meta["sidechain"],
+        }
+
+
+def parse_claude_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
+    log = ClaudeLog(path)
+    read_log(path, log)
+    return log.result(now, lookback_hours, gap_s)
+
+
+LOGS = {"codex": CodexLog, "claude": ClaudeLog}
 
 
 def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
@@ -510,6 +526,7 @@ class ActivityCollector:
         self.lookback_hours = lookback_hours
         self.gap_s = float(activity_gap_minutes) * 60
         self.cache = {}
+        self.cursors = {}  # path -> (inode, offset, parser) of a plain log still growing
         self.identity_cache = {}
 
     def candidates(self, now):
@@ -536,10 +553,15 @@ class ActivityCollector:
         cached = self.cache.get(path)
         if cached and cached[0] == key:
             return cached[1]
-        if source == "codex":
-            value = parse_codex_session(path, now, self.lookback_hours, self.gap_s)
-        elif source == "claude":
-            value = parse_claude_session(path, now, lookback_hours=self.lookback_hours, gap_s=self.gap_s)
+        if source in LOGS:
+            # ponytail: a plain log that only grows (same inode, not shorter) is read on from where the last read stopped; an
+            # in-place rewrite to a longer file would be misread (Codex renames instead), a truncation starts over
+            inode, offset, log = self.cursors.pop(path, (None, 0, None))  # a failed read never leaves a half-fed cursor
+            if log is None or inode != stat.st_ino or offset > stat.st_size:
+                offset, log = 0, LOGS[source](path)
+            offset = read_log(path, log, offset)
+            self.cursors[path] = (stat.st_ino, offset, log)
+            value = log.result(now, self.lookback_hours, self.gap_s)
         elif source == "kimi":
             value = parse_kimi_session(path, now, self.lookback_hours, self.gap_s)
         else:
@@ -574,8 +596,9 @@ class ActivityCollector:
         cutoff = now - timedelta(hours=self.lookback_hours)
         identities = {entry["project_id"]: self.identity(entry["path"]) for entry in entries}
         sessions_by_project = {entry["project_id"]: [] for entry in entries}
-        errors = []
+        errors, seen = [], set()
         for source, path in self.candidates(now):
+            seen.add(path)
             try:
                 session = self.parse(source, path, now)
                 if not session:
@@ -591,6 +614,7 @@ class ActivityCollector:
                 sessions_by_project[project_id].append(session)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 errors.append({"file": path.name, "error": str(exc)})
+        self.cursors = {path: cursor for path, cursor in self.cursors.items() if path in seen}
         all_sessions = [session for sessions in sessions_by_project.values() for session in sessions]
         for session, pricing in zip(all_sessions, self.pricer.quote(all_sessions)):
             session["cost_usd_estimate"] = pricing.get("cost_usd")
