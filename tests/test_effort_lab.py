@@ -485,6 +485,19 @@ class ReachableBehaviour(unittest.TestCase):
             self.assertEqual([t["id"] for t in json.loads((root / "filtered" / "set.json").read_text())["tasks"]], ["T0"])
             self.assertTrue((root / "filtered" / "tasks").is_symlink())
 
+    def test_sufficiency_never_counts_old_behaviour_an_empty_patch_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 1, baseline=("a", "b", "c"))
+            (root / "set.json").write_text(json.dumps({"tasks": [{"id": "T0"}]}))
+            original = lab.load_cells
+            lab.load_cells = lambda _: [cell("T0", "calib", 1, {"a", "b", "c"})]  # old behaviour only: 3/4 of hidden
+            try:
+                out = lab.sufficiency(root / "set.json", root, .7, root / "filtered" / "set.json")
+            finally:
+                lab.load_cells = original
+            self.assertEqual(out["dropped"], [("T0", 0.0)])
+
 
 if __name__ == "__main__":
     unittest.main()

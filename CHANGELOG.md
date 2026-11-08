@@ -12,6 +12,24 @@ schemas, and the dashboard snapshot.
   (a test fails if the copy drifts); `RELEASING.md`; `.github/CODEOWNERS`, a pull request template, and bug and claim-challenge
   issue templates with security reports routed to private reporting. `CONTRIBUTING.md` now points to `AGENTS.md`.
 
+## [1.6.1] - 2026-11-08
+
+Patch release: fixes and documentation; no new command or schema.
+
+### Fixed
+
+- `007 lab sufficiency` measures only the behaviour the commit introduced (hidden tests minus the baseline), so an empty patch
+  never qualifies; its docstring names the selection bias toward "equal".
+- A dashboard layout test's 5-second subprocess timeout, which failed once on a loaded CI runner, is now 60 seconds.
+
+### Changed
+
+- The thesis, `docs/lab.md` and `report.md` state that a verdict holds for the specification form the set used (commit message
+  plus pinned names) and that well-specified-task filters pull it toward "equal". `007 lab` is labelled beta. The dashboard
+  says "less quota" is estimated as cost.
+- The README opening says what 007 is: a toolkit that drives your agent CLIs (lab, skill, run/record/route/dashboard), not an
+  agent and not only a skill.
+
 ## [1.6.0] - 2026-11-08
 
 Minor release: new commands and schemas are additive, and v1 receipts stay valid. Behaviour changes are listed under
@@ -359,7 +377,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.0...v1.5.1
