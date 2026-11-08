@@ -837,12 +837,16 @@ def feasibility(config_path, results, margin=None, sd=None):
 
 def sufficiency(config_path, results, threshold, out):
     """Specification floor filter: keep a task only if a calibration cell built from the prompt alone (cheap model, other family)
-    passes at least `threshold` of its hidden tests. Tasks whose prompt cannot reach the tests stop costing arms."""
+    passes at least `threshold` of the behaviour the commit introduced (hidden tests minus the baseline green at base, so an empty
+    patch never qualifies). It keeps tasks a cheap executor can already reach, which pulls a later verdict toward "equal": a
+    sizing aid for pilots, not for confirmatory sets."""
     config = json.loads(config_path.read_text())
     rows = [r for r in load_cells(results) if r["valid"] is True]
     kept, dropped = [], []
     for task in config["tasks"]:
-        hidden = [k for k in json.loads((config_path.parent / "tasks" / task["id"] / "hidden.json").read_text()) if k != "__module__"]
+        directory = config_path.parent / "tasks" / task["id"]
+        baseline = set(json.loads((directory / "baseline.json").read_text()))
+        hidden = [k for k in json.loads((directory / "hidden.json").read_text()) if k != "__module__" and k not in baseline]
         cells = [r for r in rows if r["task"] == task["id"]]
         share = max((sum(c["acceptance_outcomes"].get(k) == "pass" for k in hidden) / len(hidden) for c in cells if hidden), default=None)
         (kept if share is not None and share >= threshold else dropped).append((task["id"], share))
@@ -957,7 +961,7 @@ def summary(result, low, ref, attempts):
         f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {reasoning[low]:.0f} vs {reasoning[ref]:.0f}.",
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
-        "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits or models other than these.",
+        "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits, models or specification forms other than these.",
         f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
         "",
     ])

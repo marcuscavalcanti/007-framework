@@ -55,7 +55,7 @@ class PackageContractTests(unittest.TestCase):
         normal = subprocess.run(
             [sys.executable, "tests/dashboard_layout.py", "--help"],
             cwd=ROOT, env={**os.environ, "PYTHONOPTIMIZE": "0"},
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=60,  # a loaded CI runner once took over 5 s
         )
         self.assertEqual(normal.returncode, 0, normal.stderr)
         self.assertIn("usage:", normal.stdout)
@@ -67,7 +67,7 @@ class PackageContractTests(unittest.TestCase):
                 result = subprocess.run(
                     [sys.executable, *flags, "tests/dashboard_layout.py", "--port", "0"],
                     cwd=ROOT, env={**os.environ, "PYTHONOPTIMIZE": "0", **overrides},
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True, text=True, timeout=60,  # a loaded CI runner once took over 5 s
                 )
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn("optimized Python", result.stderr)
@@ -77,10 +77,10 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.6\.0$")
-        self.assertIn('VERSION = "1.6.0"', (ROOT / "scripts/dashboard.py").read_text())
+        self.assertRegex(skill, r"(?m)^  version: 1\.6\.1$")
+        self.assertIn('VERSION = "1.6.1"', (ROOT / "scripts/dashboard.py").read_text())
         shown = subprocess.run([sys.executable, str(ROOT / "bin/007"), "--version"], capture_output=True, text=True, check=True).stdout
-        self.assertEqual(shown.strip(), "007 1.6.0")
+        self.assertEqual(shown.strip(), "007 1.6.1")
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))
