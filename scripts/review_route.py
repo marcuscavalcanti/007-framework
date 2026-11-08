@@ -57,3 +57,22 @@ def review_argv(route, *, max_budget_usd=None):
                 "--mcp-config", json.dumps({"mcpServers": {}}), "--prompt-suggestions", "false",
                 "--output-format", "stream-json", "--include-partial-messages"]
     raise ValueError("review-route-unknown")
+
+
+def identity_level(route, rows):
+    """AGENTS.md reviewer identity level from a review's parsed JSON stream rows: "verified", "pinned-no-reroute" or "failed".
+    The served identity is never filled from the request; "pinned-no-reroute" qualifies a release only as such."""
+    import cli_telemetry  # the one place that knows the Codex reroute item
+    kinds = [row.get("type") for row in rows if isinstance(row, dict)]
+    if route.get("cli") == "codex":
+        if "turn.completed" not in kinds or any(kind in ("error", "turn.failed") for kind in kinds):
+            return "failed"
+        rerouted = any(row.get("type") == "item.completed" and isinstance(row.get("item"), dict) and row["item"].get("type") == "error"
+                       and cli_telemetry.CODEX_REROUTE.fullmatch(str(row["item"].get("message", ""))) for row in rows if isinstance(row, dict))
+        return "failed" if rerouted else "pinned-no-reroute"
+    if route.get("cli") == "claude":
+        result = next((row for row in rows if isinstance(row, dict) and row.get("type") == "result"), None)
+        models = set((result or {}).get("modelUsage") or {})
+        ok = result is not None and result.get("subtype") == "success" and result.get("is_error") is False
+        return "verified" if ok and models == {route.get("model")} else "failed"
+    return "failed"

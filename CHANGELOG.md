@@ -8,7 +8,8 @@ schemas, and the dashboard snapshot.
 
 ## [1.6.2] - 2026-11-08
 
-Patch release: the confirmed findings of an external audit of 1.6.1, and the contribution rules. Additive only: no command,
+Patch release: the confirmed findings of an external audit of 1.6.1, the contribution rules, reviewer identity levels and
+Amendment 1 to the Codex pilot. Additive only: no command,
 flag or schema field is renamed or removed. See [the release record](evidence/v1.6.2/release-evidence.md).
 
 ### Added
@@ -17,6 +18,17 @@ flag or schema field is renamed or removed. See [the release record](evidence/v1
   (a test fails if the copy drifts); `RELEASING.md`; `.github/CODEOWNERS`, a pull request template, and bug and claim-challenge
   issue templates with security reports routed to private reporting; a short `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1 by
   reference). `CONTRIBUTING.md` now points to `AGENTS.md`.
+
+### Changed
+
+- Reviewer identity levels (`AGENTS.md`, `review_route.identity_level`): `verified`, `pinned-no-reroute` ("requested model
+  pinned, no reroute observed, served identity unverified") and `failed`. A `pinned-no-reroute` review qualifies a release only
+  as "qualified with unverified reviewer identity"; the levels never apply to experiments and never fill served identity from
+  the request. Not retroactive.
+- `RELEASING.md`: an announcement may report any verdict of a technically qualified release; NOT-PROVEN never states the thesis
+  as proven, and a pilot's GO means only that a confirmation is feasible.
+- Amendment 1 to the Codex 5-point pilot pre-registration (`evidence/codex-5pp-20261108/AMENDMENT-1.md`), published before any
+  pilot attempt; the original pre-registration and its hash are unchanged.
 
 ### Fixed
 
@@ -51,8 +63,6 @@ flag or schema field is renamed or removed. See [the release record](evidence/v1
   (external audit F03). When the stream names models (Claude `modelUsage`, a Codex reroute target), the declared model must be
   one of them; otherwise the run exits 2 with the telemetry kept and no terminal receipt. Declared and observed identity stay
   in separate fields. No published evidence holds a receipt with native telemetry.
-
-### Fixed
 
 - Dashboard: a `007 lab report` verdict no longer reads as evidence for whichever repository is selected (external audit F09).
   The report names no repository, so `observatory.lab_report` now takes `{"path", "project_id", "cli", "model"}`, the keys of a

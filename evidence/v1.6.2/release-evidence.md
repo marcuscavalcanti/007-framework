@@ -23,6 +23,13 @@ before and after. The audit was read as evidence to check, not as a specificatio
 
 The published conclusions stand: Codex and Claude on go-json remain NOT-PROVEN at their declared margins.
 
+Also in this release, from the maintainer's decisions after the audit:
+- **Reviewer identity levels** (`AGENTS.md`, `review_route.identity_level`): `verified`, `pinned-no-reroute` and `failed`.
+  `pinned-no-reroute` qualifies a release only as "qualified with unverified reviewer identity". The levels never apply to
+  experiments.
+- **Announcement rule:** any verdict of a technically qualified release may be announced (`RELEASING.md`).
+- **Amendment 1 to the Codex 5-point pilot:** published before any pilot attempt; the original and its hash are unchanged.
+
 ## Qualification
 - **Exact-commit and exact-tag CI:** recorded on the GitHub release.
 - **Independent review:** per `AGENTS.md` reviewer identity levels, recorded on the GitHub release; not run if Marcus does not

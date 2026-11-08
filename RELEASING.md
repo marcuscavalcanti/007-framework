@@ -78,6 +78,11 @@ Until it exists, run them by hand.
 
 - A CI failure on `main` is investigated. Re-run only for a demonstrated flake,
   and record it in the release notes.
-- The independent review follows `AGENTS.md`. A review whose served identity is
-  unverified does not qualify a release; the notes say so.
-- Publish first, announce after. The announcement is a separate step.
+- The independent review follows `AGENTS.md` reviewer identity levels.
+  `verified` qualifies; `pinned-no-reroute` qualifies only as "qualified with
+  unverified reviewer identity", stated verbatim in the notes; `failed` does not
+  qualify. Served identity is never filled from the request.
+- Publish first, announce after. The announcement is a separate step. It may
+  report any verdict (PROVEN, NOT-PROVEN or KILL) of a technically qualified
+  release. NOT-PROVEN never states the thesis as proven, and a pilot's GO means
+  only that a confirmation is feasible.
