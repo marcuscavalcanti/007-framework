@@ -1,4 +1,4 @@
-# 1.6.0 candidate: `007 lab` and thesis D
+# 1.6.0: `007 lab` and thesis D
 
 Base: published 1.5.2, commit `361ede0751b1d02b5488b940dd943c77f4a6b675`. The changes are listed in the
 [changelog](../../CHANGELOG.md); this file records what qualifies the candidate and what it does not claim.
@@ -33,7 +33,9 @@ Base: published 1.5.2, commit `361ede0751b1d02b5488b940dd943c77f4a6b675`. The ch
 
 ## Qualification
 Recorded before the tag. A later documentary commit is qualified separately, not by the CI or the review of an earlier commit.
-- Exact-commit CI: pending.
+- **Exact-commit CI:** `e44e505` passed all 6 checks on GitHub Actions ([push](https://github.com/marcuscavalcanti/007-framework/actions/runs/42498557745),
+  [pull request](https://github.com/marcuscavalcanti/007-framework/actions/runs/42498554629)); locally, 722 tests on a clean export. This
+  record's own commit is qualified by its own CI run.
 - **Independent review: failed validation.**
   - Route per `AGENTS.md`: Codex `gpt-6-astra`, `xhigh`, read-only, context on stdin.
   - One call on candidate `4326e56`, 586 s. The context was 152,204 bytes (SHA-256 `4b4a970d82c7203bdd32454f3c0dab5cf43765b9b29ad6645c01f14c1ee4b6bd`),

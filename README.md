@@ -94,7 +94,7 @@ Tools for this thesis: `scripts/effort_lab.py` (`007 lab`: mine, sensitivity, ru
 `scripts/choice_observatory.py` (session → commit attribution and line survival, with an explicit evidence level) and
 `scripts/effort_trial.py` (opt-in randomized default effort; **off by default**).
 
-> **1.6.0 candidate:** adds `007 lab` and restates the thesis as a decision tested
+> **1.6.0** (published 2026-11-08): adds `007 lab` and restates the thesis as a decision tested
 > against a margin declared before spending. Public pre-registered evidence so far:
 > Codex on go-json not proven at 3 points, Claude on go-json not proven at 10
 > points. See its [qualification record](evidence/v1.6.0/release-evidence.md).

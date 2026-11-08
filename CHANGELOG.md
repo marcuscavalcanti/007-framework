@@ -4,7 +4,7 @@ All notable changes are documented here.
 
 ## [Unreleased]
 
-## [1.6.0] — candidate (2026-11-08)
+## [1.6.0] — 2026-11-08
 
 ### Release review fixes
 
