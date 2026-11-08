@@ -16,6 +16,10 @@ schemas, and the dashboard snapshot.
 - Compressed Codex rollouts (`*.jsonl.zst`, 2,819 of 2,879 on the maintainer's machine) are read: `compression.zstd` on
   Python 3.14+, else the `zstd` binary. Without either they are counted in `activity_errors` and in `record`'s output
   (`unreadable_logs`), never skipped silently.
+- Codex subagent and auto-review (guardian) threads report their root session's id with `subagent: true`, as Claude subagent logs
+  do, so they no longer compete with the thread that spawned them for its commits; rows stored under a child's own id join the
+  root once `record` reads the child's log again. With this release's fixes, one `record` pass on the maintainer's machine took
+  one repository from 8 attributed, 200 ambiguous and 43 unattributed commits to 198, 13 and 40.
 
 ## [1.6.1] - 2026-11-08
 

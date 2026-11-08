@@ -222,7 +222,8 @@ def iso(stamp):
 
 
 class CodexLog:
-    """Metadata of one Codex rollout, fed row by row (never content), so a growing log is read once."""
+    """Metadata of one Codex rollout, fed row by row (never content), so a growing log is read once. A thread another thread spawned
+    (subagent, guardian review) reports its root session's id, as a Claude subagent log does, with its own id as log_id."""
 
     def __init__(self, path=None):
         self.meta, self.updated, self.last_task, self.previous = None, None, None, None
@@ -278,7 +279,7 @@ class CodexLog:
         else:
             usage["usage_complete"] = False
         return {
-            **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at")},
+            **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at", "subagent")},
             "source": "codex",
             "runtime_provider": self.meta["provider"] or "openai",
             "updated_at": iso(self.updated or started),
@@ -291,11 +292,19 @@ class CodexLog:
 
 
 def codex_identity(row, payload):
-    """Session fields of a rollout's first session_meta."""
+    """Session fields of a rollout's first session_meta. A child carries `parent_thread_id` (also under
+    source.subagent.thread_spawn) and Codex's `session_id` names its root; reviews are thread_source "guardian_review"."""
     thread, cwd = payload.get("id"), payload.get("cwd")
     if not isinstance(thread, str) or not isinstance(cwd, str):
         return None
-    return {"session_id": thread, "log_id": thread, "cwd": cwd,
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    sub = source.get("subagent") if isinstance(source.get("subagent"), dict) else {}
+    spawn = sub.get("thread_spawn") if isinstance(sub.get("thread_spawn"), dict) else {}
+    parent = payload.get("parent_thread_id") or spawn.get("parent_thread_id")
+    child = bool(parent or sub or "subagent" in source or payload.get("thread_source") in ("subagent", "guardian_review"))
+    root = payload.get("session_id") if child and isinstance(payload.get("session_id"), str) else None
+    root = root if root and root != thread else parent if child and isinstance(parent, str) else thread
+    return {"session_id": root, "log_id": thread, "cwd": cwd, "subagent": child,
             "started_at": payload.get("timestamp") or row.get("timestamp"), "provider": payload.get("model_provider")}
 
 

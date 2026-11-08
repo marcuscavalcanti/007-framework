@@ -195,6 +195,17 @@ class ObservatoryHistoryTests(unittest.TestCase):
         self.assertEqual(self.hist.record(self.store, [whole, clipped]), 0)
         self.assertEqual(self.hist.load(self.store)[0]["active_intervals"], [[T0, T0 + 60], [T0 + 8000, T0 + 9000]])
 
+    def test_codex_children_and_reviews_join_their_root_session_even_when_stored_under_their_own_id(self):
+        repo = self.git_repo("project-delta", commit_at=T0 + 5000)
+        self.hist.record(self.store, [
+            self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("root", log_id="worker", subagent=True, model="m2", active_intervals=[[T0 + 4800, T0 + 5200]]),
+            self.codex_row("root", log_id="review", subagent=True, model="codex-auto-review", active_intervals=[[T0 + 4900, T0 + 5100]]),
+            self.codex_row("legacy", active_intervals=[[T0 + 4900, T0 + 5100]]),  # a child as 1.6 stored it, under its own id
+            self.codex_row("root", log_id="legacy", subagent=True, active_intervals=[[T0 + 4900, T0 + 5100]])])
+        row, = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual((row["session_id"], row["model"], len(row["commits"]), row["ambiguous_commits"]), ("root", "m", 1, []))
+
     def test_report_runs_the_observatory_on_an_opted_in_project_and_refuses_others(self):
         repo = Path(self.tmp.name, "repo")
         repo.mkdir()

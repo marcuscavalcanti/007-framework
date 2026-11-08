@@ -4,8 +4,10 @@ Level 0: a session was observed (model, effort, times). Level 1: commits are att
 is mature. Attribution is a heuristic: a commit belongs to the one session of this repository whose active intervals (row
 timestamps, local_activity.active_intervals) +- slack hold its committer time; a session without intervals falls back to
 [start - slack, end + slack]; inside two sessions it is "ambiguous", never guessed. Commits come from every local branch and every
-worktree's HEAD (BRANCHES). Durability is line survival (git blame) on HEAD at the last commit before each window's cutoff; an
-attributed commit HEAD does not reach is "not merged": neither surviving nor reworked. Callers pass the project's sessions
+worktree's HEAD (BRANCHES). Rows sharing a session id (Claude subagent logs, Codex subagent and auto-review threads) are one
+owner.
+Durability is line survival (git blame) on HEAD at the last commit before each window's cutoff; an attributed commit HEAD does
+not reach is "not merged": neither surviving nor reworked. Callers pass the project's sessions
 (local_activity maps cwd to project) and, as rivals, those of other projects on the same repository (a worktree registered apart).
 Level 3 (Calibrated): `calibrated` reads a holdout analysis (007-thesis-d-holdout-analysis/v1) configured for the session's
 project, CLI and model; `questions` turns one session into the dashboard's three questions. Level 2 and External are not built.
@@ -62,11 +64,12 @@ def _spans(session, slack_s):
 
 
 def attribute(repo, sessions, slack_s=600):
+    """Rows sharing a session id (its main log, Claude subagents, Codex children and reviews) are ONE owner, never rivals."""
     windows = [(s["session_id"], _spans(s, slack_s)) for s in sessions]
     result = {"sessions": {s["session_id"]: [] for s in sessions}, "unattributed": {},
               "ambiguous": {s["session_id"]: [] for s in sessions}}
     for sha, when in reversed(_commits(repo)):  # oldest first
-        owners = [sid for sid, spans in windows if any(start <= when <= end for start, end in spans)]
+        owners = list(dict.fromkeys(sid for sid, spans in windows if any(start <= when <= end for start, end in spans)))
         if len(owners) == 1:
             result["sessions"][owners[0]].append(sha)
         else:

@@ -247,6 +247,26 @@ class LocalActivityTests(unittest.TestCase):
             marks = [activity.parse_claude_session(p, NOW)["subagent"] for p in (main, sub, flagged)]
         self.assertEqual(marks, [False, True, True])
 
+    def test_codex_children_and_reviews_report_their_root_session_as_subagents(self):
+        # 200 of 247 commits were "ambiguous" because each subagent and auto-review thread competed with the thread that spawned it
+        activity = self.module()
+        spawn = {"subagent": {"thread_spawn": {"parent_thread_id": "root", "depth": 1}}}
+        metas = {"root": {"thread_source": "user", "source": "vscode", "session_id": "root"},
+                 "worker": {"thread_source": "subagent", "source": spawn, "parent_thread_id": "root", "session_id": "root"},
+                 "review": {"thread_source": "guardian_review", "source": {"subagent": {"other": "guardian"}},
+                            "parent_thread_id": "worker", "session_id": "root"},
+                 "older": {"thread_source": "subagent", "source": spawn, "parent_thread_id": "root", "session_id": "older"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            results = {}
+            for thread, meta in metas.items():
+                rows = codex_rows(thread, Path(tmp))
+                rows[0]["payload"].update(meta)
+                write_jsonl(Path(tmp, f"{thread}.jsonl"), rows)
+                results[thread] = activity.parse_codex_session(Path(tmp, f"{thread}.jsonl"), NOW)
+        self.assertEqual({t: (r["session_id"], r["log_id"], r["subagent"]) for t, r in results.items()},
+                         {"root": ("root", "root", False), "worker": ("root", "worker", True), "review": ("root", "review", True),
+                          "older": ("root", "older", True)})
+
     def test_compressed_codex_logs_are_read_and_counted_as_unread_without_a_decoder(self):
         # 2819 of 2879 local rollouts are *.jsonl.zst: compression.zstd (3.14+), else the zstd binary, else a visible count
         activity = self.module()

@@ -152,15 +152,26 @@ def _union(intervals):
 
 def load(store):
     """The latest row of each session; its active_intervals are the union over all its logs, because one session id spans
-    several logs (Claude subagents under <session>/subagents/ carry the parent sessionId) and the latest may be a
-    subagent's. A log named by its row (log_id; a Codex row before it is its own thread) speaks through its
+    several logs (Claude subagents under <session>/subagents/ carry the parent sessionId, Codex children their root's) and the
+    latest may be a subagent's. A log named by its row (log_id; a Codex row before it is its own thread) speaks through its
     newest row with intervals, which reads the whole log: a 1.6 parse of a large log, clipped to its tail, is replaced."""
     rows = _rows(store)
+    # a Codex child stored before 1.7 kept its own thread id as session id: a later row of the same log names its root
+    alias = {r["log_id"]: r["session_id"] for r in rows
+             if r.get("source") == "codex" and isinstance(r.get("log_id"), str) and r["log_id"] != r.get("session_id")}
+
+    def root(session_id):
+        seen = set()
+        while session_id in alias and session_id not in seen:
+            seen.add(session_id)
+            session_id = alias[session_id]
+        return session_id
+
     latest, main, spans, logs, last = {}, {}, {}, {}, {}
     newer = lambda row, kept: kept is None or choice_observatory._ts(row["updated_at"]) >= choice_observatory._ts(kept["updated_at"])
     for row in rows:
         codex = row.get("source") == "codex"
-        key = (row.get("source"), row.get("session_id"))
+        key = (row.get("source"), root(row.get("session_id")) if codex else row.get("session_id"))
         log = row.get("log_id") or (row.get("session_id") if codex else None)
         if log is None:
             spans.setdefault(key, []).extend(row.get("active_intervals") or [])
