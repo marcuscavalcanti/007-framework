@@ -6,6 +6,15 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Added
+
+- Dashboard snapshot field `lab_ledger`: the spend 007 itself caused, per experiment listed in the local config
+  (`observatory.lab_ledger: [{"name": ..., "results": "dir" or ["dir", ...]}]`, paths relative to the config file), kept apart
+  from the user's own agent usage. Per experiment: first and last attempt (from `dispatch.jsonl`), attempts, valid, invalid,
+  orphan receipts, USD with its sources, USD on attempts without a valid result; plus a total. Sums of `007 lab run` runner
+  receipts, a client estimate and not an invoice: an attempt without a cost is counted as unpriced (the total becomes a lower
+  bound), never as zero, and a missing or unreadable directory is reported unavailable instead of failing the read.
+
 ## [1.6.1] - 2026-11-08
 
 Patch release: fixes and documentation; no new command or schema.

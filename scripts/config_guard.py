@@ -21,7 +21,7 @@ HOME = Path.home() / ".007-framework"
 EFFORTS = {"codex": ("none", "minimal", "low", "medium", "high", "xhigh", "max"), "claude": ("low", "medium", "high", "xhigh"),
            "kimi": ("low", "high", "max")}  # gemini exposes no effort setting: observed only, never randomized
 OBSERVATORY = {"projects", "auto", "exclude", "lookback_hours", "activity_gap_minutes", "calibrations", "effort_trial", "evidence",
-               "durability_windows_days", "attribution_slack_s", "lab_report", "_note", "_note_auto"}
+               "durability_windows_days", "attribution_slack_s", "lab_report", "lab_ledger", "_note", "_note_auto"}
 TRIAL = {"enabled", "arms", "seed", "repos", "agents", "trial_id", "claude_model"}
 EVIDENCE = {"confidence", "min_n", "margin", "min_gain"}
 FIXED = {"levels", "badges", "level_semantics"}
@@ -66,7 +66,7 @@ def check(config, trial_log=HOME / "observatory" / "effort_trial.jsonl"):
     if not isinstance(obs, dict):
         return ["observatory: must be an object"]
     problems = _unknown("observatory", obs, OBSERVATORY)
-    for key in ("projects", "exclude", "calibrations"):
+    for key in ("projects", "exclude", "calibrations", "lab_ledger"):
         if key in obs and not isinstance(obs[key], list):
             problems.append(f"observatory.{key}: must be a list")
     if "auto" in obs and not isinstance(obs["auto"], bool):
