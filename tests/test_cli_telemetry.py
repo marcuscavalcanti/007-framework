@@ -159,6 +159,26 @@ class NativeTelemetryTests(unittest.TestCase):
         self.run_fixture("claude", exit_code=0)
         self.run_fixture("claude", exit_code=0, declared_cost=999)
 
+    def test_a_served_model_the_native_stream_contradicts_is_not_published(self):
+        # audit F03: claude-cli telemetry reported claude-opus-5-5 and the recorded receipt kept a different declared model
+        self.run_fixture("claude", served_model="different-openai-model")
+        self.run_fixture("claude", served_model="different-openai-model", acceptance_bound=True)
+
+    def test_served_identity_is_reconciled_with_every_model_the_stream_reports(self):
+        enrich = self.module().enrich
+        receipt = json.loads((ROOT / "examples/task.receipt.example.json").read_text())  # declares gpt-5.6-sol-2026-08-01
+        observed = lambda models: {"status": "complete", "usage": {"total_tokens": 1}, "wall_s": 1, "estimated_cost_usd": None,
+                                   "model_usage": models}
+        self.assertEqual(enrich(receipt, observed({}))["served_model"], "gpt-5.6-sol-2026-08-01")  # Codex silence claims nothing
+        rerouted = observed({"gpt-5.2": {}})
+        with self.assertRaisesRegex(ValueError, r"served_model .*\(gpt-5\.2\)"):
+            enrich(receipt, rerouted)  # declaring the requested model after a reroute
+        self.assertEqual(enrich({**receipt, "served_model": "gpt-5.2"}, rerouted)["served_model"], "gpt-5.2")
+        several = observed({"claude-opus-5-5": {"costUSD": 1.0}, "claude-haiku-5": {"costUSD": 0.01}})
+        self.assertEqual(enrich({**receipt, "served_model": "claude-opus-5-5"}, several)["served_provider"], "openai")  # declared
+        with self.assertRaisesRegex(ValueError, "claude-haiku-5, claude-opus-5-5"):
+            enrich({**receipt, "served_model": "claude-sonnet-5-5"}, several)
+
     def test_native_error_class_keeps_the_most_severe_whatever_the_chunking(self):
         # Review r42 D2: a later rate-limit row must not be lost behind an earlier transient one, nor overwritten by one.
         import cli_telemetry
@@ -317,7 +337,8 @@ class NativeTelemetryTests(unittest.TestCase):
 
     def run_fixture(self, provider, exit_code=0, invalid=False, declared_cost=None, hold_stdout=False,
                     authority_bound=False, telemetry_collision=False, malformed_receipt=False,
-                    acceptance_bound=False, cleanup_state=None):
+                    acceptance_bound=False, cleanup_state=None, served_model=None):
+        contradicted = served_model is not None
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp, "project")
             repo.mkdir()
@@ -327,6 +348,11 @@ class NativeTelemetryTests(unittest.TestCase):
                            capture_output=True, check=True)
             base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
             base.update({"tokens": "unmeasured", "wall_s": "unmeasured"})
+            if provider == "claude":  # the identity the fixture's stream reports
+                base.update(requested_provider="anthropic", requested_model="claude-opus-5-5",
+                            served_provider="anthropic", served_model="claude-opus-5-5")
+            if contradicted:
+                base["served_model"] = served_model
             authority = Path(tmp, "authority.json")
             if authority_bound:
                 authority.write_text(json.dumps({"schema": "007-framework/authority/v1",
@@ -374,7 +400,8 @@ class NativeTelemetryTests(unittest.TestCase):
                                     capture_output=True, text=True, timeout=10)
             if acceptance_bound:
                 self.assertEqual((repo / "gate.ran").exists(),
-                                 not (exit_code or invalid or malformed_receipt or telemetry_collision or cleanup_state),
+                                 not (exit_code or invalid or malformed_receipt or telemetry_collision or cleanup_state
+                                      or contradicted),
                                  result.stderr)
             if cleanup_state:
                 self.assertIn("executor cleanup incomplete: " + cleanup_state, result.stderr)
@@ -400,9 +427,12 @@ class NativeTelemetryTests(unittest.TestCase):
                 self.assertEqual(telemetry["status"], "incomplete")
             self.assertEqual(evidence.stat().st_mode & 0o077, 0)
             destination = repo / ".007/receipts/native-task.receipt.json"
-            if exit_code or invalid or malformed_receipt or cleanup_state:
+            if exit_code or invalid or malformed_receipt or cleanup_state or contradicted:
                 self.assertEqual(result.returncode, exit_code or 2, result.stderr)
                 self.assertFalse(destination.exists())
+                if contradicted:
+                    self.assertIn("declared served_model is not a model the native stream reported", result.stderr)
+                    self.assertEqual(telemetry["reported_model"], "claude-opus-5-5")  # the observation itself is kept
             else:
                 self.assertEqual(result.returncode, 0, result.stderr)
                 stored = json.loads(destination.read_text())

@@ -176,6 +176,15 @@ not streamed message fragments. A CLI dollar estimate supersedes declared cost
 in native mode and is always `rate-card-estimate` / `provisional`. Missing USD
 is never zero and still requires the existing unavailable-cost opt-in or a
 separately accounted cost. Requested effort is not relabeled as served effort.
+Identity stays in three places that are never merged: the executor's declared
+`requested_*` and `served_*`, and the observed models in
+`native_telemetry.model_usage` (every Claude `modelUsage` entry; for Codex only
+the target of a `model rerouted` notice, since a served model that matches the
+request is silent). They may not contradict: when the stream names models, the
+declared `served_model` must be one of them, or the receipt is not published
+and only the telemetry remains. A Codex stream without a reroute claims nothing,
+so the declaration stands. Neither stream reports a provider, so
+`served_provider` is not checked.
 Codex events with an explicit foreign thread identity invalidate attribution;
 parent/child totals without demonstrated semantics remain outside qualification.
 

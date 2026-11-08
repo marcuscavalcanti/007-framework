@@ -255,6 +255,13 @@ def enrich(value, telemetry):
         raise ValueError("receipt must be an object")
     if telemetry["status"] != "complete":
         raise ValueError("incomplete native telemetry; terminal receipt not published")
+    # requested_*, served_* (declared) and native_telemetry.model_usage (observed) stay separate fields, but may not contradict:
+    # Claude lists every model in modelUsage; Codex names one only when it rerouted, and its silence claims nothing.
+    # Neither stream reports a provider, so served_provider stays declared.
+    observed = sorted(telemetry["model_usage"])
+    if observed and value.get("served_model") not in observed:
+        raise ValueError(f"declared served_model is not a model the native stream reported ({', '.join(observed)}); "
+                         "terminal receipt not published")
     value = dict(value)
     value.update(tokens=telemetry["usage"]["total_tokens"], wall_s=telemetry["wall_s"], usage=telemetry["usage"])
     if telemetry["estimated_cost_usd"] is not None:

@@ -28,6 +28,11 @@ schemas, and the dashboard snapshot.
   event remained (external audit F04). The receipt now marks the contract as not run, an additive `receipt/v1` state:
   `acceptance_evidence: "not-executed"`, the contract hash, and `acceptance_summary.not_executed`. The blocked path also passes
   the caller's replay vault to `record`.
+- `007 run --native-cli` no longer publishes a receipt whose declared `served_model` the native stream contradicts: telemetry
+  only replaced usage, time and cost, so a Claude stream reporting one model could sit beside a receipt declaring another
+  (external audit F03). When the stream names models (Claude `modelUsage`, a Codex reroute target), the declared model must be
+  one of them; otherwise the run exits 2 with the telemetry kept and no terminal receipt. Declared and observed identity stay
+  in separate fields. No published evidence holds a receipt with native telemetry.
 
 ## [1.6.1] - 2026-11-08
 
