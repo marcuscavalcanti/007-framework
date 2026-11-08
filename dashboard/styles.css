@@ -435,7 +435,7 @@ body { background: var(--bg); font-family: var(--sans); font-size: 16px; }
 .brand-lockup strong { font-family: var(--mono); font-size: 20px; letter-spacing: -.02em; }
 .brand-lockup > div:last-child { flex-direction: row; align-items: baseline; gap: 12px; }
 .brand-lockup > div > span { margin: 0; font-size: 14px; }
-.project-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 0; flex: 1; }
+.project-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 0; flex: 1 1 auto; }
 .project-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .project-navigation .nav-label, .project-navigation .nav-heading, .project-navigation .nav-divider { display: none; }
 .nav-item { width: auto; min-height: 44px; }

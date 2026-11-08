@@ -34,6 +34,7 @@ schemas, and the dashboard snapshot.
 
 ### Fixed
 
+- Project navigation wraps to its own row when the brand and controls cannot fit, avoiding page overflow on narrow screens.
 - The lab spend ledger keeps a missing receipt or an amount without cost provenance unpriced. Zero is inferred only for the
   runner's explicit pre-reservation refusal marker; a missing file by itself never completes the cost coverage.
 - Local session capture reads every Codex and Claude log whole, streaming row metadata with bounded memory, and reads a growing
