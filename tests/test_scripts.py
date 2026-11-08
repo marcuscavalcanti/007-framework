@@ -279,6 +279,46 @@ class ScriptContractTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
 
+    def test_replay_cell_keeps_a_change_the_agent_staged_or_committed(self):
+        # Audit 2026-11-08, F02: the retained patch read HEAD and the change counts read the index, so an agent's own commit left
+        # a zero-byte patch and `git add` alone zeroed the counts. Both now read the snapshot commit fixed before the agent ran.
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            with tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp, "repo")
+                repo.mkdir()
+                env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.test",
+                       "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.test"}
+                subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+                (repo / "a.py").write_text("value = 0\n")
+                subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True, env=env)
+                base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+                git = "import subprocess; g = lambda *a: subprocess.run(['git', '-c', 'user.name=a', '-c', 'user.email=a@example.test', *a], check=True); "
+                agents = {"untouched": "pass",
+                          "unstaged": "open('a.py', 'w').write('value = 1\\n')",
+                          "staged": git + "open('a.py', 'w').write('value = 1\\n'); g('add', '-A')",
+                          "committed": git + "open('a.py', 'w').write('value = 1\\n'); g('add', '-A'); g('commit', '-qm', 'agent')"}
+                for name, agent in agents.items():
+                    with self.subTest(agent=name):
+                        config = {"repos": {"repo": str(repo)}, "retain_candidate_patch": True,
+                                  "agent_command": [sys.executable, "-c", agent], "arms": {"NEW": {"model": "m", "effort": "e", "doctrine": ""}}}
+                        output = Path(tmp, "out-" + name)
+                        output.mkdir()
+                        task = {"id": "f02", "repo": "repo", "base": base, "accepted": base, "prompt": "p",
+                                "acceptance": [[sys.executable, "-c", "pass"]]}
+                        cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 30)
+                        data = (output / cell["candidate_patch"]["path"]).read_bytes()
+                        self.assertNotIn(b".007-prompt", data)
+                        if name == "untouched":
+                            self.assertEqual((data, cell["changed_files"]), (b"", 0))
+                            continue
+                        self.assertIn(b"-value = 0\n+value = 1\n", data)
+                        self.assertEqual((cell["changed_files"], cell["lines_added"], cell["lines_deleted"]), (1, 1, 1))
+        finally:
+            sys.path.pop(0)
+
     def test_replay_cell_times_the_agent_apart_from_grading(self):
         # wall_s spans agent + acceptance + diagnostics; agent_wall_s is the agent alone, so a slow oracle cannot dilute an
         # effort contrast measured on time.
@@ -401,7 +441,7 @@ class ScriptContractTests(unittest.TestCase):
                 ).stdout.strip()
                 (repo / "artifact.bin").write_bytes(b"\0binary")
 
-                result = replay_eval.diagnostics({"base": base, "accepted": base}, repo, repo)
+                result = replay_eval.diagnostics({"base": base, "accepted": base}, repo, repo, base)
 
                 self.assertTrue(result["d0_complete"])
                 self.assertEqual(result["binary_files_changed"], ["artifact.bin"])

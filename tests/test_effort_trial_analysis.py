@@ -141,6 +141,21 @@ class EffortTrialV2Tests(unittest.TestCase):
             self.assertAlmostEqual(got, float(want), places=12)
         # without censoring the same data would read 12/20 (censored lines counted alive) or 5/10 (dropped): both biased
 
+    def test_a_curve_that_reaches_zero_stays_zero_but_censoring_still_stops_it(self):
+        # audit F07: 10 lines all lost on day 1 read S(30) = None, and the bootstrap dropped every such draw as not estimable
+        dead = [v2_row("medium", "p", START, [0] * 30, added=10)]
+        km = self.a.kaplan_meier(dead)
+        self.assertEqual((km["curve"], km["at_risk"][:2], km["deaths"][:2]), ([0.0] * 30, [10, 0], [10, 0]))
+        self.assertEqual(self.a._at(km["curve"], 30), 0.0)
+        self.assertEqual(self.a.kaplan_meier([v2_row("medium", "p", START, [0], added=10)])["curve"], [0.0] * 30)  # seen 1 day
+        # control: lines alive when observation ends are censored, not dead: the curve stops and S(30) stays unknown
+        self.assertEqual(self.a.kaplan_meier([v2_row("medium", "p", START, [10], added=10)])["curve"], [1.0])
+        self.assertIsNone(self.a._at([1.0], 30))
+        self.assertEqual(self.a._curve(self.a._sum([])), [])
+        boot = self.a._bootstrap({"medium": dead, "xhigh": [v2_row("xhigh", "p", START, [10] * 30, added=10)]},
+                                 lambda r: r["project_id"], days=(30,))
+        self.assertEqual(boot[30], ({"90": [-1.0, -1.0], "95": [-1.0, -1.0], "99": [-1.0, -1.0]}, self.a.DRAWS))
+
     def test_non_inferiority_is_judged_on_the_lower_95_limit_against_minus_5_points(self):
         ok = {"compliance": True, "sample": True, "manipulation": True}
         self.assertEqual(self.a.decide(ok, [-0.04, 0.03]), "NON-INFERIOR")

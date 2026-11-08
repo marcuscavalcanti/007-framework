@@ -197,10 +197,12 @@ def changed_lines(repo, revision_range=None):
     return files, sorted(lines)
 
 
-def diagnostics(task, workspace, source_repo):
+def diagnostics(task, workspace, source_repo, base):
+    """The candidate's change: the work tree against `base`, the snapshot commit fixed before the agent ran, so staging or
+    committing it changes nothing (audit 2026-11-08, F02)."""
     run(["git", "add", "-N", "--", "."], cwd=workspace, timeout=60)
-    produced_files, produced_lines = changed_lines(workspace)
-    numstat = run(["git", "diff", "--numstat"], cwd=workspace, timeout=300)
+    produced_files, produced_lines = changed_lines(workspace, base)
+    numstat = run(["git", "diff", "--numstat", base], cwd=workspace, timeout=300)
     added = deleted = 0
     binary = []
     complete = numstat.returncode == 0
@@ -258,11 +260,12 @@ def acceptance_outcomes(path):
     return value if ok else "unavailable"
 
 
-def candidate_patch(workspace, destination):
-    """r45 opt-in: the candidate's change against the base snapshot commit, untracked files included (ignored ones are not)."""
+def candidate_patch(workspace, destination, base):
+    """r45 opt-in: the candidate's change against `base`, the snapshot commit fixed before the agent ran (an agent's own commit
+    used to empty the patch: audit 2026-11-08, F02), untracked files included (ignored ones are not)."""
     with tempfile.TemporaryDirectory(prefix="007-patch-") as scratch:
         staged = Path(scratch) / "candidate.patch"
-        diff = ["git", "diff", "--cached", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", f"--output={staged}", "HEAD"]
+        diff = ["git", "diff", "--cached", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", f"--output={staged}", base]
         if run(["git", "add", "-A"], cwd=workspace, timeout=300).returncode or run(diff, cwd=workspace, timeout=300).returncode:
             return "unavailable"
         if staged.stat().st_size > MAX_CANDIDATE_PATCH:
@@ -565,6 +568,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             replay_capture.restore_input(vault_root, project, source_task, task["replay_ref"], workspace)
             initialize_snapshot(workspace)
             retained_ref = replay_capture.capture_input(workspace, project, attempt_id, metadata["config"], vault_root=output_dir / "cases")
+        base = run(["git", "rev-parse", "--verify", "HEAD"], cwd=workspace, timeout=60).stdout.strip()  # before the agent can commit
         prompt = workspace / ".007-prompt.txt"
         effective_prompt = task["prompt"] + "\n\n" + policy["doctrine"]
         prompt.write_text(effective_prompt)
@@ -630,7 +634,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             # No Git helper may start after an unconfirmed cleanup: diagnostics are unmeasured, never zero.
             d0 = {"d0_complete": False, **{key: "unmeasured" for key in D0_DIAGNOSTIC_FIELDS}}
         else:
-            d0 = diagnostics(task, workspace, source_repo)
+            d0 = diagnostics(task, workspace, source_repo, base)
         d0_failure = None if d0["d0_complete"] else "d0-incomplete"
         agent_valid, _ = grade_cell(exit_code, checks_passed)
         valid = agent_valid and identity_failure is None and hidden_failure is None and d0["d0_complete"]
@@ -693,10 +697,10 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
                     record.update(candidate_retention="declared-outputs-retained", result_sha256=hashlib.sha256(result_path.read_bytes()).hexdigest())
                 except (OSError, ValueError, RuntimeError):
                     record.update(valid=False, accepted=False, failure_class="candidate-preservation-failed")
-        if config.get("retain_candidate_patch"):  # after diagnostics: `git add -A` would empty their worktree diff
+        if config.get("retain_candidate_patch"):
             try:
                 record["candidate_patch"] = "cleanup-unconfirmed" if cleanup_failure else candidate_patch(
-                    workspace, output_dir / f"{attempt_id}.candidate.patch")
+                    workspace, output_dir / f"{attempt_id}.candidate.patch", base)
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):  # the paid attempt still gets its cell
                 record["candidate_patch"] = "unavailable"
         replay_capture.write_bytes_no_replace(output_dir / f"{task['id']}-r{replicate:02d}-{arm}.json", replay_capture._json_bytes(record), "replay cell")

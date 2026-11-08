@@ -535,6 +535,7 @@ function renderRoutes(metrics) {
 
 function diagnostics(metrics, project) {
   const values = [];
+  if (state.snapshot?.rebuild_error) values.push(`Evidence rebuild failed (${state.snapshot.rebuild_error}); the values shown were read ${localDateTime(state.snapshot.evidence_read_at)} and are stale.`);
   if (metrics.objective?.status !== "on-target" && metrics.objective?.primary_action) values.push(metrics.objective.primary_action);
   if (!metrics.started_tasks) values.push("Instrumentation inactive: no task started with 007 begin.");
   if (metrics.active_tasks) values.push(`${metrics.active_tasks} started task(s) still without a terminal receipt.`);
@@ -628,7 +629,13 @@ const SAYS = {
   "cannot-spend-less": () => ["Lower effort not proven", "plain"],
 };
 const scopeProjects = () => { const project = selectedProject(); return project ? [project] : state.snapshot.projects; };
-const calibrationsOf = (projects) => projects.flatMap((project) => (project.observatory?.calibrations || []).filter((item) => !item.error).map((item) => ({ ...item, repository: project.name })));
+const calibrationsOf = (projects) => projects.flatMap((project) => (project.observatory?.calibrations || []).filter((item) => !item.error).map((item) => ({ ...item, repository: project.name, project_id: project.project_id })));
+// A lab verdict applies only to the same repository, executor and compared effort pair.
+const boundReport = (best, report) => {
+  const to = report?.bound_to, calibration = best?.calibration;
+  return to && calibration && to.project_id === calibration.project_id && to.cli === calibration.cli && to.model === calibration.model
+    && to.effort === best.effort && to.against === best.entry?.gain?.against ? report : null;
+};
 const signedPercent = (value) => value == null ? "N/A" : `${value > 0 ? "−" : "+"}${Math.abs(value * 100).toFixed(0)}%`;
 
 function sessionJudgement(session, project) {
@@ -741,7 +748,7 @@ function renderVerdict(project) {
   const now = Date.parse(state.snapshot.generated_at);
   const calibrations = calibrationsOf(projects);
   const best = bestVerdict(calibrations);
-  const report = state.snapshot.lab_report;
+  const report = boundReport(best, state.snapshot.lab_report);
   const scope = project?.name || "all repositories";
   const durable = report?.durability === "PROVEN";
   const reach = project ? "" : ` · calibrated in ${projects.filter((item) => calibrationsOf([item]).length).length} of ${projects.length}`;
@@ -798,7 +805,8 @@ function render() {
   renderEvidence();
   renderDiagnostics(metrics, project);
   setText("framework-version", `v${state.snapshot.framework_version}`);
-  renderFreshness(metrics, state.snapshot.generated_at);
+  renderFreshness(metrics, state.snapshot.evidence_read_at || state.snapshot.generated_at);
+  setText("last-response", localDateTime(state.snapshot.generated_at));
   setText("last-event", localDateTime(metrics.latest_event_at));
   setText("server-status", state.transportError ? "No current read · last data preserved" : "Polling every 2 seconds · one read at a time");
   byId("dashboard-content").hidden = false;

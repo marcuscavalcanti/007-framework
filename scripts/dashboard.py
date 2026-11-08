@@ -28,7 +28,7 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/A", "N/D", "unknown", None}  # "N/D": legacy receipts, still accepted
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
@@ -1069,6 +1069,14 @@ class DatasetCache:
                 "counts": counts, "cases": rows}
 
 
+def stale_objective(objective, headline="STALE DATA"):
+    """Old values are not current progress: no gate passes and no target is met on evidence that was not read again."""
+    objective = objective or {}
+    return {**objective, "status": "not-measurable", "headline": headline,
+            "primary_action": "Restore the source read; old values are not current progress.",
+            "gates": [{**gate, "status": "wait"} for gate in objective.get("gates", [])]}
+
+
 class ProjectCollector:
     def __init__(self, dataset_provider=None, now=lambda: datetime.now(timezone.utc)):
         self.dataset = dataset_provider or DatasetCache()
@@ -1093,10 +1101,7 @@ class ProjectCollector:
                 current = copy.deepcopy(prior) if prior else current
                 current.update(available=False, stale=prior is not None, error=message,
                     read_at=instant, ingested_at=prior.get("ingested_at") if prior else None)
-                current["objective"] = {**current.get("objective", {}), "status": "not-measurable",
-                    "headline": "STALE DATA" if prior else "READ UNAVAILABLE",
-                    "primary_action": "Restore the source read; old values are not current progress.",
-                    "gates": [{**gate, "status": "wait"} for gate in current.get("objective", {}).get("gates", [])]}
+                current["objective"] = stale_objective(current.get("objective"), "STALE DATA" if prior else "READ UNAVAILABLE")
             else:
                 unchanged = prior and (prior.get("source_sha256"), prior.get("dataset")) == (
                     current.get("source_sha256"), current.get("dataset"))
@@ -1235,13 +1240,19 @@ OBSERVATORY_COLLECTOR = ObservatoryCollector()
 
 
 def load_lab_report(config=None):
-    """The verdict of the latest `007 lab report` named by observatory.lab_report, if any: the thesis panel never claims more than this."""
+    """The verdict of the latest `007 lab report` named by observatory.lab_report, if any: the thesis panel never claims more than this.
+    The entry binds the repository, CLI, model and effort pair; a partial binding proves nothing for a calibration.
+    A bare path, or a partial binding, gives bound_to None, and the panel applies that verdict to no repository."""
     try:
-        path = observatory_history.read_config(Path(config) if config else observatory_history.HOME / "config.json").get("observatory", {}).get("lab_report")
+        entry = observatory_history.read_config(Path(config) if config else observatory_history.HOME / "config.json").get("observatory", {}).get("lab_report")
+        path = entry.get("path") if isinstance(entry, dict) else entry
         report = json.loads(Path(path).expanduser().read_text()) if path else None
     except (OSError, ValueError, TypeError, AttributeError):
         return None
-    return report.get("verdict") if isinstance(report, dict) and isinstance(report.get("verdict"), dict) else None
+    if not isinstance(report, dict) or not isinstance(report.get("verdict"), dict):
+        return None
+    binding = {key: entry.get(key) for key in ("project_id", "cli", "model", "effort", "against")} if isinstance(entry, dict) else {}
+    return {**report["verdict"], "bound_to": binding if binding and all(isinstance(v, str) and v for v in binding.values()) else None}
 
 
 def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provider=None, project_provider=None, curation_provider=None,
@@ -1265,11 +1276,14 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
         project["curation"] = {key: value for key, value in curation.items() if key not in ("by_project", "proposals_by_project")}
         project["curation"].update(in_scope=in_scope, counts=curation["by_project"].get(project["project_id"]),
             proposals=curation.get("proposals_by_project", {}).get(project["project_id"], []))
+    generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     return {
         "schema": "007-framework/dashboard-snapshot/v1",
         "framework_version": VERSION,
         "telemetry_fields": list(TELEMETRY_FIELDS),
-        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generated_at": generated_at,
+        "evidence_read_at": generated_at,  # LiveSnapshot keeps this when it serves an older build
+        "rebuild_error": None,
         "aggregate": aggregate,
         "projects": projects,
         "registry_errors": registry_errors,
@@ -1290,30 +1304,39 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
 
 class LiveSnapshot:
     """Repositories and durability take minutes on a large registry, sessions take milliseconds. A daemon rebuilds the heavy part;
-    every read serves the latest one with fresh activity, so a 2 s poll stays a 2 s poll. None until the first build ends."""
+    every read serves the latest one with fresh activity, so a 2 s poll stays a 2 s poll. None until the first build ends.
+    generated_at is the response; evidence_read_at is the heavy build served. After a failed rebuild that evidence is stale."""
 
     def __init__(self, build, entries, activity=None, pause_s=15):
         self.build, self.entries, self.activity, self.pause_s = build, entries, activity or ACTIVITY_COLLECTOR.collect, pause_s
-        self.latest = None
+        self.state = (None, None)  # (latest good build, last rebuild error): one tuple, so a read never pairs one with the other's age
         threading.Thread(target=self.loop, daemon=True).start()
+
+    @property
+    def latest(self):
+        return self.state[0]
 
     def loop(self):
         while True:
             try:
-                self.latest = self.build()
-            except Exception as exc:  # the last good evidence stays; a failed rebuild must not end the daemon
+                self.state = (self.build(), None)
+            except Exception as exc:  # the last good evidence stays, marked stale; a failed rebuild must not end the daemon
+                self.state = (self.state[0], f"{type(exc).__name__}: {exc}"[:300])
                 print(f"dashboard: rebuild failed: {exc}"[:300], file=sys.stderr)
             time.sleep(self.pause_s)
 
     def read(self):
-        latest = self.latest
+        latest, error = self.state
         if latest is None:
             return None
         activity = self.activity(self.entries())
         fresh = activity.get("projects", {})
+        stale = lambda item, **flags: {**flags, "stale": True, "objective": stale_objective(item.get("objective"))} if error else {}
         return {**latest, "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "aggregate": {**latest["aggregate"], "activity": activity.get("aggregate", latest["aggregate"]["activity"])},
-                "projects": [{**p, "activity": fresh.get(p["project_id"], p["activity"])} for p in latest["projects"]]}
+                "evidence_read_at": latest["generated_at"], "rebuild_error": error,
+                "aggregate": {**latest["aggregate"], "activity": activity.get("aggregate", latest["aggregate"]["activity"]),
+                              **stale(latest["aggregate"])},
+                "projects": [{**p, "activity": fresh.get(p["project_id"], p["activity"]), **stale(p, available=False)} for p in latest["projects"]]}
 
 
 def handler_class(registry, static_dir, touch_provider, activity_provider=None, curation_checkpoint=None, curation_vault=None, background=False):

@@ -176,6 +176,15 @@ not streamed message fragments. A CLI dollar estimate supersedes declared cost
 in native mode and is always `rate-card-estimate` / `provisional`. Missing USD
 is never zero and still requires the existing unavailable-cost opt-in or a
 separately accounted cost. Requested effort is not relabeled as served effort.
+Identity stays in three places that are never merged: the executor's declared
+`requested_*` and `served_*`, and the observed models in
+`native_telemetry.model_usage` (every Claude `modelUsage` entry; for Codex only
+the target of a `model rerouted` notice, since a served model that matches the
+request is silent). They may not contradict: when the stream names models, the
+declared `served_model` must be one of them, or the receipt is not published
+and only the telemetry remains. A Codex stream without a reroute claims nothing,
+so the declaration stands. Neither stream reports a provider, so
+`served_provider` is not checked.
 Codex events with an explicit foreign thread identity invalidate attribution;
 parent/child totals without demonstrated semantics remain outside qualification.
 
@@ -251,6 +260,16 @@ persisted `blocked` receipt and CLI exit `4`.
 `acceptance_evidence: "controlled"` is computed by 007 and cannot be supplied
 through manual `record`. This proves only the declared commands ran on that
 working tree; it does not prove that the command set is sufficient.
+
+When the [authority envelope](#optional-authority-envelope) blocks the action,
+neither the executor nor the acceptance contract runs, and the blocked receipt
+says so: `acceptance_evidence: "not-executed"`, the contract's
+`acceptance_sha256`, and `acceptance_summary: {"passed": 0, "failed": 0,
+"not_executed": <number of commands>}`; `checks` keeps the authority block. Only
+the controller's persisted `blocked` event can produce this state; manual
+`record` of an acceptance-bound task still requires controller-observed results.
+This is an additive value and key within `receipt/v1`: readers that look for
+`acceptance_evidence: "controlled"` treat it as no acceptance evidence.
 
 ## Cost unavailable (explicit opt-in)
 

@@ -567,3 +567,50 @@ test('quota is never called supported from a price estimate', () => {
   const reasoning = vm.runInContext('thesisClaims(bestVerdict(calibrationsOf(snapshotFixture.projects)), null).find((c) => c.id === "claim-reasoning").state[0]', r.context);
   assert.equal(reasoning, 'CHECK');  // the manipulation check is not a benefit
 });
+
+test('a lab verdict reads as evidence only for the repository, CLI and model it is bound to (audit F09)', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  r.context.snapshotFixture.projects.push({ name: 'other', project_id: 'q', activity: {}, observatory: { calibrations: [], sessions: [] } });
+  const proven = { same_change_reachable: 'PROVEN', durability: 'PROVEN' };
+  const show = (report, selected) => {
+    r.context.report = report; r.context.selected = selected;
+    vm.runInContext('state.snapshot = {...snapshotFixture, lab_report: report}; state.selectedProject = selected; renderVerdict(selectedProject())', r.context);
+    return `${r.text('verdict-claims')} ${r.text('verdict-lede')}`;
+  };
+  const applied = /(?<!NOT )PROVEN|survived the next real change/;
+  assert.doesNotMatch(show(proven, 'q'), applied);  // the audit case: an uncalibrated repository showed PROVEN
+  assert.doesNotMatch(show(proven, 'p'), applied);  // no binding: applies nowhere
+  assert.doesNotMatch(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm' } }, 'q'), applied);
+  assert.doesNotMatch(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'other' } }, 'p'), applied);
+  assert.match(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm', effort: 'medium', against: 'high' } }, 'p'), /(?<!NOT )PROVEN The same change.*(?<!NOT )PROVEN Durable/);
+  assert.match(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm', effort: 'medium', against: 'high' } }, null), /(?<!NOT )PROVEN Durable/);
+});
+
+test('a bound verdict cannot cross effort pairs', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  const show = (effort, against) => {
+    r.context.report = {same_change_reachable: 'PROVEN', bound_to:
+      {project_id: 'p', cli: 'codex', model: 'm', effort, against}};
+    vm.runInContext('state.snapshot = {...snapshotFixture, lab_report: report}; state.selectedProject = "p"; renderVerdict(selectedProject())', r.context);
+    return r.text('verdict-claims');
+  };
+  assert.doesNotMatch(show('medium', 'xhigh'), /(?<!NOT )PROVEN/);
+  assert.doesNotMatch(show('low', 'high'), /(?<!NOT )PROVEN/);
+  assert.match(show('medium', 'high'), /(?<!NOT )PROVEN/);
+});
+
+test('a failed evidence rebuild shows its own read time, the response time and stays stale (audit F10)', async () => {
+  const good = pollingSnapshot();
+  const stale = { ...good, generated_at: '2026-10-13T12:05:00Z', evidence_read_at: '2026-10-13T12:00:00Z', rebuild_error: 'OSError: fixture',
+    aggregate: { ...good.aggregate, stale: true }, projects: good.projects.map((p) => ({ ...p, stale: true, available: false })) };
+  const r = renderer('UTC', async () => ({ ok: true, json: async () => stale }));
+  await tick();
+  assert.match(r.text('last-updated'), /12:00:00/);
+  assert.match(r.text('last-response'), /12:05:00/);
+  assert.match(r.text('source-status'), /stale/i);
+  assert.match(r.text('verdict-label'), /stale/i);
+  assert.doesNotMatch(r.text('gate-matrix-body'), /PASS/);
+  assert.match(r.text('diagnostic-list'), /rebuild failed.*OSError: fixture/i);
+});

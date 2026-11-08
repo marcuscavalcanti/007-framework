@@ -36,6 +36,36 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertEqual(level(claude, [{**result, "modelUsage": {}}]), "failed")
         self.assertEqual(level({"cli": "kimi"}, [result]), "failed")
 
+    def test_identity_level_rejects_later_turns_results_and_errors(self):
+        level = self.module().identity_level
+        codex = {"cli": "codex", "model": "gpt-6-astra"}
+        done = [{"type": "turn.started"}, {"type": "turn.completed"}]
+        for stream in (done + [{"type": "turn.started"}], done + done,
+                       done + [{"type": "error"}], [{"type": "turn.completed"}]):
+            with self.subTest(stream=stream):
+                self.assertEqual(level(codex, stream), "failed")
+        claude = {"cli": "claude", "model": "claude-opus-5-5"}
+        result = {"type": "result", "subtype": "success", "is_error": False,
+                  "modelUsage": {"claude-opus-5-5": {}}}
+        for stream in ([result, {"type": "error"}], [result, result],
+                       [result, {**result, "modelUsage": {"other": {}}}],
+                       [{"type": "system", "model": "other"}, result],
+                       [{"type": "system", "model": "claude-opus-5-5"}, {**result, "modelUsage": {}}]):
+            with self.subTest(stream=stream):
+                self.assertEqual(level(claude, stream), "failed")
+
+    def test_identity_rejects_wrapped_stream_models_and_errors(self):
+        level = self.module().identity_level
+        route = {"cli": "claude", "model": "claude-opus-5-5"}
+        result = {"type": "result", "subtype": "success", "is_error": False,
+                  "modelUsage": {"claude-opus-5-5": {}}}
+        for event in ({"type": "message_start", "message": {"model": "other"}},
+                      {"type": "error", "error": {"type": "overloaded_error"}}):
+            with self.subTest(event=event):
+                self.assertEqual(level(route, [{"type": "stream_event", "event": event}, result]), "failed")
+        self.assertEqual(level(route, [{"type": "stream_event", "event":
+            {"type": "message_start", "message": {"model": "claude-opus-5-5"}}}, result]), "verified")
+
     def test_host_session_from_markers_and_ambiguity_is_refused(self):
         host = self.module().host_session
         self.assertEqual(host({"CLAUDECODE": "1"}), "claude")

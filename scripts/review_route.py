@@ -63,16 +63,44 @@ def identity_level(route, rows):
     """AGENTS.md reviewer identity level from a review's parsed JSON stream rows: "verified", "pinned-no-reroute" or "failed".
     The served identity is never filled from the request; "pinned-no-reroute" qualifies a release only as such."""
     import cli_telemetry  # the one place that knows the Codex reroute item
-    kinds = [row.get("type") for row in rows if isinstance(row, dict)]
+    if not rows or any(not isinstance(row, dict) for row in rows):
+        return "failed"
+    kinds = [row.get("type") for row in rows]
+    if any(kind in ("error", "turn.failed") for kind in kinds):
+        return "failed"
     if route.get("cli") == "codex":
-        if "turn.completed" not in kinds or any(kind in ("error", "turn.failed") for kind in kinds):
+        if (kinds.count("turn.started") != 1 or kinds.count("turn.completed") != 1
+                or kinds[-1] != "turn.completed" or kinds.index("turn.started") > kinds.index("turn.completed")):
             return "failed"
         rerouted = any(row.get("type") == "item.completed" and isinstance(row.get("item"), dict) and row["item"].get("type") == "error"
                        and cli_telemetry.CODEX_REROUTE.fullmatch(str(row["item"].get("message", ""))) for row in rows if isinstance(row, dict))
         return "failed" if rerouted else "pinned-no-reroute"
     if route.get("cli") == "claude":
-        result = next((row for row in rows if isinstance(row, dict) and row.get("type") == "result"), None)
-        models = set((result or {}).get("modelUsage") or {})
+        if kinds.count("result") != 1 or kinds[-1] != "result":
+            return "failed"
+        result = rows[-1]
+        if not isinstance(result.get("modelUsage"), dict) or set(result["modelUsage"]) != {route.get("model")}:
+            return "failed"
+        models = set(result["modelUsage"])
+        events = []
+        for row in rows:
+            events.append(row)
+            if row.get("type") == "stream_event":
+                if not isinstance(row.get("event"), dict):
+                    return "failed"
+                events.append(row["event"])
+        for row in events:
+            if row.get("type") in ("error", "turn.failed") or row.get("is_error") is True:
+                return "failed"
+            usage = row.get("modelUsage")
+            if usage is not None and not isinstance(usage, dict):
+                return "failed"
+            models.update(usage or {})
+            for name in (row.get("model"), (row.get("message") or {}).get("model") if isinstance(row.get("message"), dict) else None):
+                if name is not None:
+                    if not isinstance(name, str) or not name:
+                        return "failed"
+                    models.add(name)
         ok = result is not None and result.get("subtype") == "success" and result.get("is_error") is False
         return "verified" if ok and models == {route.get("model")} else "failed"
     return "failed"

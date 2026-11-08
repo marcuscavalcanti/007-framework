@@ -732,10 +732,17 @@ def run_acceptance(root, task):
     return checks
 
 
-def bind_acceptance(receipt, task, checks=None):
+def bind_acceptance(receipt, task, checks=None, controller_event=None):
     if "acceptance" not in task:
         if checks is not None:
             raise ValueError("acceptance results require a bound task contract")
+        return receipt
+    if (checks is None and (controller_event or {}).get("outcome") == "blocked" and receipt.get("status") == "blocked"
+            and receipt.get("proof_reached") == "controller-blocked-before-execution"):
+        # the executor never ran, so there is nothing to accept: the contract is bound but explicitly not executed
+        receipt["acceptance_sha256"] = task["acceptance_sha256"]
+        receipt["acceptance_evidence"] = "not-executed"
+        receipt["acceptance_summary"] = {"passed": 0, "failed": 0, "not_executed": len(task["acceptance"]["commands"])}
         return receipt
     if checks is None:
         raise ValueError("acceptance-bound task requires controller-observed results")
@@ -801,7 +808,7 @@ def record_receipt(
         if not event_path.exists() or read_json(event_path) != controller_event:
             raise ValueError("controlled provenance requires the persisted controller event")
     receipt = bind_authority(receipt, task, controller_event)
-    receipt = bind_acceptance(receipt, task, acceptance_results)
+    receipt = bind_acceptance(receipt, task, acceptance_results, controller_event)
     if "completed_at" not in receipt:
         instant = now or datetime.now(timezone.utc)
         receipt["completed_at"] = instant.isoformat().replace("+00:00", "Z")
@@ -862,7 +869,7 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     if action and action not in set(task["authority"]["allow"]):
         event = write_controller_event(root, task, action, "blocked")
         write_json_atomic(receipt_path, blocked_receipt(task, action))
-        return 3, record_receipt(root, receipt_path, controller_event=event, cost_policy=allow)
+        return 3, record_receipt(root, receipt_path, controller_event=event, cost_policy=allow, vault_root=vault_root)
     environment = {
         **os.environ,
         "FRAMEWORK_007_TASK_ID": task["task_id"],

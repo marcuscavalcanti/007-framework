@@ -7,6 +7,7 @@ import tempfile
 import os
 import sys
 import shutil
+import textwrap
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +22,46 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageContractTests(unittest.TestCase):
+    def test_release_manifest_keeps_spaces_and_preserves_old_output_on_read_failure(self):
+        recipe = (ROOT / "RELEASING.md").read_text().split("python3 - <<'PY'\n", 1)[1].split("\n   PY", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "file with spaces.txt"; source.write_bytes(b"tracked input")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "add", source.name], cwd=root, check=True)
+            def generate():
+                return subprocess.run([sys.executable, "-c", textwrap.dedent(recipe)], cwd=root,
+                    env={**os.environ, "RELEASE_MANIFEST": "manifest.sha256"}, capture_output=True, text=True)
+            self.assertEqual(generate().returncode, 0)
+            expected = hashlib.sha256(source.read_bytes()).hexdigest() + "  " + source.name + "\n"
+            self.assertEqual((root / "manifest.sha256").read_text(), expected)
+            source.unlink()
+            self.assertNotEqual(generate().returncode, 0)
+            self.assertEqual((root / "manifest.sha256").read_text(), expected)
+            self.assertEqual(sorted(p.name for p in root.iterdir()), [".git", "manifest.sha256"])
+
+    def test_release_manifest_refuses_linked_output_without_overwriting_its_target(self):
+        recipe = (ROOT / "RELEASING.md").read_text().split("python3 - <<'PY'\n", 1)[1].split("\n   PY", 1)[0]
+        for linked_parent in (False, True):
+            with self.subTest(linked_parent=linked_parent), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "repo"; root.mkdir()
+                outside = Path(temporary) / "outside"; outside.mkdir()
+                destination = outside / "manifest.sha256"; destination.write_bytes(b"preserve outside bytes\n")
+                subprocess.run(["git", "init", "-q", str(root)], check=True)
+                (root / "file with spaces.txt").write_text("tracked input")
+                subprocess.run(["git", "add", "file with spaces.txt"], cwd=root, check=True)
+                if linked_parent:
+                    (root / "evidence").symlink_to(outside, target_is_directory=True)
+                    target = "evidence/manifest.sha256"
+                else:
+                    (root / "manifest.sha256").symlink_to(destination)
+                    target = "manifest.sha256"
+                result = subprocess.run([sys.executable, "-c", textwrap.dedent(recipe)], cwd=root,
+                    env={**os.environ, "RELEASE_MANIFEST": target}, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, "linked output must be refused")
+                self.assertEqual(destination.read_bytes(), b"preserve outside bytes\n")
+                self.assertEqual(sorted(p.name for p in outside.iterdir()), ["manifest.sha256"])
+
     def test_corrupt_historical_fixture_is_rejected_before_use(self):
         payload = historical_sources.FIXTURE.read_bytes()
         with tempfile.TemporaryDirectory() as temporary:
@@ -77,10 +118,10 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.6\.1$")
-        self.assertIn('VERSION = "1.6.1"', (ROOT / "scripts/dashboard.py").read_text())
+        self.assertRegex(skill, r"(?m)^  version: 1\.6\.2$")
+        self.assertIn('VERSION = "1.6.2"', (ROOT / "scripts/dashboard.py").read_text())
         shown = subprocess.run([sys.executable, str(ROOT / "bin/007"), "--version"], capture_output=True, text=True, check=True).stdout
-        self.assertEqual(shown.strip(), "007 1.6.1")
+        self.assertEqual(shown.strip(), "007 1.6.2")
 
     def test_agent_rule_copies_match(self):
         self.assertEqual((ROOT / ".github/copilot-instructions.md").read_bytes(), (ROOT / "AGENTS.md").read_bytes())
@@ -128,6 +169,25 @@ class PackageContractTests(unittest.TestCase):
     def test_current_narrow_result_is_not_called_controlled(self):
         current_claims = (ROOT / "README.md").read_text() + (ROOT / "docs/evidence.md").read_text()
         self.assertNotRegex(current_claims.lower(), r"controlled (mechanism|decision|result)")
+
+    def test_evidence_json_parses_and_every_evidence_ledger_verifies(self):
+        # Audit 2026-11-08, F11: a published *.json opened with two lines of simulation progress. It stays byte-identical, since
+        # SHA256SUMS bound it before the paid pilot; its erratum adds the object alone. Every other evidence JSON must parse.
+        frozen = ROOT / "evidence/codex-5pp-20261108/gojson-floor-5pp.json"
+        broken = []
+        for path in sorted((ROOT / "evidence").rglob("*.json")):
+            try:
+                json.loads(path.read_text())
+            except ValueError:
+                broken.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(broken, [frozen.relative_to(ROOT).as_posix()])
+        self.assertEqual(b"".join(frozen.read_bytes().splitlines(keepends=True)[2:]),
+                         frozen.with_name("gojson-floor-5pp.clean.json").read_bytes())
+        for ledger in sorted((ROOT / "evidence").glob("*/SHA256SUMS")):
+            for line in ledger.read_text().splitlines():
+                digest, name = line.split("  ", 1)
+                with self.subTest(file=f"{ledger.parent.name}/{name}"):
+                    self.assertEqual(hashlib.sha256((ledger.parent / name).read_bytes()).hexdigest(), digest)
 
     def test_replay_example_is_valid_json(self):
         import json

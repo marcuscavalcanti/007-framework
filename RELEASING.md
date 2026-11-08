@@ -27,13 +27,40 @@ is the `007` CLI, the receipt and report schemas, and the dashboard snapshot.
    stage new files first:
 
    ```bash
-   v=vX.Y.Z
-   git ls-files | grep -vx "evidence/$v/manifest.sha256" | xargs shasum -a 256 > "evidence/$v/manifest.sha256"
-   shasum -a 256 -c "evidence/$v/manifest.sha256"
+   RELEASE_MANIFEST=evidence/vX.Y.Z/manifest.sha256 python3 - <<'PY'
+   import hashlib, os, subprocess, tempfile
+   from pathlib import Path
+   target = Path(os.environ['RELEASE_MANIFEST'])
+   if target.is_absolute() or '..' in target.parts or not target.name or any(c in str(target) for c in '\n\r\\'):
+       raise SystemExit('manifest destination must be a relative repository file')
+   if any(path.is_symlink() for path in (target, *target.parents)):
+       raise SystemExit('manifest refuses symbolic links along its destination')
+   names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')[:-1]
+   names = [name for name in names if name != target.as_posix()]
+   if any(any(c in name for c in '\n\r\\') or any(p.is_symlink() for p in (Path(name), *Path(name).parents)) for name in names):
+       raise SystemExit('manifest refuses escaped filenames and symbolic links')
+   lines = [hashlib.sha256(Path(name).read_bytes()).hexdigest() + '  ' + name + '\n' for name in names]
+   temporary = None
+   try:
+       with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=target.parent,
+                                        prefix='.' + target.name + '.', delete=False) as output:
+           temporary = Path(output.name)
+           output.write(''.join(lines))
+       os.replace(temporary, target)
+   finally:
+       if temporary is not None:
+           temporary.unlink(missing_ok=True)
+   PY
+   shasum -a 256 -c evidence/vX.Y.Z/manifest.sha256
    ```
 
    The tag CI checks it with `sha256sum --check`. Regenerate it after any
    change, including a review fix.
+   Spaces in tracked filenames are preserved. Unsupported escape characters or
+   symbolic links (including the destination and its parents) fail before
+   publication; the tracked inventory is not split by shell whitespace. The
+   complete list replaces the destination atomically, so a failed hash read
+   does not publish a partial list. Run in a checkout with no concurrent writer.
 
 ## Release
 

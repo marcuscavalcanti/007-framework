@@ -6,6 +6,19 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-08
+
+Patch release: the confirmed findings of an external audit of 1.6.1, the contribution rules, reviewer identity levels and
+Amendment 1 to the Codex pilot. Additive only: no command,
+flag or schema field is renamed or removed. See [the release record](evidence/v1.6.2/release-evidence.md).
+
+### Added
+
+- Contribution rules in `AGENTS.md`, copied to `.github/copilot-instructions.md` and read by Claude Code through `CLAUDE.md`
+  (a test fails if the copy drifts); `RELEASING.md`; `.github/CODEOWNERS`, a pull request template, and bug and claim-challenge
+  issue templates with security reports routed to private reporting; a short `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1 by
+  reference). `CONTRIBUTING.md` now points to `AGENTS.md`.
+
 ### Changed
 
 - Reviewer identity levels (`AGENTS.md`, `review_route.identity_level`): `verified`, `pinned-no-reroute` ("requested model
@@ -17,12 +30,58 @@ schemas, and the dashboard snapshot.
 - Amendment 1 to the Codex 5-point pilot pre-registration (`evidence/codex-5pp-20261108/AMENDMENT-1.md`), published before any
   pilot attempt; the original pre-registration and its hash are unchanged.
 
-### Added
+### Fixed
 
-- Contribution rules in `AGENTS.md`, copied to `.github/copilot-instructions.md` and read by Claude Code through `CLAUDE.md`
-  (a test fails if the copy drifts); `RELEASING.md`; `.github/CODEOWNERS`, a pull request template, and bug and claim-challenge
-  issue templates with security reports routed to private reporting; a short `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1 by
-  reference). `CONTRIBUTING.md` now points to `AGENTS.md`.
+- Follow-up to the independent review: reject unfinished or duplicate review
+  completions and extra reported models; invalidate unexplained suite failure
+  despite passing per-test reports; bind dashboard verdicts to both compared
+  efforts. Existing partial report bindings remain readable but apply no verdict.
+- Release manifest generation preserves whitespace in tracked filenames and
+  refuses unsupported escapes and links before publishing a manifest.
+- `007 lab` acceptance no longer passes a test whose suite failed around it (audit 2026-11-08, F01). A `unittest` class or module
+  fixture error (`tearDownClass`, `tearDownModule`) and a `go` package that fails while none of its tests did (`TestMain`'s exit, a
+  panic or fatal error outside a test) used to be dropped, so the tests read `pass` and the cell could be accepted. Those tests now
+  read `error`, in mining and grading alike. Ordinary known-red test failures preserve partial grades, except that Go conservatively
+  charges passes in a failed package with unattributed package output, even a harmless diagnostic. Missing Go package completion,
+  unexpected process exits, failed preparation, and Node file/hook failures cannot leave affected tests green. The fixed unittest
+  child normally exits zero even for red tests, so any nonzero exit invalidates its passes. Tasks mined earlier keep their
+  hash-bound copy of `lab_accept.py`.
+- Go acceptance also tracks each test's start and completion: a known-red test cannot explain away an unfinished test's
+  timeout. Passes in that package become `error`; complete lifecycles and other packages keep their existing grades.
+- A replay cell keeps the change of an agent that staged or committed it (audit 2026-11-08, F02). The retained candidate patch
+  diffed the index against `HEAD`, so a commit left it without the change (and with a spurious deletion of the prompt file when
+  the agent committed everything), and the change counts read the index, so `git add` alone zeroed them. Both now diff against the
+  snapshot commit recorded before the agent starts. Acceptance always graded the work tree and is unchanged.
+- `evidence/codex-5pp-20261108/gojson-floor-5pp.json` opens with two lines of simulation progress, so it is not valid JSON (audit
+  2026-11-08, F11). It stays byte-identical because the pre-registration's `SHA256SUMS` bound it; an `ERRATUM.md` and the object
+  alone (`gojson-floor-5pp.clean.json`) are added and hashed in `SHA256SUMS`. No figure changes: `freeze_pilot.py` uses the floor as
+  a constant. A test now parses every `*.json` under `evidence/` and verifies every `evidence/*/SHA256SUMS` line.
+- `interface_hints` cuts a signature at its top-level `:` with Python's tokenizer, so a one-line definition
+  (`def f(x): return x`) or a multi-line header whose last line carries a body no longer copies the body (or, in the multi-line
+  case, the following added lines) into a hint that promises signatures only (external audit F08). The one replay set built
+  with hints (20 tasks of this repository, 62 hints) gets the same hints under the fix; no published result used the helper.
+- The effort field trial's Kaplan-Meier curve stays at 0 to the horizon once every line at risk has died, instead of ending
+  there: S(30) read "unknown" for an arm whose lines all died, and the bootstrap dropped every such draw as not estimable, which
+  favoured the less durable arm. A curve still stops where censoring leaves nobody at risk with S > 0 (external audit F07).
+  The trial is disabled and its outcomes were never unblinded, so no result changes.
+- `007 run` with a denied `--action` and an acceptance contract (always the case under a capture config) persists its blocked
+  terminal receipt again: recording demanded acceptance results that a blocked task never produces, so only the start and the
+  event remained (external audit F04). The receipt now marks the contract as not run, an additive `receipt/v1` state:
+  `acceptance_evidence: "not-executed"`, the contract hash, and `acceptance_summary.not_executed`. The blocked path also passes
+  the caller's replay vault to `record`.
+- `007 run --native-cli` no longer publishes a receipt whose declared `served_model` the native stream contradicts: telemetry
+  only replaced usage, time and cost, so a Claude stream reporting one model could sit beside a receipt declaring another
+  (external audit F03). When the stream names models (Claude `modelUsage`, a Codex reroute target), the declared model must be
+  one of them; otherwise the run exits 2 with the telemetry kept and no terminal receipt. Declared and observed identity stay
+  in separate fields. No published evidence holds a receipt with native telemetry.
+- Dashboard: a `007 lab report` verdict no longer reads as evidence for whichever repository is selected (external audit F09).
+  The report names no repository, so `observatory.lab_report` now takes `{"path", "project_id", "cli", "model", "effort", "against"}`,
+  and the thesis panel applies the verdict only to that calibration and effort comparison. A bare path still loads but binds nothing, so
+  its verdict is applied nowhere.
+- Dashboard: a failed background rebuild no longer leaves the previous evidence looking current while the response clock moves
+  (external audit F10). The preserved projects and aggregate are marked stale (gates WAIT, "STALE DATA"), the snapshot carries
+  `rebuild_error`, and the top bar shows when the evidence was read (`evidence_read_at`) apart from the response time; Data
+  quality names the failure.
 
 ## [1.6.1] - 2026-11-08
 
@@ -389,7 +448,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.1...v1.5.2
