@@ -20,6 +20,10 @@ schemas, and the dashboard snapshot.
   panic or fatal error outside a test) used to be dropped, so the tests read `pass` and the cell could be accepted. Those tests now
   read `error`, in mining and grading alike; a failing test still owns its own package's failure, so tests red at base are graded as
   before. Tasks mined earlier keep their hash-bound copy of `lab_accept.py`.
+- A replay cell keeps the change of an agent that staged or committed it (audit 2026-11-08, F02). The retained candidate patch
+  diffed the index against `HEAD`, so a commit left it without the change (and with a spurious deletion of the prompt file when
+  the agent committed everything), and the change counts read the index, so `git add` alone zeroed them. Both now diff against the
+  snapshot commit recorded before the agent starts. Acceptance always graded the work tree and is unchanged.
 
 ## [1.6.1] - 2026-11-08
 
