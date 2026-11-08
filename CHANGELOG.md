@@ -23,6 +23,11 @@ schemas, and the dashboard snapshot.
   there: S(30) read "unknown" for an arm whose lines all died, and the bootstrap dropped every such draw as not estimable, which
   favoured the less durable arm. A curve still stops where censoring leaves nobody at risk with S > 0 (external audit F07).
   The trial is disabled and its outcomes were never unblinded, so no result changes.
+- `007 run` with a denied `--action` and an acceptance contract (always the case under a capture config) persists its blocked
+  terminal receipt again: recording demanded acceptance results that a blocked task never produces, so only the start and the
+  event remained (external audit F04). The receipt now marks the contract as not run, an additive `receipt/v1` state:
+  `acceptance_evidence: "not-executed"`, the contract hash, and `acceptance_summary.not_executed`. The blocked path also passes
+  the caller's replay vault to `record`.
 
 ## [1.6.1] - 2026-11-08
 

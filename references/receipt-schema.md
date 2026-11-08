@@ -252,6 +252,16 @@ persisted `blocked` receipt and CLI exit `4`.
 through manual `record`. This proves only the declared commands ran on that
 working tree; it does not prove that the command set is sufficient.
 
+When the [authority envelope](#optional-authority-envelope) blocks the action,
+neither the executor nor the acceptance contract runs, and the blocked receipt
+says so: `acceptance_evidence: "not-executed"`, the contract's
+`acceptance_sha256`, and `acceptance_summary: {"passed": 0, "failed": 0,
+"not_executed": <number of commands>}`; `checks` keeps the authority block. Only
+the controller's persisted `blocked` event can produce this state; manual
+`record` of an acceptance-bound task still requires controller-observed results.
+This is an additive value and key within `receipt/v1`: readers that look for
+`acceptance_evidence: "controlled"` treat it as no acceptance evidence.
+
 ## Cost unavailable (explicit opt-in)
 
 Some routes cannot be priced at all, for example a flat subscription with no
