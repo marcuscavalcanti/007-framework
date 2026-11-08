@@ -126,3 +126,32 @@ that actually produced it (previous policies: Claude CLI `claude-fable-5-1`, eff
 `high`, no fallback; revision 2026-10-21 with a Kimi K3 fallback, never used).
 
 (Yes, these rules also apply to agents working on this repository. Especially to them.)
+
+
+## Security workflow for this project
+
+Security review is active as a project workflow for every agent host. Read the
+applicable root or nested `SECURITY.md` and `PRIVACY.md` before changing an
+execution, filesystem, network, capture, credential or publication boundary.
+Record the scope, attacker-controlled inputs and evidence for the affected
+boundary; distinguish intended caller authority from a broken promised control.
+
+Codex Security is the native scan adapter when available. Use the documented
+Standard or diff workflow for the current host and authorized scope. Keep its
+authoritative scan ID, target, source revision, coverage and artifacts; seal a
+scan only after its real work and required documents exist. A started scan,
+installed plugin, partial report or zero findings is not a security approval.
+Schema or runtime failures remain explicit; do not invent fields or completion.
+
+All hosts use the same security criteria. A host without the native adapter may
+run authorized local checks, but must label the native result unavailable rather
+than claiming an equivalent Codex Security scan. This workflow does not change
+the independent reviewer policy or qualify an experiment, replay or ROI claim.
+
+Keep scans inside their authorized repository and context. Never read provider
+credentials, unrelated sessions, customer data or private prompts for a scan.
+Paid inference, additional workers, Deep Scan, installs, hooks and Cloud
+continuous monitoring require their applicable authorization; this instruction
+does not renew consumed calls or change account settings. Persist findings and
+unresolved gates, then continue independent authorized work.
+

@@ -8,6 +8,9 @@ schemas, and the dashboard snapshot.
 
 ### Added
 
+- A short README quickstart, `PRIVACY.md` for local collection and explicit egress, and software citation metadata.
+- A persistent security review workflow in the shared agent instructions: native Codex Security when available, honest
+  scope/coverage and completion gates, with the same criteria across hosts and separate authorization for paid/Cloud operations.
 - `effort_segments` (`[start, model, effort]`) from Codex `turn_context` and Claude assistant rows, stored by `record`; each
   report row lists its attributed commits with the model and effort in force at commit time (`commit_efforts`).
 

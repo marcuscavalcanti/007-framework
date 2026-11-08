@@ -17,6 +17,24 @@ drives the agent CLIs you already use (Codex, Claude Code) and adds three things
 It is designed for the failure that matters most in AI-assisted development:
 code that looks finished but must be rewritten, repaired, or explained again.
 
+## Quickstart
+
+Run from a checkout with Python 3.11+ and Git:
+
+```bash
+git clone https://github.com/marcuscavalcanti/007-framework.git
+cd 007-framework
+python3 bin/007 --help
+python3 bin/007 init --repo /path/to/your/project
+python3 bin/007 dashboard
+```
+
+`init` creates local project records and registers the path. The loopback
+dashboard can read local session metadata; [Privacy](PRIVACY.md) describes what
+is read and retained. Model runs and paid experiments require their own scope,
+acceptance rules and budget. [Install](#install) makes the skill and CLI available
+to your host; [Use](#use) covers task receipts and replay controls.
+
 ## Current thesis: minimum sufficient effort (November 2026)
 
 **Thesis: for the model you chose, `007 lab` shows in your own repository whether a lower reasoning effort pays.** It measures
@@ -445,6 +463,7 @@ longitudinal receipts. Exact boundaries and hashes are in
 - [Research history](docs/research-history.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
+- [Privacy](PRIVACY.md)
 
 ## Contributing
 
