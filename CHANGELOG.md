@@ -13,6 +13,13 @@ schemas, and the dashboard snapshot.
   issue templates with security reports routed to private reporting; a short `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1 by
   reference). `CONTRIBUTING.md` now points to `AGENTS.md`.
 
+### Fixed
+
+- `interface_hints` cuts a signature at its top-level `:` with Python's tokenizer, so a one-line definition
+  (`def f(x): return x`) or a multi-line header whose last line carries a body no longer copies the body (or, in the multi-line
+  case, the following added lines) into a hint that promises signatures only (external audit F08). The one replay set built
+  with hints (20 tasks of this repository, 62 hints) gets the same hints under the fix; no published result used the helper.
+
 ## [1.6.1] - 2026-11-08
 
 Patch release: fixes and documentation; no new command or schema.

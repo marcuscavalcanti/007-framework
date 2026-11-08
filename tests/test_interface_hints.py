@@ -48,7 +48,21 @@ class InterfaceHintsTests(unittest.TestCase):
         self.assertEqual(interface_hints.hints(self.repo, self.parent, child, ["pkg/mod.py"]),
                          ["pkg/mod.py: def begin(repo, task_id=None, now=None, authority=None):"])
         later = self.commit({"pkg/mod.py": begin + "\n\ndef one(x): return x\nLEAK = 1\n"})
-        self.assertEqual(interface_hints.hints(self.repo, child, later, ["pkg/mod.py"]), ["pkg/mod.py: def one(x): return x"])
+        self.assertEqual(interface_hints.hints(self.repo, child, later, ["pkg/mod.py"]), ["pkg/mod.py: def one(x):"])
+
+    def test_a_body_on_the_header_line_never_leaks(self):
+        # audit F08: a one-line definition returned its body although the prompt header promises signatures only
+        cases = {('+def check_secret(x): return x == "future oracle answer"',): "def check_secret(x):",
+                 ("+def f(a,", "+      b): return a + b", "+SECRET = 1", "+def g():"): "def f(a, b):",
+                 ("+class C: x = 42",): "class C:",
+                 ("+def f(sep=':', key=lambda v: v[1:]) -> dict[str, int]: return {'a': 1}",):
+                     "def f(sep=':', key=lambda v: v[1:]) -> dict[str, int]:",
+                 ('+def f(x="("): return x  # it\'s',): 'def f(x="("):',
+                 ("+def f(a,  # don't", "+      b):  # note"): "def f(a, b):",
+                 ("+def f(a,", "+      b", " context"): "def f(a, b …"}
+        for lines, want in cases.items():
+            with self.subTest(lines=lines):
+                self.assertEqual(interface_hints._signature(list(lines), 0), want)
 
     def test_with_hints_appends_a_signature_block_only_when_there_are_hints(self):
         self.assertEqual(interface_hints.with_hints("msg", []), "msg")
