@@ -13,6 +13,9 @@ schemas, and the dashboard snapshot.
   active: on the maintainer's machine one 541 MB rollout was a single 291 h activity interval instead of 35 (60 h), so it was
   credited with commits made while it was idle, with 4 M tokens instead of 2.6 bn. Each stored row names its log (`log_id`) and
   the store keeps a log's newest whole read, so the next `record` pass replaces a clipped interval.
+- Compressed Codex rollouts (`*.jsonl.zst`, 2,819 of 2,879 on the maintainer's machine) are read: `compression.zstd` on
+  Python 3.14+, else the `zstd` binary. Without either they are counted in `activity_errors` and in `record`'s output
+  (`unreadable_logs`), never skipped silently.
 
 ## [1.6.1] - 2026-11-08
 

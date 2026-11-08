@@ -127,11 +127,42 @@ class HeadroomPricer:
         ]
 
 
+try:
+    from compression import zstd as ZSTD  # Python 3.14+
+except ImportError:
+    ZSTD = None
+
+
+class UnreadableLog(OSError):
+    """A *.jsonl.zst log on a machine with neither compression.zstd (Python 3.14+) nor the zstd binary."""
+
+
 def log_lines(path, offset=0):
-    """Raw lines of a log from byte `offset`."""
-    with Path(path).open("rb") as handle:
-        handle.seek(offset)
-        yield from handle
+    """Raw lines of a log from byte `offset`; a *.jsonl.zst log (Codex archives) is decompressed and always read from its start."""
+    path = Path(path)
+    if path.suffix != ".zst":
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            yield from handle
+        return
+    if ZSTD is not None:
+        try:
+            with ZSTD.open(path, "rb") as handle:
+                yield from handle
+        except (ZSTD.ZstdError, EOFError) as exc:
+            raise OSError(f"{path.name}: {exc}") from None
+        return
+    binary = shutil.which("zstd")
+    if not binary:
+        raise UnreadableLog(f"{path.name}: no zstd decoder")
+    process = subprocess.Popen([binary, "-dcq", "--", str(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        yield from process.stdout
+    finally:
+        process.stdout.close()
+        code = process.wait()
+    if code:
+        raise OSError(f"{path.name}: zstd exited with {code}")
 
 
 def json_rows(path, max_bytes=None):
@@ -527,20 +558,21 @@ class ActivityCollector:
         self.gap_s = float(activity_gap_minutes) * 60
         self.cache = {}
         self.cursors = {}  # path -> (inode, offset, parser) of a plain log still growing
+        self.unreadable = set()  # *.jsonl.zst logs no decoder could read (reported, never skipped silently)
         self.identity_cache = {}
 
     def candidates(self, now):
         cutoff = (now - timedelta(hours=self.lookback_hours)).timestamp()
         sources = (
-            ("codex", self.codex_root, "*.jsonl"),
-            ("claude", self.claude_root, "*.jsonl"),
-            ("kimi", self.kimi_root, "state.json"),
-            ("gemini", self.gemini_root / "tmp", "session-*.jsonl"),
+            ("codex", self.codex_root, ("*.jsonl", "*.jsonl.zst")),
+            ("claude", self.claude_root, ("*.jsonl",)),
+            ("kimi", self.kimi_root, ("state.json",)),
+            ("gemini", self.gemini_root / "tmp", ("session-*.jsonl",)),
         )
-        for source, root, pattern in sources:
+        for source, root, patterns in sources:
             if not root.exists():
                 continue
-            for path in root.rglob(pattern):
+            for path in (path for pattern in patterns for path in root.rglob(pattern)):
                 try:
                     if path.is_file() and path.stat().st_mtime >= cutoff:
                         yield source, path
@@ -555,13 +587,18 @@ class ActivityCollector:
             return cached[1]
         if source in LOGS:
             # ponytail: a plain log that only grows (same inode, not shorter) is read on from where the last read stopped; an
-            # in-place rewrite to a longer file would be misread (Codex renames instead), a truncation starts over
+            # in-place rewrite to a longer file would be misread (Codex renames or compresses instead), a truncation starts over
             inode, offset, log = self.cursors.pop(path, (None, 0, None))  # a failed read never leaves a half-fed cursor
             if log is None or inode != stat.st_ino or offset > stat.st_size:
                 offset, log = 0, LOGS[source](path)
-            offset = read_log(path, log, offset)
-            self.cursors[path] = (stat.st_ino, offset, log)
-            value = log.result(now, self.lookback_hours, self.gap_s)
+            try:
+                offset = read_log(path, log, offset)
+                value = log.result(now, self.lookback_hours, self.gap_s)
+                if path.suffix != ".zst":
+                    self.cursors[path] = (stat.st_ino, offset, log)
+            except UnreadableLog:
+                self.unreadable.add(path)
+                value = None
         elif source == "kimi":
             value = parse_kimi_session(path, now, self.lookback_hours, self.gap_s)
         else:
@@ -615,6 +652,10 @@ class ActivityCollector:
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 errors.append({"file": path.name, "error": str(exc)})
         self.cursors = {path: cursor for path, cursor in self.cursors.items() if path in seen}
+        unread = len(self.unreadable & seen)
+        if unread:
+            errors.append({"file": "*.jsonl.zst", "error": f"{unread} compressed log(s) not read: needs Python 3.14+ "
+                                                          "(compression.zstd) or the zstd binary"})
         all_sessions = [session for sessions in sessions_by_project.values() for session in sessions]
         for session, pricing in zip(all_sessions, self.pricer.quote(all_sessions)):
             session["cost_usd_estimate"] = pricing.get("cost_usd")

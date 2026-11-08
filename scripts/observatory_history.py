@@ -294,7 +294,12 @@ def main():
                                                      activity_gap_minutes=float(section.get("activity_gap_minutes", 30)))
         rows = snapshot(collector, entries, set(section.get("projects", [])), None, auto=section.get("auto") is True,
                         exclude=section.get("exclude", []))
-        print(json.dumps({"recorded": record(args.store, rows)}))
+        result = {"recorded": record(args.store, rows)}
+        if collector.unreadable:
+            result["unreadable_logs"] = len(collector.unreadable)
+            print(f"{len(collector.unreadable)} compressed log(s) not read: needs Python 3.14+ (compression.zstd) or the zstd binary",
+                  file=sys.stderr)
+        print(json.dumps(result))
         return 0
     allowed_now = allowed(config, entries, args.store)
     now = datetime.now(timezone.utc).timestamp()

@@ -1,12 +1,14 @@
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -244,6 +246,39 @@ class LocalActivityTests(unittest.TestCase):
             write_jsonl(flagged, [{**row, "isSidechain": True}])
             marks = [activity.parse_claude_session(p, NOW)["subagent"] for p in (main, sub, flagged)]
         self.assertEqual(marks, [False, True, True])
+
+    def test_compressed_codex_logs_are_read_and_counted_as_unread_without_a_decoder(self):
+        # 2819 of 2879 local rollouts are *.jsonl.zst: compression.zstd (3.14+), else the zstd binary, else a visible count
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plain = root / "codex/rollout-z.jsonl"
+            write_jsonl(plain, codex_rows("z", root))
+            packed = Path(f"{plain}.zst")
+            binary = shutil.which("zstd")
+            if activity.ZSTD is not None:
+                packed.write_bytes(activity.ZSTD.compress(plain.read_bytes()))
+            elif binary:
+                subprocess.run([binary, "-q", str(plain), "-o", str(packed)], check=True)
+            else:
+                self.skipTest("no zstd encoder")
+            plain.unlink()
+            os.utime(packed, (NOW.timestamp(), NOW.timestamp()))
+
+            def collect(module, which):
+                with mock.patch.object(activity, "ZSTD", module), mock.patch.object(activity.shutil, "which", lambda _: which):
+                    result = activity.ActivityCollector(codex_root=root / "codex", claude_root=root / "x", kimi_root=root / "x",
+                                                        gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: [])
+                                                        ).collect([{"project_id": "p", "path": str(root)}], NOW)
+                return result["projects"]["p"]["sessions"], [error["error"] for error in result["errors"]]
+
+            if activity.ZSTD is not None:
+                self.assertEqual(collect(activity.ZSTD, None), (1, []))
+            if binary:
+                self.assertEqual(collect(None, binary), (1, []))
+            sessions, errors = collect(None, None)
+        self.assertEqual(sessions, 0)
+        self.assertEqual(errors, ["1 compressed log(s) not read: needs Python 3.14+ (compression.zstd) or the zstd binary"])
 
     def test_claude_usage_excludes_messages_before_window(self):
         activity = self.module()
