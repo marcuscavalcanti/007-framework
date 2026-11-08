@@ -337,13 +337,14 @@ CLAUDE_USAGE = ("input_tokens", "cache_read_input_tokens", "ephemeral_5m_input_t
 
 
 class ClaudeLog:
-    """Metadata of one Claude Code log, fed row by row."""
+    """Metadata of one Claude Code log, fed row by row. Every cwd the rows carry is kept in order (`cwds`): a session opened
+    outside a repository and moved into one maps to that repository."""
 
     def __init__(self, path):
         # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
         self.in_subagents, self.log_id = "subagents" in Path(path).parts, Path(path).stem
         self.meta, self.updated = None, None
-        self.stamps, self.segments, self.messages, self.costs = set(), [], [], []
+        self.stamps, self.segments, self.cwds, self.messages, self.costs = set(), [], [], [], []
 
     def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
@@ -354,6 +355,8 @@ class ClaudeLog:
         if self.meta is None and kind in ("user", "assistant"):
             self.meta = {"session_id": row.get("sessionId"), "cwd": row.get("cwd"), "started_at": row.get("timestamp"),
                          "sidechain": row.get("isSidechain") is True}
+        if isinstance(row.get("cwd"), str) and row["cwd"] not in self.cwds:
+            self.cwds.append(row["cwd"])
         cost = row.get("total_cost_usd")
         if kind == "result" and stamp:
             valid = type(cost) in (int, float) and math.isfinite(cost) and cost >= 0
@@ -401,6 +404,7 @@ class ClaudeLog:
             "source": "claude",
             "runtime_provider": "anthropic",
             "cwd": meta["cwd"],
+            "cwds": list(self.cwds),
             "started_at": meta["started_at"],
             "updated_at": iso(self.updated),
             "status": "active" if self.updated and (now - self.updated).total_seconds() <= 120 else "idle",
@@ -645,16 +649,17 @@ class ActivityCollector:
         return self.identity_cache[path]
 
     def project_id(self, session, entries, identities):
-        cwd = Path(session["cwd"]).resolve()
-        for entry in entries:
-            project = Path(entry["path"]).resolve()
-            if cwd == project or project in cwd.parents:
-                return entry["project_id"]
-        cwd_identity = self.identity(cwd)
-        if cwd_identity:
+        for cwd in session.get("cwds") or [session["cwd"]]:  # the first cwd of the session that maps to a project
+            cwd = Path(cwd).resolve()
             for entry in entries:
-                if identities.get(entry["project_id"]) == cwd_identity:
+                project = Path(entry["path"]).resolve()
+                if cwd == project or project in cwd.parents:
                     return entry["project_id"]
+            cwd_identity = self.identity(cwd)
+            if cwd_identity:
+                for entry in entries:
+                    if identities.get(entry["project_id"]) == cwd_identity:
+                        return entry["project_id"]
         return None
 
     def collect(self, entries, now=None):

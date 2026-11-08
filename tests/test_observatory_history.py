@@ -213,6 +213,14 @@ class ObservatoryHistoryTests(unittest.TestCase):
         with mock.patch.object(self.hist, "TEMPORARY", ()):  # this test's repositories live in the temporary directory
             self.assertEqual({self.hist.git_root(str(path)) for path in (repo, repo / "sub", worktree)}, {str(repo)})
 
+    def test_auto_follows_a_session_into_the_repository_its_rows_moved_to(self):
+        repo, home = self.git_repo("project-eta"), Path(self.tmp.name, "home")
+        home.mkdir()
+        session = self.session("a", "2026-10-22T10:05:00Z", project=None, cwd=str(home), cwds=[str(home), str(repo / "sub")])
+        with mock.patch.object(self.hist, "TEMPORARY", ()):
+            rows = self.hist.snapshot(FakeCollector([session]), [], allowed=set(), now=None, auto=True)
+        self.assertEqual([r["project_id"] for r in rows], [f"git:{repo}"])
+
     def test_report_runs_the_observatory_on_an_opted_in_project_and_refuses_others(self):
         repo = Path(self.tmp.name, "repo")
         repo.mkdir()

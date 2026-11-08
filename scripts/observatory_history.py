@@ -121,7 +121,7 @@ def snapshot(collector, entries, allowed, now, auto=False, exclude=()):
         if not session:
             continue
         if not project and auto:
-            root = git_root(session.get("cwd"))
+            root = next(filter(None, map(git_root, session.get("cwds") or [session.get("cwd")])), None)
             project = root and "git:" + root
         if not project or (project not in allowed and not auto):
             continue

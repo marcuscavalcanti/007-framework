@@ -316,6 +316,20 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual(sessions, 0)
         self.assertEqual(errors, ["1 compressed log(s) not read: needs Python 3.14+ (compression.zstd) or the zstd binary"])
 
+    def test_claude_session_opened_outside_a_repository_maps_to_the_repository_its_rows_move_into(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, repo = Path(tmp), Path(tmp, "repo")
+            (repo / "sub").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            row = {"type": "user", "sessionId": "c", "timestamp": "2026-08-30T14:00:00Z"}
+            write_jsonl(root / "claude/c.jsonl", [{**row, "cwd": tmp}, {**row, "cwd": str(repo / "sub")}])
+            collector = activity.ActivityCollector(codex_root=root / "x", claude_root=root / "claude", kimi_root=root / "x",
+                                                   gemini_root=root / "x", pricer=activity.HeadroomPricer(runner=lambda r: []))
+            result = collector.collect([{"project_id": "p", "path": str(repo)}], NOW)
+        self.assertEqual(result["projects"]["p"]["sessions"], 1)
+        self.assertEqual(result["projects"]["p"]["recent_sessions"][0]["cwds"], [tmp, str(repo / "sub")])
+
     def test_claude_usage_excludes_messages_before_window(self):
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:

@@ -22,6 +22,8 @@ schemas, and the dashboard snapshot.
   one repository from 8 attributed, 200 ambiguous and 43 unattributed commits to 198, 13 and 40.
 - With `observatory.auto`, a Codex worktree (`~/.codex/worktrees/<name>/<repo>`) is the same project as its repository (git
   common dir) instead of a project of its own.
+- A Claude session opened outside a repository maps to the first repository its rows move into (`cwds`), not only to its first
+  row's directory.
 
 ### Added
 
