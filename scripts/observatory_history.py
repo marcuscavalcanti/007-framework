@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Thesis D step 2: keep session METADATA beyond the 24 h log lookback so durability (7/30 days) can mature.
 
-Only projects the user opted in (config `observatory.projects`) are recorded, or, with `observatory.auto: true`, every project with
-an active session (registered in 007, or any git repository by its root, id "git:<root>"; a linked worktree is its repository)
-except `observatory.exclude` (names or ids); only FIELDS are stored, never conversation content (active_intervals are row timestamps merged across pauses of at most
+Only projects the user opted in (config `observatory.projects`) are recorded, or, with `observatory.auto: true` (off by default),
+every project with an active session (registered in 007, or any git repository by its root, id "git:<root>"; a linked worktree is
+its repository) except `observatory.exclude` (names or ids); only FIELDS are stored, never conversation content (active_intervals are row timestamps merged across pauses of at most
 `observatory.activity_gap_minutes`, default 30). `observatory.lookback_hours` (default 168) bounds each record pass.
 The store is append-only JSONL; a session is appended again only when its updated_at changes, or when the stored row predates
 active_intervals and a fresh parse brings them; readers keep the latest row, with the union of the session's intervals.

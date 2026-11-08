@@ -221,6 +221,17 @@ class ObservatoryHistoryTests(unittest.TestCase):
             rows = self.hist.snapshot(FakeCollector([session]), [], allowed=set(), now=None, auto=True)
         self.assertEqual([r["project_id"] for r in rows], [f"git:{repo}"])
 
+    def test_nothing_is_recorded_until_the_user_opts_in(self):
+        # the open-source default: observatory.auto is off; only a config naming projects (or auto: true) records anything
+        home = Path(self.tmp.name, "home")
+        home.mkdir()
+        result = subprocess.run([sys.executable, str(ROOT / "scripts" / "observatory_history.py"), "record", "--config",
+                                 str(home / "config.json"), "--store", str(self.store)],
+                                env={**os.environ, "HOME": str(home)}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(self.store.exists())
+        self.assertEqual(self.hist.allowed(self.hist.read_config(home / "config.json"), [], self.store), set())
+
     def test_report_runs_the_observatory_on_an_opted_in_project_and_refuses_others(self):
         repo = Path(self.tmp.name, "repo")
         repo.mkdir()
