@@ -16,6 +16,14 @@ Start from [`examples/lab.example.json`](../examples/lab.example.json). Only `ru
 - **Tests** are an adapter: `node`, `pytest`, `unittest`, `go`, or `custom`, whose command writes `{test id: pass|fail|skip}` to `$LAB_RAW_REPORT`. With `go`, the agent's own `*_test.go` files go back to base before grading, so a test name it redeclares cannot break a package. A test whose `unittest` class or module, or whose `go` package, fails outside any test (a teardown error, `TestMain`'s exit, a panic after the test returned) reads `error`, not `pass`; a test that fails on its own owns its package's failure, so a test already red at base stays outside the grade.
 - **Parallelism** shortens the run; the budget reserves `--stop-usd` for each cell in flight.
 
+Acceptance execution uses the same configured `acceptance_sandbox` argv prefix and `acceptance_env` across replay cells,
+lab collection and `admit --recheck`. An explicit environment (including `{}`) is exact apart from the controller's
+`ACCEPT_REPORT`; omitted or null retains host inheritance for compatibility. Command prefixes are configured wrappers,
+not proof of an operating-system sandbox. Cells identify their boundary as `host-unqualified` or
+`wrapper-configured-unverified` and their environment as inherited or explicit. Configure containment before executing
+untrusted candidates; no provider-specific mechanism is required by this policy. Existing frozen experiments keep their
+original configuration and embedded acceptance adapter.
+
 ## What the report can say
 
 | Claim | Gate |

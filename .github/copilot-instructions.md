@@ -154,3 +154,9 @@ Paid inference, additional workers, Deep Scan, installs, hooks and Cloud
 continuous monitoring require their applicable authorization; this instruction
 does not renew consumed calls or change account settings. Persist findings and
 unresolved gates, then continue independent authorized work.
+
+Security probes and local verification must use an explicit environment allowlist
+or a cleared synthetic environment, with a temporary HOME when native log reads
+are not part of the check. Never print an environment mapping or use an assertion
+that can render its values on failure. Report only the synthetic key's presence
+or a safe error class; preserve diagnostics without copying credentials.

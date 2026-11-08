@@ -24,6 +24,7 @@ import tarfile
 import tempfile
 import time
 from contextlib import contextmanager
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 import replay_capture
@@ -236,17 +237,48 @@ def diagnostics(task, workspace, source_repo, base):
     }
 
 
-def acceptance(task, workspace, sandbox=None, env=None):
-    """Review r40 E2: candidate code runs here, so `sandbox` (argv prefix, "{cwd}" = this workspace) contains each command."""
+def _diagnostic_retention(config, output_dir):
+    retain = config.get("retain_diagnostic_text", True)
+    if type(retain) is not bool:
+        raise ValueError("retain_diagnostic_text must be a boolean")
+    if output_dir.is_symlink():
+        raise ValueError("replay output directory must not be a symlink")
+    return retain
+
+
+def _output_metadata(result):
+    # Popen text mode normalizes newlines: these hashes describe re-encoded text, not original wire bytes.
+    metadata = {"representation": "subprocess-text-utf8"}
+    for name in ("stdout", "stderr"):
+        payload = (getattr(result, name) or "").encode("utf-8")
+        metadata[name + "_utf8_sha256"] = hashlib.sha256(payload).hexdigest()
+        metadata[name + "_utf8_bytes"] = len(payload)
+    return metadata
+
+
+def acceptance_policy(sandbox=None, env=None):
+    """A configured prefix is not proof of sandboxing; an explicit environment never inherits the parent's values."""
     if sandbox is not None and not (isinstance(sandbox, list) and all(isinstance(part, str) for part in sandbox)):
         raise ValueError("acceptance_sandbox must be a list of strings")
+    if env is not None and (not isinstance(env, Mapping) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in env.items())):
+        raise ValueError("acceptance_env must be a string mapping or null")
+    return list(sandbox or []), dict(os.environ if env is None else env)
+
+
+def acceptance(task, workspace, sandbox=None, env=None, *, retain_diagnostic_text=True):
+    sandbox, env = acceptance_policy(sandbox, env)
+    if type(retain_diagnostic_text) is not bool:
+        raise ValueError("retain_diagnostic_text must be a boolean")
     results = []
     for command in task.get("acceptance", []):
         argv = command if isinstance(command, list) else shlex.split(command)
         if sandbox:
             argv = [part.replace("{cwd}", str(workspace)) for part in sandbox] + list(argv)
         result = run(argv, cwd=workspace, timeout=task.get("acceptance_timeout_s", 900), env=env)
-        results.append({"command": argv, "exit": result.returncode, "tail": (result.stdout + result.stderr)[-1000:]})
+        results.append({"command": argv if retain_diagnostic_text else [], "exit": result.returncode,
+                        "tail": (result.stdout + result.stderr)[-1000:] if retain_diagnostic_text else "",
+                        "command_sha256": hashlib.sha256(json.dumps(argv).encode()).hexdigest(),
+                        "output": _output_metadata(result), "diagnostic_text_retained": retain_diagnostic_text})
     return results, bool(results) and all(item["exit"] == 0 for item in results)
 
 
@@ -494,6 +526,7 @@ def cell_id(task, arm, replicate):
 
 
 def execute_reserved_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root, budget, upper_usd, bound_source_sha256):
+    _diagnostic_retention(config, output_dir)
     if "replay_ref" in task or vault_root is not None:
         if vault_root is None or task.get("replay_ref") is None:
             raise ValueError("retained replay requires an explicit vault and reference")
@@ -521,6 +554,8 @@ def execute_reserved_cell(config, task, arm, replicate, output_dir, timeout_s, *
 
 
 def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root=None):
+    retain_text = _diagnostic_retention(config, output_dir)
+    acceptance_sandbox, acceptance_env = acceptance_policy(config.get("acceptance_sandbox"), config.get("acceptance_env"))
     attempt_id = cell_id(task, arm, replicate)
     for suffix in (".json", ".runner.json", ".observation.json", ".prompt.txt"):
         existing = output_dir / (attempt_id + suffix)
@@ -590,15 +625,17 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             argv.append(part)
         started = time.monotonic()
         cleanup_failure = None
+        agent_output = "unavailable"
         try:
             agent = run(argv, cwd=workspace, timeout=timeout_s, input_text=effective_prompt)
-            exit_code, tail = agent.returncode, (agent.stdout + agent.stderr)[-1500:]
+            exit_code, tail = agent.returncode, (agent.stdout + agent.stderr)[-1500:] if retain_text else ""
+            agent_output = _output_metadata(agent)
         except subprocess.TimeoutExpired:
             exit_code, tail = -9, "TIMEOUT"
         except CleanupIncomplete as exc:
             cleanup_failure = exc.state
             timed_out = isinstance(exc.original, subprocess.TimeoutExpired)
-            exit_code, tail = (-9, "TIMEOUT") if timed_out else (exc.returncode, str(exc))
+            exit_code, tail = (-9, "TIMEOUT") if timed_out else (exc.returncode, str(exc) if retain_text else exc.state)
         agent_wall_s = round(time.monotonic() - started, 2)  # r46: the agent alone; wall_s also spans grading
         prompt.unlink(missing_ok=True)
         # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
@@ -609,11 +646,10 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
                     acceptance_workspace = Path(acceptance_tmp) / "workspace"
                     shutil.copytree(workspace, acceptance_workspace, symlinks=True)
                     report = Path(acceptance_tmp) / "accept-report.json"  # r45: beside the copy, never inside it
-                    base_env = config.get("acceptance_env")
-                    # review r42 E2: an explicit minimal environment, so grading never inherits the coordinator's
-                    accept_env = {**(os.environ if base_env is None else base_env), "ACCEPT_REPORT": str(report)}
+                    accept_env = {**acceptance_env, "ACCEPT_REPORT": str(report)}
                     with hidden_acceptance(task, acceptance_workspace):
-                        checks, checks_passed = acceptance(task, acceptance_workspace, config.get("acceptance_sandbox"), accept_env)
+                        checks, checks_passed = acceptance(task, acceptance_workspace, acceptance_sandbox, accept_env,
+                                                          retain_diagnostic_text=retain_text)
                     # ponytail: every command shares one report path, so only single-command tasks get outcomes
                     outcomes = acceptance_outcomes(report) if len(checks) == 1 else "unavailable"
             except CleanupIncomplete as exc:
@@ -677,8 +713,12 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             "failure_class": failure_class,
             "acceptance": checks,
             "acceptance_outcomes": outcomes,
+            "acceptance_execution": {"boundary": "wrapper-configured-unverified" if acceptance_sandbox else "host-unqualified",
+                                     "environment": "inherited" if config.get("acceptance_env") is None else "explicit"},
             **d0,
             "agent_tail": tail,
+            "agent_output": agent_output,
+            "diagnostic_text_retained": retain_text,
         }
         if retained_ref is not None:
             record.update(task_id=attempt_id, project_id=project, source_replay_ref=task["replay_ref"], replay_ref=retained_ref,
@@ -709,7 +749,9 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
         shutil.rmtree(workspace)
 
 
-def recheck_retained_case(task, vault_root):
+def recheck_retained_case(task, vault_root, *, acceptance_config=None):
+    policy = acceptance_config if acceptance_config is not None else {}
+    sandbox, env = acceptance_policy(policy.get("acceptance_sandbox"), policy.get("acceptance_env"))
     project, source_task, ref = task["project_id"], task.get("source_task_id", task["id"]), task["replay_ref"]
     metadata = replay_capture.validate_replay_ref(vault_root, project, source_task, ref)
     if metadata["schema"] == replay_capture.INPUT_SCHEMA_V2:
@@ -736,8 +778,9 @@ def recheck_retained_case(task, vault_root):
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise subprocess.TimeoutExpired(command, 300)
-                        result = run(command, cwd=workspace, timeout=min(contract.get("timeout_s", 900), remaining))
-                        row.append(result.returncode)
+                        checks, _ = acceptance({"acceptance": [command], "acceptance_timeout_s": min(contract.get("timeout_s", 900), remaining)},
+                                               workspace, sandbox, {**env, "ACCEPT_REPORT": str(Path(temporary) / "accept-report.json")})
+                        row.append(checks[0]["exit"])
         if exits[0] != exits[1]:
             gaps.append("oracle-unstable")
         if any(code != 0 for row in exits for code in row):
@@ -760,7 +803,7 @@ def dataset_counts(rows):
             "admitted": sum(r["admitted"] for r in rows), "excluded": sum(not r["admitted"] for r in rows)}
 
 
-def admit_dataset(tasks, *, vault_root, recheck=False):
+def admit_dataset(tasks, *, vault_root, recheck=False, acceptance_config=None):
     """Partition retained cases; file claims never qualify a causal comparison."""
     if type(recheck) is not bool or not isinstance(tasks, list) or len(tasks) > 100:
         raise ValueError("admission requires at most 100 tasks and an explicit boolean recheck")
@@ -840,7 +883,7 @@ def admit_dataset(tasks, *, vault_root, recheck=False):
         row["admitted"] = not row["exclusions"]
         if recheck and row["retained_case"] and not any(reason != "generator-isolation-unqualified" for reason in row["exclusions"]):
             try:
-                checked = recheck_retained_case(task, vault_root)
+                checked = recheck_retained_case(task, vault_root, acceptance_config=acceptance_config)
             except (OSError, ValueError):
                 checked = {"replay_ready": False, "oracle_exits": [], "gaps": ["reconstruction-or-oracle-unavailable"]}
             row.update(checked)
@@ -1116,7 +1159,7 @@ def main():
             if result["changed"] or not result["complete"]:
                 print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result["complete"] else 2
-        print(json.dumps(admit_dataset(config["tasks"], vault_root=vault, recheck=args.recheck), indent=2, sort_keys=True))
+        print(json.dumps(admit_dataset(config["tasks"], vault_root=vault, recheck=args.recheck, acceptance_config=config), indent=2, sort_keys=True))
         return 0
     config = json.loads(replay_set.read_text())
     cost_unavailable_map(config)
@@ -1135,7 +1178,7 @@ def main():
     if unknown:
         parser.error(f"unknown arms: {sorted(unknown)}")
     output_dir = Path(args.out).expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=False)
+    output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     replicates = experiment_replicates(config, args.replicates)
     schedule = experiment_schedule(config, arms, replicates)
     rows = []

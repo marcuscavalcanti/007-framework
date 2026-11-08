@@ -722,6 +722,8 @@ def run_acceptance(root, task):
             )
         checks.append({
             "command": command,
+            "command_sha256": hashlib.sha256(json.dumps(command).encode()).hexdigest(),
+            "diagnostic_text_retained": True,
             "cwd": ".",
             "exit": exit_code,
             "duration_ms": round((time.monotonic() - started) * 1000),

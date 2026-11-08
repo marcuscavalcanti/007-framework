@@ -5,6 +5,7 @@ import json
 import copy
 import fnmatch
 import hashlib
+import ipaddress
 import math
 import os
 import stat
@@ -1453,8 +1454,43 @@ def handler_class(registry, static_dir, touch_provider, activity_provider=None, 
             self.end_headers()
             self.wfile.write(payload)
 
+        def valid_host(self):
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1:
+                return False
+            authority = hosts[0].strip()
+            if not authority or any(ord(c) <= 32 or ord(c) >= 127 for c in authority):
+                return False
+            try:
+                parsed = urlsplit("//" + authority)
+                if (parsed.username is not None or parsed.password is not None or parsed.path or parsed.query
+                        or parsed.fragment or not parsed.hostname or authority.endswith(":")):
+                    return False
+                if (parsed.port if parsed.port is not None else 80) != self.server.server_port:
+                    return False
+                local = self.connection.getsockname()[0]
+                allowed = {local, self.server.server_address[0],
+                           getattr(self.server, "dashboard_bind_host", self.server.server_address[0])}
+                if ipaddress.ip_address(local).is_loopback:
+                    allowed.add("localhost")
+                return parsed.hostname.removesuffix(".").casefold() in {h.removesuffix(".").casefold() for h in allowed}
+            except ValueError:
+                return False
+
         def do_GET(self):
-            request = urlsplit(self.path)
+            if not self.valid_host():
+                self.json_response(403, {"error": "invalid host"})
+                return
+            # BaseHTTPRequestHandler normalizes a leading //, so inspect the original request target as well.
+            target = self.requestline.split()[1]
+            try:
+                request = urlsplit(target)
+            except ValueError:
+                self.json_response(400, {"error": "invalid request target"})
+                return
+            if not target.startswith("/") or target.startswith("//") or request.scheme or request.netloc:
+                self.json_response(400, {"error": "only origin-form request targets are supported"})
+                return
             if request.query or request.fragment:
                 self.json_response(400, {"error": "query parameters are not supported"})
                 return
@@ -1504,4 +1540,5 @@ def create_server(host, port, registry, static_dir, activity_provider=None, *, c
         (host, port), handler_class(Path(registry), Path(static_dir), cache, activity_provider, curation_checkpoint, curation_vault, background)
     )
     server.daemon_threads = True
+    server.dashboard_bind_host = host
     return server

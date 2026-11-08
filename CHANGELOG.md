@@ -6,6 +6,20 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Security
+
+- The dashboard rejects foreign, missing, duplicate or malformed HTTP authorities and absolute request targets before
+  reading route data; loopback aliases, the actual port and explicitly configured external binds remain supported.
+- Activity skips session enumeration when no projects are registered; the observatory does the same when enrollment is
+  empty and auto discovery is off. This does not promise preselection of every file while a project scope is active.
+- Lab collection now honors an explicit acceptance environment without merging parent variables; retained-case rechecks
+  honor the configured wrapper and environment too. Cells label the execution boundary without claiming sandbox proof.
+- Local argv and bounded diagnostics remain available by default, with additional hashes for integrity/correlation.
+  Explicit `retain_diagnostic_text: false` minimizes diagnostic text in new replay/lab runs and their copies; frozen
+  inputs and historical results remain unchanged. New output directories are owner-only; existing permissions are preserved.
+- Stale observatory enrollment with no matching registered project skips session enumeration. Security probes use synthetic
+  or explicitly allowlisted environments and avoid assertions that can render credential values.
+
 ### Added
 
 - A short README quickstart, `PRIVACY.md` for local collection and explicit egress, and software citation metadata.

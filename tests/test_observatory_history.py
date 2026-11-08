@@ -40,6 +40,7 @@ class ObservatoryHistoryTests(unittest.TestCase):
 
     def setUp(self):
         self.hist = importlib.import_module("observatory_history")
+        self.registered_entries = [{"project_id": "p1", "path": "/repo"}, {"project_id": "p2", "path": "/other"}]
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Path(self.tmp.name, "sessions.jsonl")
 
@@ -55,7 +56,7 @@ class ObservatoryHistoryTests(unittest.TestCase):
         collector = FakeCollector([self.session("a", "2026-10-22T10:05:00Z", title="PRIVATE prompt text"),
                                    self.session("b", "2026-10-22T10:06:00Z", project="p2"),
                                    self.session("c", "2026-10-22T10:07:00Z", project=None)])
-        rows = self.hist.snapshot(collector, entries=[], allowed={"p1"}, now=None)
+        rows = self.hist.snapshot(collector, entries=self.registered_entries, allowed={"p1"}, now=None)
         self.assertEqual([r["session_id"] for r in rows], ["a"])
         self.assertEqual(set(rows[0]), set(self.hist.FIELDS))
         self.assertEqual((rows[0]["project_id"], rows[0]["total_tokens"], rows[0]["reasoning_output_tokens"]), ("p1", 10, 3))
@@ -146,8 +147,8 @@ class ObservatoryHistoryTests(unittest.TestCase):
         self.assertEqual(self.hist.load(legacy)[0]["model"], "claude-opus-5-5")     # a declared main log beats an unmarked row
 
     def test_record_is_append_only_without_duplicates_and_load_keeps_the_latest(self):
-        first = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), [], {"p1"}, None)
-        later = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T11:00:00Z")]), [], {"p1"}, None)
+        first = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), self.registered_entries, {"p1"}, None)
+        later = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T11:00:00Z")]), self.registered_entries, {"p1"}, None)
         self.assertEqual(self.hist.record(self.store, first), 1)
         self.assertEqual(self.hist.record(self.store, first), 0)
         self.assertEqual(self.hist.record(self.store, later), 1)
@@ -157,9 +158,9 @@ class ObservatoryHistoryTests(unittest.TestCase):
 
     def test_a_stored_row_without_intervals_is_recorded_again_once_a_parse_brings_them(self):
         # the store from before active_intervals existed (2026-10-22..25) must gain them, or those days keep the 271 h span
-        old = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), [], {"p1"}, None)
+        old = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), self.registered_entries, {"p1"}, None)
         fresh = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z", title="PRIVATE",
-                                                               active_intervals=[[T0, T0 + 60]])]), [], {"p1"}, None)
+                                                               active_intervals=[[T0, T0 + 60]])]), self.registered_entries, {"p1"}, None)
         self.assertIn("active_intervals", self.hist.FIELDS)
         self.assertEqual((old[0]["active_intervals"], fresh[0]["active_intervals"]), (None, [[T0, T0 + 60]]))
         self.assertNotIn("PRIVATE", json.dumps(fresh))
@@ -175,7 +176,7 @@ class ObservatoryHistoryTests(unittest.TestCase):
         main = self.session("a", "2026-10-25T18:05:00Z", model="main-model", source="claude",
                             active_intervals=[[T0, T0 + 60], [T0 + 9000, T0 + 9100]])
         sub = self.session("a", "2026-10-25T04:05:00Z", model="sub-model", source="claude", active_intervals=[[T0 + 30, T0 + 5000]])
-        rows = self.hist.snapshot(FakeCollector([main, sub]), [], {"p1"}, None)
+        rows = self.hist.snapshot(FakeCollector([main, sub]), self.registered_entries, {"p1"}, None)
         self.assertEqual(self.hist.record(self.store, rows), 2)
         self.assertEqual(self.hist.record(self.store, rows), 0, "an older log's row is not appended again on every pass")
         loaded, = self.hist.load(self.store)

@@ -108,6 +108,8 @@ def calibrations(config, base):
 
 
 def snapshot(collector, entries, allowed, now, auto=False, exclude=()):
+    if not auto and not any(e["project_id"] in allowed for e in entries):
+        return []
     now = now or datetime.now(timezone.utc)
     paths = {e["project_id"]: e["path"] for e in entries}
     identities = {e["project_id"]: collector.identity(e["path"]) for e in entries}

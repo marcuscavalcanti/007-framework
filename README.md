@@ -426,6 +426,17 @@ frozen prompt is also provided on stdin, which works with CLIs that accept `-`.
 The replay set must contain a seed fixed before execution; `summary.json` records
 that seed and the realized cell order.
 
+Replay cells preserve local argv and the existing bounded `tail`/`agent_tail` diagnostics by default, alongside command
+hashes, output hashes/lengths, exit codes and test outcomes. Local retention is not permission to publish or send content.
+The output hashes describe UTF-8 re-encoded subprocess text, after Python's newline decoding, rather than original wire bytes.
+Set the strict boolean `retain_diagnostic_text: false` in a new replay/lab configuration to intentionally minimize
+diagnostic text; hashes and fixed timeout/cleanup status remain. New output directories are owner-only (mode `0700`);
+existing directories retain their host permissions. Authorized frozen inputs and candidate recovery stay separate from
+this optional policy. Do not edit a running or frozen experiment's configuration to change it.
+Command hashes use the same JSON argv representation across controlled CLI checks and replays. Content-dependent
+evaluation or future training still requires the authorized frozen contract/input bytes; metadata and hashes alone do
+not qualify a recoverable example. Missing inputs remain an evidence gap.
+
 ## Architecture
 
 The repository root is the installable skill:

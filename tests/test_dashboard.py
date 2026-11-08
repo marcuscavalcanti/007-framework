@@ -1206,6 +1206,9 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(stored["acceptance_evidence"], "controlled")
             self.assertEqual(stored["acceptance_sha256"], hashlib.sha256(acceptance.read_bytes()).hexdigest())
             self.assertEqual(stored["checks"][0]["command"], [sys.executable, "-c", "print('gate-ok')"])
+            self.assertEqual(stored["checks"][0]["command_sha256"], hashlib.sha256(
+                json.dumps([sys.executable, "-c", "print('gate-ok')"]).encode()).hexdigest())
+            self.assertTrue(stored["checks"][0]["diagnostic_text_retained"])
             self.assertEqual(stored["checks"][0]["exit"], 0)
             self.assertRegex(stored["checks"][0]["stdout_sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(stored["checks"][0]["stderr_sha256"], r"^[0-9a-f]{64}$")

@@ -125,13 +125,14 @@ def overlay(repo, tree, rev, files):
 
 
 def collect(tree, spec, sandbox, env):
-    """Every test -> outcome in `tree`, inside the sandbox when one is configured."""
+    """Every test -> outcome in `tree`, through the configured command prefix and environment."""
+    sandbox, env = replay_eval.acceptance_policy(sandbox, env)
     shutil.copy(HERE / "lab_accept.py", replay_eval.hidden_target(tree, f"{ACCEPT}/lab_accept.py"))
     replay_eval.hidden_target(tree, f"{ACCEPT}/lab.json").write_text(json.dumps(spec))
     with tempfile.TemporaryDirectory(prefix="lab-report-") as scratch:
         report = Path(scratch) / "report.json"
         argv = [p.replace("{cwd}", str(tree)) for p in sandbox or []] + [sys.executable, "-I", "-B", f"{ACCEPT}/lab_accept.py", "--collect", f"{ACCEPT}/lab.json"]
-        subprocess.run(argv, cwd=tree, env={**os.environ, **(env or {}), "ACCEPT_REPORT": str(report)}, capture_output=True, timeout=900, check=True)
+        subprocess.run(argv, cwd=tree, env={**env, "ACCEPT_REPORT": str(report)}, capture_output=True, timeout=900, check=True)
         return json.loads(report.read_text())
 
 
@@ -140,6 +141,15 @@ def passing(outcomes):
 
 
 # ---- mine
+
+def failure_summary(error, retain_diagnostic_text=False):
+    """Exception messages can contain private argv/output; keep a safe class and numeric exit only."""
+    label = type(error).__name__
+    if retain_diagnostic_text:
+        return f"{label}: {error}"[:200]
+    if isinstance(error, subprocess.CalledProcessError) and type(error.returncode) is int:
+        label += f" (exit {error.returncode})"
+    return label
 
 def spec_for(config, test_file):
     packages = config.get("packages") or {"": {}}
@@ -310,7 +320,8 @@ def build(config, candidate, out):
 
 
 def mine(config, out, jobs):
-    out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    retain_text = replay_eval._diagnostic_retention(config, out)
     log = out / "mine.jsonl"
     seen = {json.loads(l)["sha"]: json.loads(l) for l in log.read_text().splitlines()} if log.exists() else {}
     candidates = pool(config)
@@ -323,7 +334,7 @@ def mine(config, out, jobs):
         try:
             task, meta = build(config, candidate, out)
         except Exception as error:  # one unbuildable commit must not end the scan
-            task, meta = None, f"{type(error).__name__}: {error}"[:200]
+            task, meta = None, failure_summary(error, retain_text)
         return candidate, task, meta
     with ThreadPoolExecutor(jobs) as pool_:
         while True:
@@ -345,13 +356,13 @@ def mine(config, out, jobs):
                     row["drop"] = meta
                 with log.open("a") as handle:
                     handle.write(json.dumps(row) + "\n")
-                print(candidate["sha"][:8], "kept" if task else row["drop"], flush=True)
+                print(candidate["sha"][:8], "kept" if task else "dropped (private diagnostic)" if retain_text else row["drop"], flush=True)
     return write_set(config, out)
 
 
 def write_set(config, out):
     loaded = [json.loads(p.read_text()) for p in sorted((out / "tasks").glob("*/task.json"))]
-    replay = {k: config[k] for k in ("seed", "agent_command", "arms", "served_identity", "acceptance_sandbox", "acceptance_env", "compare") if k in config}
+    replay = {k: config[k] for k in ("seed", "agent_command", "arms", "served_identity", "acceptance_sandbox", "acceptance_env", "compare", "retain_diagnostic_text") if k in config}
     replay.update(repos={config.get("repo_key", "source"): config["repo"]}, retain_candidate_patch=True, tasks=[x["task"] for x in loaded], gates=GATES)
     (out / "replay-set.json").write_text(json.dumps(replay, indent=1, ensure_ascii=False))
     (out / "pairs.json").write_text(json.dumps({x["meta"]["id"]: x["meta"] for x in loaded}, indent=1, ensure_ascii=False))
@@ -482,7 +493,7 @@ def sensitivity(config_path, jobs, per_task=6):
         try:
             return tid, control, probe(config, out, tid, patch_text, real_next)
         except Exception as error:
-            return tid, control, f"{type(error).__name__}: {error}"[:200]
+            return tid, control, failure_summary(error)
     with ThreadPoolExecutor(jobs) as pool_:
         rows = list(pool_.map(one, work))
     result = sensitivity_summary(rows)

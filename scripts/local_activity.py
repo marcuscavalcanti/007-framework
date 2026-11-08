@@ -673,6 +673,10 @@ class ActivityCollector:
         return None
 
     def collect(self, entries, now=None):
+        if not entries:
+            self.cursors.clear()
+            self.unreadable.clear()
+            return {"aggregate": summarize([], self.lookback_hours), "projects": {}, "errors": []}
         now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=self.lookback_hours)
         identities = {entry["project_id"]: self.identity(entry["path"]) for entry in entries}
