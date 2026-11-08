@@ -100,12 +100,16 @@ def pytest(root, cwd, config, env, scratch):
 
 def go(root, cwd, config, env, scratch):
     result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
-    final, failed, red = {}, set(), set()
+    final, failed, red, unexplained = {}, set(), set(), set()
     for line in result.stdout.decode(errors="replace").splitlines():
         try:
             e = json.loads(line)
         except ValueError:
             continue
+        if e.get("Action") == "output" and not e.get("Test"):
+            text = e.get("Output", "").strip()
+            if text not in ("", "FAIL", "PASS") and not text.startswith(("FAIL\t", "ok\t")):
+                unexplained.add(e.get("Package"))
         if e.get("Action") not in ("pass", "fail", "skip"):
             continue
         if e.get("Test"):
@@ -115,15 +119,17 @@ def go(root, cwd, config, env, scratch):
         elif e["Action"] == "fail":
             failed.add(e["Package"])
     # A package that failed while none of its tests did (TestMain's exit, a panic or fatal error outside a test, the timeout)
-    # leaves its passes unproven. ponytail: one red test owns the package's failure, so it can hide a second, unattributed cause.
-    return _charge(final, (f"{package} :: " for package in failed - red))
+    # leaves its passes unproven; unexplained package output cannot be attributed to a known-red test.
+    return _charge(final, (f"{package} :: " for package in (failed - red) | (failed & unexplained)))
 
 
 def custom(root, cwd, config, env, scratch):
     """config["command"] writes {test id: pass|fail|skip} to $LAB_RAW_REPORT."""
     raw = scratch / "raw.json"
-    _run(config["command"], cwd, {**env, "LAB_RAW_REPORT": str(raw)})
-    return json.loads(raw.read_text()) if raw.exists() else {}
+    result = _run(config["command"], cwd, {**env, "LAB_RAW_REPORT": str(raw)})
+    final = json.loads(raw.read_text()) if raw.exists() else {}
+    explained = any(outcome in ("fail", "error") for outcome in final.values())
+    return _charge(final, [""]) if result.returncode and (result.returncode != 1 or not explained) else final
 
 
 ADAPTERS = {"node": node, "unittest": unittest_, "pytest": pytest, "go": go, "custom": custom}

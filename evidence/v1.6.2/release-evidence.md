@@ -7,6 +7,12 @@ before and after. The audit was read as evidence to check, not as a specificatio
 
 ## Reconciliation
 
+The historical checks in the last column are maintainer-reported checks from
+the external-audit reconciliation, not an independently hash-bound audit of all
+published attempts. Their quantitative coverage was not supplied to the release
+reviewer. They do not establish absence of historical impact; a full re-grade
+of retained patches remains required before strengthening that claim.
+
 | Finding | State on 1.6.1 | Fix in 1.6.2 | Historical impact |
 |---|---|---|---|
 | F01: acceptance passes a test whose suite failed around it | Confirmed (unittest teardown; Go package failure with every test passing, reproduced with real Go) | A test in a failed fixture or package scope reads `error` | None found. A targeted re-grade of 165 published go-json cells changed 0 outcomes and 0 acceptances, and no published task has a `TestMain`. A residual route (a fatal runtime error in an ungraded test after the last graded one) is invisible in stored data; a full re-grade with no model would close it. |
@@ -34,3 +40,19 @@ Also in this release, from the maintainer's decisions after the audit:
 - **Exact-commit and exact-tag CI:** recorded on the GitHub release.
 - **Independent review:** per `AGENTS.md` reviewer identity levels, recorded on the GitHub release; not run if Marcus does not
   authorize it.
+
+## Follow-up to the independent review
+
+The review of candidate 4fbc2dd returned FIX FIRST at identity level
+`pinned-no-reroute`: requested model pinned, no reroute observed, served identity
+unverified. Its four blocking paths were reproduced before local correction:
+later/extra review events, Go package failure hidden by a known-red test, custom
+report-then-fail, and a verdict applied to the wrong effort pair. The new binding
+requires `effort` and `against` in addition to project, CLI and model; partial
+bindings still load but apply no verdict. Go output outside tests in a failed
+package stays unproven when attribution is ambiguous. Custom exit 1 preserves
+partial grades only when the report explains it with a failed/error test.
+
+These corrections have local regression coverage; they have not received a new
+independent approval. The original FIX FIRST verdict is not rewritten as SHIP.
+CI and distribution checks for the revised commit are recorded separately.

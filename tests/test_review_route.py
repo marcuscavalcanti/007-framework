@@ -36,6 +36,24 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertEqual(level(claude, [{**result, "modelUsage": {}}]), "failed")
         self.assertEqual(level({"cli": "kimi"}, [result]), "failed")
 
+    def test_identity_level_rejects_later_turns_results_and_errors(self):
+        level = self.module().identity_level
+        codex = {"cli": "codex", "model": "gpt-6-astra"}
+        done = [{"type": "turn.started"}, {"type": "turn.completed"}]
+        for stream in (done + [{"type": "turn.started"}], done + done,
+                       done + [{"type": "error"}], [{"type": "turn.completed"}]):
+            with self.subTest(stream=stream):
+                self.assertEqual(level(codex, stream), "failed")
+        claude = {"cli": "claude", "model": "claude-opus-5-5"}
+        result = {"type": "result", "subtype": "success", "is_error": False,
+                  "modelUsage": {"claude-opus-5-5": {}}}
+        for stream in ([result, {"type": "error"}], [result, result],
+                       [result, {**result, "modelUsage": {"other": {}}}],
+                       [{"type": "system", "model": "other"}, result],
+                       [{"type": "system", "model": "claude-opus-5-5"}, {**result, "modelUsage": {}}]):
+            with self.subTest(stream=stream):
+                self.assertEqual(level(claude, stream), "failed")
+
     def test_host_session_from_markers_and_ambiguity_is_refused(self):
         host = self.module().host_session
         self.assertEqual(host({"CLAUDECODE": "1"}), "claude")

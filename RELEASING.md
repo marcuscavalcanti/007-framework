@@ -27,13 +27,25 @@ is the `007` CLI, the receipt and report schemas, and the dashboard snapshot.
    stage new files first:
 
    ```bash
-   v=vX.Y.Z
-   git ls-files | grep -vx "evidence/$v/manifest.sha256" | xargs shasum -a 256 > "evidence/$v/manifest.sha256"
-   shasum -a 256 -c "evidence/$v/manifest.sha256"
+   RELEASE_MANIFEST=evidence/vX.Y.Z/manifest.sha256 python3 - <<'PY'
+   import hashlib, os, subprocess
+   from pathlib import Path
+   target = os.environ['RELEASE_MANIFEST']
+   names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')[:-1]
+   names = [name for name in names if name != target]
+   if any(any(c in name for c in '\n\r\\') or Path(name).is_symlink() for name in names):
+       raise SystemExit('manifest refuses escaped filenames and symbolic links')
+   lines = [hashlib.sha256(Path(name).read_bytes()).hexdigest() + '  ' + name + '\n' for name in names]
+   Path(target).write_text(''.join(lines))
+   PY
+   shasum -a 256 -c evidence/vX.Y.Z/manifest.sha256
    ```
 
    The tag CI checks it with `sha256sum --check`. Regenerate it after any
    change, including a review fix.
+   Spaces in tracked filenames are preserved. Unsupported escape characters or
+   symbolic links fail before publication; the tracked inventory is not split
+   by shell whitespace and a failed hash read does not publish a partial list.
 
 ## Release
 

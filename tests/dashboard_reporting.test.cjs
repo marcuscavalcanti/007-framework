@@ -583,8 +583,22 @@ test('a lab verdict reads as evidence only for the repository, CLI and model it 
   assert.doesNotMatch(show(proven, 'p'), applied);  // no binding: applies nowhere
   assert.doesNotMatch(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm' } }, 'q'), applied);
   assert.doesNotMatch(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'other' } }, 'p'), applied);
-  assert.match(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm' } }, 'p'), /(?<!NOT )PROVEN The same change.*(?<!NOT )PROVEN Durable/);
-  assert.match(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm' } }, null), /(?<!NOT )PROVEN Durable/);
+  assert.match(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm', effort: 'medium', against: 'high' } }, 'p'), /(?<!NOT )PROVEN The same change.*(?<!NOT )PROVEN Durable/);
+  assert.match(show({ ...proven, bound_to: { project_id: 'p', cli: 'codex', model: 'm', effort: 'medium', against: 'high' } }, null), /(?<!NOT )PROVEN Durable/);
+});
+
+test('a bound verdict cannot cross effort pairs', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  const show = (effort, against) => {
+    r.context.report = {same_change_reachable: 'PROVEN', bound_to:
+      {project_id: 'p', cli: 'codex', model: 'm', effort, against}};
+    vm.runInContext('state.snapshot = {...snapshotFixture, lab_report: report}; state.selectedProject = "p"; renderVerdict(selectedProject())', r.context);
+    return r.text('verdict-claims');
+  };
+  assert.doesNotMatch(show('medium', 'xhigh'), /(?<!NOT )PROVEN/);
+  assert.doesNotMatch(show('low', 'high'), /(?<!NOT )PROVEN/);
+  assert.match(show('medium', 'high'), /(?<!NOT )PROVEN/);
 });
 
 test('a failed evidence rebuild shows its own read time, the response time and stays stale (audit F10)', async () => {

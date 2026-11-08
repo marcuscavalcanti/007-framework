@@ -180,9 +180,10 @@ class ReportingTests(unittest.TestCase):
             root = Path(tmp)
             report, config = root / "report.json", root / "config.json"
             report.write_text(json.dumps({"schema": "007-lab/report/v6", "verdict": {"same_change_reachable": "PROVEN", "durability": "PROVEN"}}))
-            binding = {"project_id": "repository-a", "cli": "codex", "model": "m"}
+            binding = {"project_id": "repository-a", "cli": "codex", "model": "m", "effort": "medium", "against": "high"}
             for value, bound in ((str(report), None), ({"path": str(report), **binding}, binding),
-                                 ({"path": str(report), "project_id": "repository-a"}, None)):
+                                 ({"path": str(report), "project_id": "repository-a"}, None),
+                                 ({"path": str(report), "project_id": "repository-a", "cli": "codex", "model": "m"}, None)):
                 with self.subTest(value=value):
                     config.write_text(json.dumps({"observatory": {"lab_report": value}}))
                     loaded = dashboard.load_lab_report(config)

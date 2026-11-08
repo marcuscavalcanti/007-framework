@@ -630,10 +630,11 @@ const SAYS = {
 };
 const scopeProjects = () => { const project = selectedProject(); return project ? [project] : state.snapshot.projects; };
 const calibrationsOf = (projects) => projects.flatMap((project) => (project.observatory?.calibrations || []).filter((item) => !item.error).map((item) => ({ ...item, repository: project.name, project_id: project.project_id })));
-// a lab report names no repository: its verdict counts only for the calibration it is bound to (project, CLI and model), never elsewhere
+// A lab verdict applies only to the same repository, executor and compared effort pair.
 const boundReport = (best, report) => {
   const to = report?.bound_to, calibration = best?.calibration;
-  return to && calibration && to.project_id === calibration.project_id && to.cli === calibration.cli && to.model === calibration.model ? report : null;
+  return to && calibration && to.project_id === calibration.project_id && to.cli === calibration.cli && to.model === calibration.model
+    && to.effort === best.effort && to.against === best.entry?.gain?.against ? report : null;
 };
 const signedPercent = (value) => value == null ? "N/A" : `${value > 0 ? "−" : "+"}${Math.abs(value * 100).toFixed(0)}%`;
 

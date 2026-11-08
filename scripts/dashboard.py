@@ -1241,7 +1241,7 @@ OBSERVATORY_COLLECTOR = ObservatoryCollector()
 
 def load_lab_report(config=None):
     """The verdict of the latest `007 lab report` named by observatory.lab_report, if any: the thesis panel never claims more than this.
-    The report itself names no repository, so the entry binds it: {"path", "project_id", "cli", "model"}, the keys of a calibration.
+    The entry binds the repository, CLI, model and effort pair; a partial binding proves nothing for a calibration.
     A bare path, or a partial binding, gives bound_to None, and the panel applies that verdict to no repository."""
     try:
         entry = observatory_history.read_config(Path(config) if config else observatory_history.HOME / "config.json").get("observatory", {}).get("lab_report")
@@ -1251,7 +1251,7 @@ def load_lab_report(config=None):
         return None
     if not isinstance(report, dict) or not isinstance(report.get("verdict"), dict):
         return None
-    binding = {key: entry.get(key) for key in ("project_id", "cli", "model")} if isinstance(entry, dict) else {}
+    binding = {key: entry.get(key) for key in ("project_id", "cli", "model", "effort", "against")} if isinstance(entry, dict) else {}
     return {**report["verdict"], "bound_to": binding if binding and all(isinstance(v, str) and v for v in binding.values()) else None}
 
 

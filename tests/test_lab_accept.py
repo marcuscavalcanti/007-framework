@@ -86,6 +86,14 @@ class Go(unittest.TestCase):
         self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew", "ex/sub :: 0 :: TestSub"], ["ex :: 0 :: TestOld"]),
                          (0, {"ex :: 0 :: TestNew": "pass", "ex/sub :: 0 :: TestSub": "pass", "__module__": "pass"}))
 
+    def test_a_known_red_does_not_hide_a_later_package_panic(self):
+        events = [{"Action": "pass", "Package": "ex", "Test": "TestNew"},
+                  {"Action": "fail", "Package": "ex", "Test": "TestRedAtBase"},
+                  {"Action": "output", "Package": "ex", "Output": "panic: after tests\n"},
+                  {"Action": "fail", "Package": "ex"}]
+        self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], []),
+                         (1, {"ex :: 0 :: TestNew": "error", "__module__": "pass"}))
+
     @unittest.skipUnless(shutil.which("go"), "go is not installed")
     def test_real_go_test_main_exit_after_passing_tests_is_rejected(self):
         cache = subprocess.run(["go", "env", "GOCACHE"], capture_output=True, text=True).stdout.strip()
@@ -100,6 +108,38 @@ class Go(unittest.TestCase):
                 status, report = accept(root, {"adapter": "go", "tests": "./...", "env": {"GOCACHE": cache, "GOFLAGS": "-count=1"}},
                                         ["ex :: 0 :: TestNew"], [])
                 self.assertEqual((status, report["ex :: 0 :: TestNew"]), expected)
+
+    @unittest.skipUnless(shutil.which("go"), "go is not installed")
+    def test_real_go_known_red_then_panic_does_not_leave_hidden_green(self):
+        cache = subprocess.run(["go", "env", "GOCACHE"], capture_output=True, text=True).stdout.strip()
+        for panic, expected in ((False, (0, "pass")), (True, (1, "error"))):
+            with self.subTest(panic=panic), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "tree"
+                root.mkdir()
+                (root / "go.mod").write_text("module ex\n\ngo 1.20\n")
+                tail = 'panic("after tests")' if panic else 'os.Exit(code)'
+                (root / "ex_test.go").write_text('package ex\nimport ("testing"; "os")\nvar _ = os.Exit\n'
+                    'func TestNew(t *testing.T) {}\nfunc TestRed(t *testing.T) { t.Fatal("known red") }\n'
+                    'func TestMain(m *testing.M) { code := m.Run(); _ = code; ' + tail + ' }\n')
+                status, report = accept(root, {"adapter": "go", "tests": "./...", "env": {"GOCACHE": cache, "GOFLAGS": "-count=1"}},
+                                        ["ex :: 0 :: TestNew"], [])
+                self.assertEqual((status, report["ex :: 0 :: TestNew"]), expected)
+
+
+class Custom(unittest.TestCase):
+    def test_report_then_fail_does_not_accept_unexplained_nonzero_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = "import json,os,sys; json.dump({'new':'pass'},open(os.environ['LAB_RAW_REPORT'],'w')); sys.exit(1)"
+            self.assertEqual(accept(root, {"adapter": "custom", "command": [sys.executable, "-c", source]}, ["new"], []),
+                             (1, {"new": "error", "__module__": "pass"}))
+
+    def test_an_explicit_red_test_preserves_partial_grades(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = "import json,os,sys; json.dump({'new':'pass','known-red':'fail'},open(os.environ['LAB_RAW_REPORT'],'w')); sys.exit(1)"
+            self.assertEqual(accept(root, {"adapter": "custom", "command": [sys.executable, "-c", source]}, ["new"], []),
+                             (0, {"new": "pass", "__module__": "pass"}))
 
 
 if __name__ == "__main__":

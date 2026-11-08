@@ -32,6 +32,12 @@ flag or schema field is renamed or removed. See [the release record](evidence/v1
 
 ### Fixed
 
+- Follow-up to the independent review: reject unfinished or duplicate review
+  completions and extra reported models; invalidate unexplained suite failure
+  despite passing per-test reports; bind dashboard verdicts to both compared
+  efforts. Existing partial report bindings remain readable but apply no verdict.
+- Release manifest generation preserves whitespace in tracked filenames and
+  refuses unsupported escapes and links before publishing a manifest.
 - `007 lab` acceptance no longer passes a test whose suite failed around it (audit 2026-11-08, F01). A `unittest` class or module
   fixture error (`tearDownClass`, `tearDownModule`) and a `go` package that fails while none of its tests did (`TestMain`'s exit, a
   panic or fatal error outside a test) used to be dropped, so the tests read `pass` and the cell could be accepted. Those tests now
