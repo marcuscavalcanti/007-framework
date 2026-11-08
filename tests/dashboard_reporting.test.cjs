@@ -568,6 +568,32 @@ test('quota is never called supported from a price estimate', () => {
   assert.equal(reasoning, 'CHECK');  // the manipulation check is not a benefit
 });
 
+test('007 spend ledger shows each experiment as an estimate, a lower bound when unpriced, and nothing when unconfigured', () => {
+  const r = renderer('UTC');
+  vm.runInContext('renderLabLedger({configured:false, experiments:[]})', r.context);
+  assert.match(r.text('lab-ledger-note'), /No 007 experiments configured/);
+  assert.equal(r.root('lab-ledger-body').children.length, 0);
+  assert.equal(r.root('lab-ledger-scroll').hidden, true);
+  assert.equal(r.root('lab-ledger-total').hidden, true);
+  vm.runInContext(`renderLabLedger({configured:true, total_cost_usd:3.75, total_complete:false, experiments:[
+    {name:"chain", available:true, first_attempt_at:"2026-11-01T10:00:00+00:00", last_attempt_at:"2026-11-02T09:00:00+00:00",
+     attempts:5, valid:2, invalid:2, orphans:1, unpriced:1, cost_usd:3.75, invalid_cost_usd:0.5, cost_sources:{"client-estimate":2}},
+    {name:"done", available:true, first_attempt_at:null, last_attempt_at:null, attempts:1, valid:1, invalid:0, orphans:0, unpriced:0,
+     cost_usd:2, invalid_cost_usd:0, cost_sources:{}},
+    {name:"gone", available:false, error:"results directory unavailable"}]})`, r.context);
+  const [chain, done, gone] = r.root('lab-ledger-body').children.map(row => row.children.map(cell => cell.textContent));
+  assert.deepEqual(chain, ['chain', 'Nov 1, 2026, 10:00', 'Nov 2, 2026, 09:00', '5', '2', '2', '1', '≥ $3.75', '≥ $0.500', 'client-estimate']);
+  assert.deepEqual(done.slice(1, 3).concat(done.slice(7)), ['N/A', 'N/A', '$2.00', '$0.000', 'source N/A']);
+  assert.deepEqual(gone, ['gone', 'Unavailable: results directory unavailable']);
+  assert.equal(r.root('lab-ledger-body').children[2].children[1].colSpan, 9);
+  assert.match(r.text('lab-ledger-total'), /≥ \$3\.75.*estimate/);
+  assert.match(r.text('lab-ledger-note'), /not an invoice/);
+  assert.equal(r.root('lab-ledger-scroll').hidden, false);
+  vm.runInContext('renderLabLedger({configured:false, experiments:[], error:"unreadable config: bad"})', r.context);
+  assert.match(r.text('lab-ledger-note'), /No 007 experiments configured \(unreadable config: bad\)/);
+  assert.equal(r.root('lab-ledger-body').children.length, 0);
+});
+
 test('a lab verdict reads as evidence only for the repository, CLI and model it is bound to (audit F09)', () => {
   const r = renderer();
   r.context.snapshotFixture = verdictSnapshot();

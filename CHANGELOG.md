@@ -14,6 +14,16 @@ schemas, and the dashboard snapshot.
   orphan receipts, USD with its sources, USD on attempts without a valid result; plus a total. Sums of `007 lab run` runner
   receipts, a client estimate and not an invoice: an attempt without a cost is counted as unpriced (the total becomes a lower
   bound), never as zero, and a missing or unreadable directory is reported unavailable instead of failing the read.
+- Dashboard panel "What each 007 experiment cost" shows that field under "Spend and cost", labelled as an estimate; with
+  nothing configured it says only "No 007 experiments configured".
+
+### Changed
+
+- Dashboard: "Full evidence and operations" now uses the verdict home's type scale, spacing, flat 6 px cards and colour tokens,
+  and its summary reads as a section header. Its panels are grouped under Spend and cost, Activity and coverage, Outcomes and
+  gates, and Data quality; route economics, authority counts, dataset counts and the case-evolution chart start collapsed.
+  Groups are h2 and panels h3, so the page keeps one h1 and no skipped heading level. Table headers are sentence case
+  everywhere, the live-session table included. No claim wording changed.
 
 ### Fixed
 
