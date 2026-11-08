@@ -24,10 +24,10 @@ until it is measured. The earlier wording, "the same durable change", is what a 
 
 - **Measured in your repository.** `007 lab` replays your own commits at two efforts. Agent time and tokens settle within a few
   dozen commits. Public go-json replay, Codex `medium` vs `high`, 8 attempts per arm on 41 commits: agent time −30% median per
-  attempt (task-bootstrap 95% CI −33% to −26%), cost −31.5% median, tokens −26% to −34% under any weighting of input, cached
-  input and output; full acceptance 55.2% vs 57.4%.
-- **Guarded in your repository.** `report` returns `KILL` when the whole 95% interval of the paired difference falls below −3
-  points. With about 40 commits that reach new behaviour and go-json's noise, a loss spread across commits is caught four times
+  attempt (task-bootstrap 95% CI −33% to −26%), cost −31.5% median; full acceptance 55.2% vs 57.4%. In the first replay (about
+  two attempts per arm), tokens fell 26% to 34% under any weighting of input, cached input and output.
+- **Guarded in your repository.** `report` returns `KILL` when the whole 95% interval of the paired difference falls below minus
+  the declared margin. At the default 3 points, with about 40 commits that reach new behaviour and go-json's noise, a loss spread across commits is caught four times
   in five from about 10–12 points, roughly where the lower effort stops paying (on go-json a 10.5-point drop in acceptance
   erases the 31% cost saving per accepted change). A loss concentrated in a few commits must be larger.
 - **Bounded, not proven: the same change within 3 points.** With the attempts each run had (about two per arm for Codex, three
@@ -77,8 +77,8 @@ What the instrument learned, and now does by default:
   behaviour; the run had 17.
 - **Read "same change" where both arms can be compared.** Reports use reachable behaviours (hidden tests red at base that some
   attempt passes), paired by task, with a symmetric interval rule — a point estimate never kills — and a pseudo A/A per arm.
-  `PROVEN` must beat a critical value simulated from the run's own attempts with a 3-point loss of whole failed attempts, so
-  such a loss comes out `PROVEN` about 2.5% of the time.
+  `PROVEN` must beat a critical value simulated from the run's own attempts with a loss of the declared margin as whole failed
+  attempts, so such a loss comes out `PROVEN` about 2.5% of the time.
 - **Filter weak specifications.** Commit messages make thin requirements: few tasks reach full acceptance. `007 lab sufficiency`
   drops tasks whose prompt alone cannot reach their tests.
 
@@ -87,7 +87,7 @@ effort is not reported by either CLI (a reasoning-token manipulation check is th
 Raw records of the replays on private repositories stay private because they contain business code; the summaries above are
 their full claim.
 
-Tools for this thesis: `scripts/effort_lab.py` (`007 lab`: mine, run, report, feasibility, sufficiency),
+Tools for this thesis: `scripts/effort_lab.py` (`007 lab`: mine, sensitivity, run, chain, report, feasibility, sufficiency),
 `scripts/line_trial.py` (per-run effort assignment and content-based line survival for a launcher),
 `scripts/choice_observatory.py` (session → commit attribution and line survival, with an explicit evidence level) and
 `scripts/effort_trial.py` (opt-in randomized default effort; **off by default**).

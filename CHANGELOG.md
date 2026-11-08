@@ -18,8 +18,8 @@ All notable changes are documented here.
   inside a sandbox with a minimal environment.
 - Internal planning documents are no longer shipped in the public tree.
 - Thesis restated by what can prove each part: a repository measures the savings and guards against a large loss (`KILL`
-  when the whole interval is below -3 points); a 3-point bound needs more attempts per commit or a pooled public corpus, with
-  one verdict per executor.
+  when the whole interval is below -3 points); a 3-point bound needs more commits than one repository like go-json has (a
+  pooled public corpus), with one verdict per executor.
 - Public pre-registered replay on go-json-experiment/json (Codex `medium` vs `high`, 62 commits): reasoning -67%, median agent
   time -32%, same change +1.3 pp (95% t interval -4.7 to +7.2), not proven. It did not reproduce the +9.4 pp post-hoc Codex gain.
 - `007 lab mine` skips commits with more hidden tests than the acceptance reader takes; `report` counts unreadable test
