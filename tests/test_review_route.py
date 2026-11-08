@@ -54,6 +54,18 @@ class ReviewRouteTests(unittest.TestCase):
             with self.subTest(stream=stream):
                 self.assertEqual(level(claude, stream), "failed")
 
+    def test_identity_rejects_wrapped_stream_models_and_errors(self):
+        level = self.module().identity_level
+        route = {"cli": "claude", "model": "claude-opus-5-5"}
+        result = {"type": "result", "subtype": "success", "is_error": False,
+                  "modelUsage": {"claude-opus-5-5": {}}}
+        for event in ({"type": "message_start", "message": {"model": "other"}},
+                      {"type": "error", "error": {"type": "overloaded_error"}}):
+            with self.subTest(event=event):
+                self.assertEqual(level(route, [{"type": "stream_event", "event": event}, result]), "failed")
+        self.assertEqual(level(route, [{"type": "stream_event", "event":
+            {"type": "message_start", "message": {"model": "claude-opus-5-5"}}}, result]), "verified")
+
     def test_host_session_from_markers_and_ambiguity_is_refused(self):
         host = self.module().host_session
         self.assertEqual(host({"CLAUDECODE": "1"}), "claude")

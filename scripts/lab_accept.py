@@ -18,7 +18,9 @@ NODE_REPORTER = """export default async function* (source) {
     if (e.type !== 'test:pass' && e.type !== 'test:fail') continue;
     const d = e.data;
     const outcome = e.type === 'test:fail' ? 'fail' : d.skip !== undefined || d.todo !== undefined ? 'skip' : 'pass';
-    yield JSON.stringify({ o: outcome, f: d.file, n: d.name, d: d.nesting }) + '\\n';
+    const error = d.details?.error;
+    const broken = error && (error.exitCode !== undefined || error.signal !== undefined || error.failureType === 'hookFailed');
+    yield JSON.stringify({ o: outcome, f: d.file, n: d.name, d: d.nesting, b: !!broken }) + '\\n';
   }
 }
 """
@@ -65,42 +67,53 @@ def _charge(final, broken):
     return {k: "error" if v == "pass" and k.startswith(broken) else v for k, v in final.items()}
 
 
+def _process_status(final, result, *, failure_exit=1, explained=None):
+    """A retained report cannot explain a crash. Only the adapter's normal test-failure exit may preserve partial grades."""
+    if explained is None:
+        explained = any(outcome in ("fail", "error") for outcome in final.values())
+    if result.returncode and (result.returncode != failure_exit or not explained):
+        return _charge(final, [""])
+    return final
+
+
 def node(root, cwd, config, env, scratch):
     reporter, events = scratch / "reporter.mjs", scratch / "events.jsonl"
     reporter.write_text(NODE_REPORTER)
     tests = sorted(str(p) for p in root.glob(config["tests"]))
-    _run([shutil.which("node", path=env["PATH"]), "--test", "--test-concurrency=4", "--test-timeout=120000", f"--test-reporter={reporter}",
+    result = _run([shutil.which("node", path=env["PATH"]), "--test", "--test-concurrency=4", "--test-timeout=120000", f"--test-reporter={reporter}",
           f"--test-reporter-destination={events}", *tests], cwd, env)
-    final, prefix = {}, str(root.resolve()) + "/"
+    final, broken, prefix = {}, set(), str(root.resolve()) + "/"
     for line in events.read_text().splitlines() if events.exists() else []:
         e = json.loads(line)
         clean = lambda text: text.replace(prefix, "").replace(str(root) + "/", "")
         _worst(final, f"{clean(e.get('f') or '?')} :: {e['d']} :: {clean(e['n'])}", e["o"])
-    return final
+        if e.get("b"):
+            broken.add(f"{clean(e.get('f') or '?')} :: ")
+    return _process_status(_charge(final, broken), result)
 
 
 def unittest_(root, cwd, config, env, scratch):
     report = scratch / "unittest.json"
     pattern = Path(config["tests"]).name
-    _run([sys.executable, "-B", "-c", UNITTEST_RUNNER, str(report), str(root), str(Path(config["tests"]).parent), pattern], cwd, env)
+    result = _run([sys.executable, "-B", "-c", UNITTEST_RUNNER, str(report), str(root), str(Path(config["tests"]).parent), pattern], cwd, env)
     out, broken = json.loads(report.read_text()) if report.exists() else ({}, [])
-    return _charge(out, broken)
+    return _process_status(_charge(out, broken), result, failure_exit=None)  # this child normally exits 0 even for red tests
 
 
 def pytest(root, cwd, config, env, scratch):
     report = scratch / "junit.xml"
-    _run([sys.executable, "-m", "pytest", "-q", "-o", "junit_family=xunit1", f"--junitxml={report}", config["tests"]], cwd, env)
+    result = _run([sys.executable, "-m", "pytest", "-q", "-o", "junit_family=xunit1", f"--junitxml={report}", config["tests"]], cwd, env)
     final = {}
     if report.exists():
         for case in ElementTree.parse(report).getroot().iter("testcase"):
             bad = case.find("failure") is not None or case.find("error") is not None
             _worst(final, f"{case.get('file', '?')} :: 0 :: {case.get('classname')}.{case.get('name')}", "fail" if bad else "skip" if case.find("skipped") is not None else "pass")
-    return final
+    return _process_status(final, result)
 
 
 def go(root, cwd, config, env, scratch):
     result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
-    final, failed, red, unexplained = {}, set(), set(), set()
+    final, failed, red, unexplained, seen, completed = {}, set(), set(), set(), set(), set()
     for line in result.stdout.decode(errors="replace").splitlines():
         try:
             e = json.loads(line)
@@ -113,14 +126,19 @@ def go(root, cwd, config, env, scratch):
         if e.get("Action") not in ("pass", "fail", "skip"):
             continue
         if e.get("Test"):
+            seen.add(e["Package"])
             _worst(final, f"{e['Package']} :: 0 :: {e['Test']}", e["Action"])
             if e["Action"] == "fail":
                 red.add(e["Package"])
-        elif e["Action"] == "fail":
-            failed.add(e["Package"])
+        else:
+            completed.add(e["Package"])
+            if e["Action"] == "fail":
+                failed.add(e["Package"])
     # A package that failed while none of its tests did (TestMain's exit, a panic or fatal error outside a test, the timeout)
     # leaves its passes unproven; unexplained package output cannot be attributed to a known-red test.
-    return _charge(final, (f"{package} :: " for package in (failed - red) | (failed & unexplained)))
+    broken = (seen - completed) | (failed - red) | (failed & unexplained)
+    return _process_status(_charge(final, (f"{package} :: " for package in broken)), result,
+                           explained=bool(failed))
 
 
 def custom(root, cwd, config, env, scratch):
@@ -128,8 +146,7 @@ def custom(root, cwd, config, env, scratch):
     raw = scratch / "raw.json"
     result = _run(config["command"], cwd, {**env, "LAB_RAW_REPORT": str(raw)})
     final = json.loads(raw.read_text()) if raw.exists() else {}
-    explained = any(outcome in ("fail", "error") for outcome in final.values())
-    return _charge(final, [""]) if result.returncode and (result.returncode != 1 or not explained) else final
+    return _process_status(final, result)
 
 
 ADAPTERS = {"node": node, "unittest": unittest_, "pytest": pytest, "go": go, "custom": custom}
@@ -141,7 +158,8 @@ def suite(root, config, scratch):
     (scratch / "tmp").mkdir(exist_ok=True)
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(scratch / "home"), "TMPDIR": str(scratch / "tmp"), "LANG": "C", "CI": "1", "NODE_ENV": "test", **config.get("env", {})}
     for command in config.get("prepare", []):
-        _run(command, root, env)
+        if _run(command, root, env).returncode:
+            return {}  # no test result is admissible after failed preparation
     return ADAPTERS[config["adapter"]](root, root / config.get("cwd", "."), config, env, scratch)
 
 

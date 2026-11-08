@@ -94,6 +94,16 @@ class Go(unittest.TestCase):
         self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], []),
                          (1, {"ex :: 0 :: TestNew": "error", "__module__": "pass"}))
 
+    def test_unattributed_package_diagnostic_is_conservatively_charged_even_with_known_red(self):
+        events = [{"Action": "pass", "Package": "ex", "Test": "TestNew"},
+                  {"Action": "fail", "Package": "ex", "Test": "TestRedAtBase"},
+                  {"Action": "fail", "Package": "ex"}]
+        self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], []),
+                         (0, {"ex :: 0 :: TestNew": "pass", "__module__": "pass"}))
+        events.insert(-1, {"Action": "output", "Package": "ex", "Output": "ordinary diagnostic\n"})
+        self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], []),
+                         (1, {"ex :: 0 :: TestNew": "error", "__module__": "pass"}))
+
     @unittest.skipUnless(shutil.which("go"), "go is not installed")
     def test_real_go_test_main_exit_after_passing_tests_is_rejected(self):
         cache = subprocess.run(["go", "env", "GOCACHE"], capture_output=True, text=True).stdout.strip()
@@ -124,6 +134,72 @@ class Go(unittest.TestCase):
                 status, report = accept(root, {"adapter": "go", "tests": "./...", "env": {"GOCACHE": cache, "GOFLAGS": "-count=1"}},
                                         ["ex :: 0 :: TestNew"], [])
                 self.assertEqual((status, report["ex :: 0 :: TestNew"]), expected)
+
+
+class ProcessExit(unittest.TestCase):
+    def test_failed_preparation_does_not_reach_the_adapter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(lab_accept, "_run", return_value=subprocess.CompletedProcess(["prepare"], 1)), \
+                    mock.patch.dict(lab_accept.ADAPTERS, {"custom": mock.Mock(return_value={"new": "pass"})}):
+                self.assertEqual(lab_accept.suite(root, {"adapter": "custom", "prepare": [["prepare"]]}, root / "scratch"), {})
+                lab_accept.ADAPTERS["custom"].assert_not_called()
+
+    def test_normal_failed_test_exit_preserves_partial_grades_but_crash_does_not(self):
+        final = {"new": "pass", "known-red": "fail"}
+        for code in (0, 1, 2, -9):
+            with self.subTest(code=code):
+                expected = "pass" if code in (0, 1) else "error"
+                self.assertEqual(lab_accept._process_status(final, subprocess.CompletedProcess(["runner"], code)),
+                                 {"new": expected, "known-red": "fail"})
+
+    def test_each_adapter_rejects_passing_reports_after_unexplained_nonzero_exit(self):
+        for adapter in ("node", "unittest", "pytest", "go"):
+            with self.subTest(adapter=adapter), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); scratch = root / "scratch"; scratch.mkdir()
+                def run(argv, cwd, env):
+                    stdout = b""
+                    if adapter == "node":
+                        (scratch / "events.jsonl").write_text(json.dumps({"f": "case.js", "d": 0, "n": "New", "o": "pass"}) + "\n")
+                    elif adapter == "unittest":
+                        (scratch / "unittest.json").write_text(json.dumps([{"case.py :: 0 :: New": "pass"}, []]))
+                    elif adapter == "pytest":
+                        (scratch / "junit.xml").write_text('<testsuite><testcase file="case.py" classname="Case" name="New"/></testsuite>')
+                    else:
+                        stdout = (json.dumps({"Action": "pass", "Package": "ex", "Test": "TestNew"}) + "\n").encode()
+                    return subprocess.CompletedProcess(argv, 1, stdout=stdout, stderr=b"")
+                with mock.patch.object(lab_accept, "_run", side_effect=run):
+                    got = lab_accept.ADAPTERS[adapter](root, root, {"tests": "*"}, {"PATH": os.environ.get("PATH", "")}, scratch)
+                self.assertTrue(got)
+                self.assertEqual(set(got.values()), {"error"})
+
+    def test_go_requires_a_completed_package_even_after_exit_zero(self):
+        proc = subprocess.CompletedProcess(["go"], 0, stdout=(json.dumps(
+            {"Action": "pass", "Package": "ex", "Test": "TestNew"}) + "\n").encode(), stderr=b"")
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(lab_accept, "_run", return_value=proc):
+            root = Path(temporary)
+            self.assertEqual(lab_accept.go(root, root, {"tests": "./..."}, {"PATH": os.environ.get("PATH", "")}, root),
+                             {"ex :: 0 :: TestNew": "error"})
+
+    def test_unittest_shutdown_failure_voids_a_report_that_contains_known_red(self):
+        source = CASES + '\nimport atexit,os\natexit.register(lambda: os._exit(1))\n'
+        self.assertEqual(Unittest().grade(source), (1, {NEW: "error", "__module__": "fail"}))
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_node_file_exit_failure_cannot_leave_the_hidden_test_green(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"; root.mkdir()
+            (root / "case.test.cjs").write_text("const test=require('node:test'); test('New',()=>{}); process.on('exit',()=>{process.exitCode=1;});")
+            status, report = accept(root, {"adapter": "node", "tests": "*.test.cjs"}, ["case.test.cjs :: 0 :: New"], [])
+            self.assertEqual((status, report["case.test.cjs :: 0 :: New"]), (1, "error"))
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_node_ordinary_known_red_preserves_other_test_passes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"; root.mkdir()
+            (root / "case.test.cjs").write_text("const test=require('node:test'); test('New',()=>{}); test('Red',()=>{throw Error('known red');});")
+            status, report = accept(root, {"adapter": "node", "tests": "*.test.cjs"}, ["case.test.cjs :: 0 :: New"], [])
+            self.assertEqual((status, report["case.test.cjs :: 0 :: New"]), (0, "pass"))
 
 
 class Custom(unittest.TestCase):

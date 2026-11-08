@@ -56,3 +56,29 @@ partial grades only when the report explains it with a failed/error test.
 These corrections have local regression coverage; they have not received a new
 independent approval. The original FIX FIRST verdict is not rewritten as SHIP.
 CI and distribution checks for the revised commit are recorded separately.
+
+## Second FIX FIRST and revised scope
+
+A fresh Astra/xhigh review of 6ce8fc5 also returned FIX FIRST. The official
+Claude review immediately preceding it failed on weekly quota and produced no
+verdict. Marcus explicitly authorized the fresh Astra exception; neither attempt
+replaced or weakened the earlier FIX FIRST. Both Astra reviews reached
+`pinned-no-reroute`, not verified served identity; costs were unavailable.
+
+The second review exposed the same acceptance boundary in the remaining
+adapters: a report is insufficient without a reconciled process exit. Node,
+unittest, pytest, Go and custom now use that shared check; failed preparation
+returns no admissible tests. Go also requires package completion; Node file or
+hook failures invalidate passes in that file. Ordinary known-red test failures
+preserve partial grades, with one conservative exception: unattributed output
+in a failed Go package invalidates its passes even if the output was harmless.
+These semantics are covered by report-then-fail and real-process controls.
+
+Claude identity inspection now checks wrapped stream events as well as final
+usage, including contradictory models and errors. Manifest generation rejects
+linked destinations/parents and atomically replaces the complete output.
+The F09 configuration also requires `effort` and `against`. The original
+Amendment 1 hash abbreviation is immutable; `REVIEW-ERRATUM.md` corrects it.
+
+These revised bytes still require exact-commit checks and renewed independent
+review before qualification. Tests do not transform either FIX FIRST into SHIP.

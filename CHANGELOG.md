@@ -41,8 +41,11 @@ flag or schema field is renamed or removed. See [the release record](evidence/v1
 - `007 lab` acceptance no longer passes a test whose suite failed around it (audit 2026-11-08, F01). A `unittest` class or module
   fixture error (`tearDownClass`, `tearDownModule`) and a `go` package that fails while none of its tests did (`TestMain`'s exit, a
   panic or fatal error outside a test) used to be dropped, so the tests read `pass` and the cell could be accepted. Those tests now
-  read `error`, in mining and grading alike; a failing test still owns its own package's failure, so tests red at base are graded as
-  before. Tasks mined earlier keep their hash-bound copy of `lab_accept.py`.
+  read `error`, in mining and grading alike. Ordinary known-red test failures preserve partial grades, except that Go conservatively
+  charges passes in a failed package with unattributed package output, even a harmless diagnostic. Missing Go package completion,
+  unexpected process exits, failed preparation, and Node file/hook failures cannot leave affected tests green. The fixed unittest
+  child normally exits zero even for red tests, so any nonzero exit invalidates its passes. Tasks mined earlier keep their
+  hash-bound copy of `lab_accept.py`.
 - A replay cell keeps the change of an agent that staged or committed it (audit 2026-11-08, F02). The retained candidate patch
   diffed the index against `HEAD`, so a commit left it without the change (and with a spurious deletion of the prompt file when
   the agent committed everything), and the change counts read the index, so `git add` alone zeroed them. Both now diff against the
@@ -70,8 +73,8 @@ flag or schema field is renamed or removed. See [the release record](evidence/v1
   one of them; otherwise the run exits 2 with the telemetry kept and no terminal receipt. Declared and observed identity stay
   in separate fields. No published evidence holds a receipt with native telemetry.
 - Dashboard: a `007 lab report` verdict no longer reads as evidence for whichever repository is selected (external audit F09).
-  The report names no repository, so `observatory.lab_report` now takes `{"path", "project_id", "cli", "model"}`, the keys of a
-  calibration, and the thesis panel applies the verdict only to that calibration. A bare path still loads but binds nothing, so
+  The report names no repository, so `observatory.lab_report` now takes `{"path", "project_id", "cli", "model", "effort", "against"}`,
+  and the thesis panel applies the verdict only to that calibration and effort comparison. A bare path still loads but binds nothing, so
   its verdict is applied nowhere.
 - Dashboard: a failed background rebuild no longer leaves the previous evidence looking current while the response clock moves
   (external audit F10). The preserved projects and aggregate are marked stale (gates WAIT, "STALE DATA"), the snapshot carries

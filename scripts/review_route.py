@@ -82,7 +82,16 @@ def identity_level(route, rows):
         if not isinstance(result.get("modelUsage"), dict) or set(result["modelUsage"]) != {route.get("model")}:
             return "failed"
         models = set(result["modelUsage"])
+        events = []
         for row in rows:
+            events.append(row)
+            if row.get("type") == "stream_event":
+                if not isinstance(row.get("event"), dict):
+                    return "failed"
+                events.append(row["event"])
+        for row in events:
+            if row.get("type") in ("error", "turn.failed") or row.get("is_error") is True:
+                return "failed"
             usage = row.get("modelUsage")
             if usage is not None and not isinstance(usage, dict):
                 return "failed"

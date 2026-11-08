@@ -7,6 +7,7 @@ import tempfile
 import os
 import sys
 import shutil
+import textwrap
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +22,46 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageContractTests(unittest.TestCase):
+    def test_release_manifest_keeps_spaces_and_preserves_old_output_on_read_failure(self):
+        recipe = (ROOT / "RELEASING.md").read_text().split("python3 - <<'PY'\n", 1)[1].split("\n   PY", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "file with spaces.txt"; source.write_bytes(b"tracked input")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "add", source.name], cwd=root, check=True)
+            def generate():
+                return subprocess.run([sys.executable, "-c", textwrap.dedent(recipe)], cwd=root,
+                    env={**os.environ, "RELEASE_MANIFEST": "manifest.sha256"}, capture_output=True, text=True)
+            self.assertEqual(generate().returncode, 0)
+            expected = hashlib.sha256(source.read_bytes()).hexdigest() + "  " + source.name + "\n"
+            self.assertEqual((root / "manifest.sha256").read_text(), expected)
+            source.unlink()
+            self.assertNotEqual(generate().returncode, 0)
+            self.assertEqual((root / "manifest.sha256").read_text(), expected)
+            self.assertEqual(sorted(p.name for p in root.iterdir()), [".git", "manifest.sha256"])
+
+    def test_release_manifest_refuses_linked_output_without_overwriting_its_target(self):
+        recipe = (ROOT / "RELEASING.md").read_text().split("python3 - <<'PY'\n", 1)[1].split("\n   PY", 1)[0]
+        for linked_parent in (False, True):
+            with self.subTest(linked_parent=linked_parent), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "repo"; root.mkdir()
+                outside = Path(temporary) / "outside"; outside.mkdir()
+                destination = outside / "manifest.sha256"; destination.write_bytes(b"preserve outside bytes\n")
+                subprocess.run(["git", "init", "-q", str(root)], check=True)
+                (root / "file with spaces.txt").write_text("tracked input")
+                subprocess.run(["git", "add", "file with spaces.txt"], cwd=root, check=True)
+                if linked_parent:
+                    (root / "evidence").symlink_to(outside, target_is_directory=True)
+                    target = "evidence/manifest.sha256"
+                else:
+                    (root / "manifest.sha256").symlink_to(destination)
+                    target = "manifest.sha256"
+                result = subprocess.run([sys.executable, "-c", textwrap.dedent(recipe)], cwd=root,
+                    env={**os.environ, "RELEASE_MANIFEST": target}, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, "linked output must be refused")
+                self.assertEqual(destination.read_bytes(), b"preserve outside bytes\n")
+                self.assertEqual(sorted(p.name for p in outside.iterdir()), ["manifest.sha256"])
+
     def test_corrupt_historical_fixture_is_rejected_before_use(self):
         payload = historical_sources.FIXTURE.read_bytes()
         with tempfile.TemporaryDirectory() as temporary:
