@@ -31,6 +31,10 @@ All notable changes are documented here.
 - Claude result: −5.5 pp (95% t interval −11.8 to +0.7), not proven at the 10-point margin; agent time −67%, median cost −75%;
   acceptance on solved commits −11.1 pp (secondary). The between-commit spread was about five times Codex's, so README and
   `docs/lab.md` now give margin sizes per executor.
+- `007 lab mine` no longer drops a commit that deletes a test or fixture file: hidden files are only those present at the
+  commit (`git log --numstat` lists deleted files too). Found mining BurntSushi/toml, where it dropped 3 of 96 candidates.
+- Pre-registration of a Codex `medium` vs `high` pilot on five pooled zero-dependency Go repositories, margin 5 points: it fixes
+  the reach set, the noise and a go/no-go rule, and the confirmatory rules in advance: `evidence/codex-5pp-20261108/`.
 - Thesis D restated as a decision: `007 lab` shows whether a lower effort pays, against a margin the set declares before any
   attempt (`compare.margin`, default 3 points, at most 20): break-even, "effectively the same" at 5, research precision at 3.
   `report` also writes `report.md`, the verdict in plain words. Durability leaves the claim until it is measured.

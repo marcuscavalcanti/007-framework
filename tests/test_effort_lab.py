@@ -130,6 +130,11 @@ class LabEndToEnd(unittest.TestCase):
         with mock.patch.object(lab.replay_eval, "MAX_ACCEPT_OUTCOMES", 6):
             self.assertEqual(len(lab.oracle(self.config, candidate)["hidden"]), 5)
 
+    def test_a_test_file_the_commit_deleted_does_not_drop_the_task(self):
+        candidate = next(c for c in lab.pool(self.config) if c["sha"] == self.sha)
+        built = lab.oracle(self.config, {**candidate, "tests": candidate["tests"] + ["tests/test_gone.py"]})
+        self.assertEqual((len(built["hidden"]), built["hidden_files"]), (5, candidate["tests"]))
+
     def test_a_cell_the_runner_refused_before_its_receipt_is_invalid_not_a_broken_directory(self):
         out = self.root / "lab"
         lab.mine(self.config, out, 2)

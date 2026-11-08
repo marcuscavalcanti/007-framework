@@ -220,7 +220,8 @@ def oracle(config, commit):
     """Hidden tests, baseline and contract of one commit, or a drop reason. A test counts only if it passes twice."""
     repo, sha, parent = config["repo"], commit["sha"], commit["parent"]
     prefix, spec = spec_for(config, commit["tests"][0])
-    hidden_files = [f for f in commit["tests"] if f.startswith(prefix)]
+    present = set(_git(repo, "--literal-pathspecs", "ls-tree", "-r", "--name-only", sha, "--", *commit["tests"]).decode("utf-8", "replace").splitlines())
+    hidden_files = [f for f in commit["tests"] if f.startswith(prefix) and f in present]  # numstat also lists files the commit deleted
     sandbox, env = config.get("acceptance_sandbox"), config.get("acceptance_env")
     message = _git(repo, "log", "-1", "--format=%B", sha).decode("utf-8", "replace")
     with tempfile.TemporaryDirectory(prefix="lab-mine-") as scratch:
