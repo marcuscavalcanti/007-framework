@@ -436,6 +436,13 @@ longitudinal receipts. Exact boundaries and hashes are in
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
 
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). The rules for people and agents,
+including proof by contribution type and who decides, are in
+[AGENTS.md](AGENTS.md). Report vulnerabilities privately per
+[SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE) © 2026 Marcus Cavalcanti.

@@ -6,6 +6,12 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Added
+
+- Contribution rules in `AGENTS.md`, copied to `.github/copilot-instructions.md` and read by Claude Code through `CLAUDE.md`
+  (a test fails if the copy drifts); `RELEASING.md`; `.github/CODEOWNERS`, a pull request template, and bug and claim-challenge
+  issue templates with security reports routed to private reporting. `CONTRIBUTING.md` now points to `AGENTS.md`.
+
 ## [1.6.0] - 2026-11-08
 
 Minor release: new commands and schemas are additive, and v1 receipts stay valid. Behaviour changes are listed under

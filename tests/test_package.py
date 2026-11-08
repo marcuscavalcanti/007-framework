@@ -82,6 +82,10 @@ class PackageContractTests(unittest.TestCase):
         shown = subprocess.run([sys.executable, str(ROOT / "bin/007"), "--version"], capture_output=True, text=True, check=True).stdout
         self.assertEqual(shown.strip(), "007 1.6.0")
 
+    def test_agent_rule_copies_match(self):
+        self.assertEqual((ROOT / ".github/copilot-instructions.md").read_bytes(), (ROOT / "AGENTS.md").read_bytes())
+        self.assertEqual((ROOT / "CLAUDE.md").read_text(), "@AGENTS.md\n")
+
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))
         markdown += list((ROOT / "references").glob("*.md"))
