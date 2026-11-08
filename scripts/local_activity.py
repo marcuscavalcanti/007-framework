@@ -33,8 +33,12 @@ def iso_datetime(value):
         return None
 
 
+def valid_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
 def safe_number(value):
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else 0
+    return value if valid_number(value) else 0
 
 
 def empty_usage():
@@ -231,7 +235,11 @@ def labels(segments):
 
 
 def counts(raw, keys):
-    return tuple(int(safe_number(raw.get(key))) for key in keys)
+    """The token counters `keys` of one usage record (an absent one is 0), or None when one is present but not a non-negative
+    finite number: an invalid counter is unknown, never zero."""
+    if any(key in raw and not valid_number(raw[key]) for key in keys):
+        return None
+    return tuple(int(raw.get(key, 0)) for key in keys)
 
 
 def iso(stamp):
@@ -344,7 +352,7 @@ class ClaudeLog:
         # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
         self.in_subagents, self.log_id = "subagents" in Path(path).parts, Path(path).stem
         self.meta, self.updated = None, None
-        self.stamps, self.segments, self.cwds, self.messages, self.costs = set(), [], [], [], []
+        self.stamps, self.segments, self.cwds, self.messages, self.costs = set(), [], [], {}, []
 
     def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
@@ -370,7 +378,10 @@ class ClaudeLog:
             raw = message["usage"]
             cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
             details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
-            self.messages.append((stamp, counts({**details, **cache, **raw}, CLAUDE_USAGE)))
+            # Claude Code writes one row per content block of a response, each with the response's usage (the last one final):
+            # one count per message id
+            key = message.get("id") if isinstance(message.get("id"), str) and message["id"] else object()
+            self.messages[key] = (stamp, counts({**details, **cache, **raw}, CLAUDE_USAGE))
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         meta = self.meta
@@ -378,8 +389,9 @@ class ClaudeLog:
             return None
         now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
-        usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": False}
-        sums = [sum(column) for column in zip(*(value for stamp, value in self.messages if stamp >= cutoff))] or [0] * 6
+        window = [value for stamp, value in self.messages.values() if stamp >= cutoff]
+        usage = {**empty_usage(), "usage_complete": None not in window, "input_includes_cache": False}
+        sums = [sum(column) for column in zip(*(value for value in window if value is not None))] or [0] * 6
         (usage["input_tokens"], usage["cached_input_tokens"], usage["cache_write_5m_input_tokens"],
          usage["cache_write_1h_input_tokens"], usage["output_tokens"], usage["reasoning_output_tokens"]) = sums
         usage["cache_write_input_tokens"] = usage["cache_write_5m_input_tokens"] + usage["cache_write_1h_input_tokens"]

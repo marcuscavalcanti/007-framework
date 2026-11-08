@@ -346,6 +346,22 @@ class LocalActivityTests(unittest.TestCase):
         self.assertEqual((now["status"], now["usage"]["total_tokens"]), ("active", 132))
         self.assertEqual((later["status"], later["usage"]["total_tokens"]), ("idle", 12))
 
+    def test_claude_counts_each_message_once_and_an_invalid_counter_is_unknown_not_zero(self):
+        # audit F06: Claude Code writes one row per content block of a response, each with its usage (52% of local rows repeat an
+        # earlier message id; the last row carries the final output count)
+        activity = self.module()
+        row = {"type": "assistant", "sessionId": "c", "timestamp": "2026-08-30T14:00:00Z"}
+        usage = lambda output: {"model": "claude-opus-5", "id": "m1", "usage": {"input_tokens": 100, "output_tokens": output}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "c.jsonl")
+            write_jsonl(path, [{**row, "cwd": tmp, "message": usage(5)}, {**row, "cwd": tmp, "message": usage(20)}])
+            once = activity.parse_claude_session(path, NOW)
+            write_jsonl(path, [{**row, "cwd": tmp, "message": {**usage(20), "usage": {"input_tokens": "invalid", "output_tokens": -10}}}])
+            invalid = activity.parse_claude_session(path, NOW)
+        self.assertEqual((once["usage"]["total_tokens"], once["usage"]["usage_complete"]), (120, True))
+        self.assertFalse(invalid["usage"]["usage_complete"])
+        self.assertIsNone(activity.pricing_request(invalid))
+
     def test_claude_usage_excludes_messages_before_window(self):
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:

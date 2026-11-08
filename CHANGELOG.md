@@ -26,6 +26,8 @@ schemas, and the dashboard snapshot.
   row's directory.
 - The activity panel no longer freezes a session's status and its 24 h window while the log is unchanged: both are recomputed at
   every read from the metadata kept per log.
+- The passive Claude reader counts each response once (Claude Code repeats a response's usage on one row per content block: 52%
+  of the maintainer's assistant rows), and a present but invalid token counter makes usage incomplete instead of zero.
 
 ### Added
 
