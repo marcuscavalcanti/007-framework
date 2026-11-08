@@ -113,12 +113,15 @@ def pytest(root, cwd, config, env, scratch):
 
 def go(root, cwd, config, env, scratch):
     result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
-    final, failed, red, unexplained, seen, completed = {}, set(), set(), set(), set(), set()
+    final, failed, red, unexplained, seen, completed, active = {}, set(), set(), set(), set(), set(), set()
     for line in result.stdout.decode(errors="replace").splitlines():
         try:
             e = json.loads(line)
         except ValueError:
             continue
+        if e.get("Action") == "run" and e.get("Test"):
+            seen.add(e["Package"])
+            active.add((e["Package"], e["Test"]))
         if e.get("Action") == "output" and not e.get("Test"):
             text = e.get("Output", "").strip()
             if text not in ("", "FAIL", "PASS") and not text.startswith(("FAIL\t", "ok\t")):
@@ -127,6 +130,7 @@ def go(root, cwd, config, env, scratch):
             continue
         if e.get("Test"):
             seen.add(e["Package"])
+            active.discard((e["Package"], e["Test"]))
             _worst(final, f"{e['Package']} :: 0 :: {e['Test']}", e["Action"])
             if e["Action"] == "fail":
                 red.add(e["Package"])
@@ -135,8 +139,8 @@ def go(root, cwd, config, env, scratch):
             if e["Action"] == "fail":
                 failed.add(e["Package"])
     # A package that failed while none of its tests did (TestMain's exit, a panic or fatal error outside a test, the timeout)
-    # leaves its passes unproven; unexplained package output cannot be attributed to a known-red test.
-    broken = (seen - completed) | (failed - red) | (failed & unexplained)
+    # leaves its passes unproven; a test that never finished cannot be explained by another test already red at base.
+    broken = (seen - completed) | (failed - red) | (failed & unexplained) | {package for package, _ in active}
     return _process_status(_charge(final, (f"{package} :: " for package in broken)), result,
                            explained=bool(failed))
 

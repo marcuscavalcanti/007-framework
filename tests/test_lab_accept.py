@@ -61,8 +61,8 @@ class Unittest(unittest.TestCase):
 
 
 class Go(unittest.TestCase):
-    def grade(self, events, hidden, baseline):
-        proc = subprocess.CompletedProcess(["go"], 1, stdout="".join(json.dumps(e) + "\n" for e in events).encode(), stderr=b"")
+    def grade(self, events, hidden, baseline, returncode=1):
+        proc = subprocess.CompletedProcess(["go"], returncode, stdout="".join(json.dumps(e) + "\n" for e in events).encode(), stderr=b"")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name, value in (("lab.json", {"adapter": "go", "tests": "./..."}), ("hidden.json", hidden), ("baseline.json", baseline)):
@@ -103,6 +103,62 @@ class Go(unittest.TestCase):
         events.insert(-1, {"Action": "output", "Package": "ex", "Output": "ordinary diagnostic\n"})
         self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], []),
                          (1, {"ex :: 0 :: TestNew": "error", "__module__": "pass"}))
+
+    def test_unfinished_go_tests_invalidate_only_their_package_despite_known_red(self):
+        events = [{"Action": "pass", "Package": "ex", "Test": "TestNew"},
+                  {"Action": "fail", "Package": "ex", "Test": "TestRed"},
+                  {"Action": "run", "Package": "ex", "Test": "TestHanging"},
+                  {"Action": "pause", "Package": "ex", "Test": "TestHanging"},
+                  {"Action": "cont", "Package": "ex", "Test": "TestHanging"},
+                  {"Action": "output", "Package": "ex", "Test": "TestHanging", "Output": "panic: test timed out\n"},
+                  {"Action": "fail", "Package": "ex"},
+                  {"Action": "pass", "Package": "ex/sub", "Test": "TestOther"},
+                  {"Action": "pass", "Package": "ex/sub"}]
+        self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew", "ex/sub :: 0 :: TestOther"], []),
+                         (1, {"ex :: 0 :: TestNew": "error", "ex/sub :: 0 :: TestOther": "pass", "__module__": "pass"}))
+
+    def test_completed_go_lifecycles_preserve_partial_grades(self):
+        for terminal in ("pass", "fail", "skip"):
+            with self.subTest(terminal=terminal):
+                events = [{"Action": "run", "Package": "ex", "Test": "TestNew"},
+                          {"Action": "pass", "Package": "ex", "Test": "TestNew"},
+                          {"Action": "run", "Package": "ex", "Test": "TestRed"},
+                          {"Action": "fail", "Package": "ex", "Test": "TestRed"},
+                          {"Action": "run", "Package": "ex", "Test": "TestOther"},
+                          {"Action": terminal, "Package": "ex", "Test": "TestOther"},
+                          {"Action": "fail", "Package": "ex"}]
+                self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], []),
+                                 (0, {"ex :: 0 :: TestNew": "pass", "__module__": "pass"}))
+
+    def test_go_success_does_not_prove_an_unfinished_test_completed(self):
+        events = [{"Action": "pass", "Package": "ex", "Test": "TestNew"},
+                  {"Action": "run", "Package": "ex", "Test": "TestHanging"},
+                  {"Action": "pass", "Package": "ex"}]
+        self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], [], returncode=0),
+                         (1, {"ex :: 0 :: TestNew": "error", "__module__": "pass"}))
+
+    def test_a_second_go_run_does_not_reuse_the_first_completion(self):
+        events = [{"Action": "run", "Package": "ex", "Test": "TestNew"},
+                  {"Action": "pass", "Package": "ex", "Test": "TestNew"},
+                  {"Action": "fail", "Package": "ex", "Test": "TestRed"},
+                  {"Action": "run", "Package": "ex", "Test": "TestNew"},
+                  {"Action": "fail", "Package": "ex"}]
+        self.assertEqual(self.grade(events, ["ex :: 0 :: TestNew"], []),
+                         (1, {"ex :: 0 :: TestNew": "error", "__module__": "pass"}))
+
+    @unittest.skipUnless(shutil.which("go"), "go is not installed")
+    def test_real_go_known_red_and_hanging_test_cannot_accept_hidden_pass(self):
+        cache = subprocess.run(["go", "env", "GOCACHE"], capture_output=True, text=True).stdout.strip()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"; root.mkdir()
+            (root / "go.mod").write_text("module ex\n\ngo 1.20\n")
+            (root / "ex_test.go").write_text('package ex\nimport ("testing"; "time")\n'
+                'func TestNew(t *testing.T) {}\nfunc TestRed(t *testing.T) { t.Fatal("known red") }\n'
+                'func TestHanging(t *testing.T) { time.Sleep(time.Hour) }\n')
+            status, report = accept(root, {"adapter": "go", "tests": "./...", "env": {
+                "GOCACHE": cache, "GOFLAGS": "-count=1 -timeout=2s", "GOPROXY": "off", "GOTOOLCHAIN": "local"}},
+                ["ex :: 0 :: TestNew"], [])
+            self.assertEqual((status, report["ex :: 0 :: TestNew"]), (1, "error"))
 
     @unittest.skipUnless(shutil.which("go"), "go is not installed")
     def test_real_go_test_main_exit_after_passing_tests_is_rejected(self):

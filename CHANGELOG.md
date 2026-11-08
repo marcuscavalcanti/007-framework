@@ -46,6 +46,8 @@ flag or schema field is renamed or removed. See [the release record](evidence/v1
   unexpected process exits, failed preparation, and Node file/hook failures cannot leave affected tests green. The fixed unittest
   child normally exits zero even for red tests, so any nonzero exit invalidates its passes. Tasks mined earlier keep their
   hash-bound copy of `lab_accept.py`.
+- Go acceptance also tracks each test's start and completion: a known-red test cannot explain away an unfinished test's
+  timeout. Passes in that package become `error`; complete lifecycles and other packages keep their existing grades.
 - A replay cell keeps the change of an agent that staged or committed it (audit 2026-11-08, F02). The retained candidate patch
   diffed the index against `HEAD`, so a commit left it without the change (and with a spurious deletion of the prompt file when
   the agent committed everything), and the change counts read the index, so `git add` alone zeroed them. Both now diff against the
