@@ -15,6 +15,17 @@ schemas, and the dashboard snapshot.
   receipts, a client estimate and not an invoice: an attempt without a cost is counted as unpriced (the total becomes a lower
   bound), never as zero, and a missing or unreadable directory is reported unavailable instead of failing the read.
 
+### Fixed
+
+- Dashboard: a `007 lab report` verdict no longer reads as evidence for whichever repository is selected (external audit F09).
+  The report names no repository, so `observatory.lab_report` now takes `{"path", "project_id", "cli", "model"}`, the keys of a
+  calibration, and the thesis panel applies the verdict only to that calibration. A bare path still loads but binds nothing, so
+  its verdict is applied nowhere.
+- Dashboard: a failed background rebuild no longer leaves the previous evidence looking current while the response clock moves
+  (external audit F10). The preserved projects and aggregate are marked stale (gates WAIT, "STALE DATA"), the snapshot carries
+  `rebuild_error`, and the top bar shows when the evidence was read (`evidence_read_at`) apart from the response time; Data
+  quality names the failure.
+
 ## [1.6.1] - 2026-11-08
 
 Patch release: fixes and documentation; no new command or schema.
