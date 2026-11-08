@@ -352,7 +352,7 @@ class DashboardSeams(unittest.TestCase):
             (root / "config.json").write_text(json.dumps({"observatory": {"lab_report": str(root / "report.json")}}))
             self.assertIsNone(dashboard.load_lab_report(root / "config.json"))
             (root / "report.json").write_text(json.dumps({"verdict": {"durability": "NOT-PROVEN"}}))
-            self.assertEqual(dashboard.load_lab_report(root / "config.json"), {"durability": "NOT-PROVEN"})
+            self.assertEqual(dashboard.load_lab_report(root / "config.json"), {"durability": "NOT-PROVEN", "bound_to": None})  # a bare path binds nothing
             (root / "config.json").write_text("{}")
             self.assertIsNone(dashboard.load_lab_report(root / "config.json"))
 

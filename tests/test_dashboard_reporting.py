@@ -1,12 +1,17 @@
 """Reporting regressions: statements must not exceed observed evidence."""
 
 import importlib
+import io
+import json
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from datetime import datetime, timezone
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -168,6 +173,48 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(aggregate["active_tasks"], 1)
         self.assertEqual(aggregate["cost_coverage"], 1.0)
         self.assertEqual(aggregate["cost_accounting_status"], "provisional")
+
+    def test_lab_report_carries_the_repository_cli_and_model_it_is_bound_to(self):
+        # audit F09: a bare report path has no repository identity, so its verdict must not read as evidence for any repository
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report, config = root / "report.json", root / "config.json"
+            report.write_text(json.dumps({"schema": "007-lab/report/v6", "verdict": {"same_change_reachable": "PROVEN", "durability": "PROVEN"}}))
+            binding = {"project_id": "repository-a", "cli": "codex", "model": "m"}
+            for value, bound in ((str(report), None), ({"path": str(report), **binding}, binding),
+                                 ({"path": str(report), "project_id": "repository-a"}, None)):
+                with self.subTest(value=value):
+                    config.write_text(json.dumps({"observatory": {"lab_report": value}}))
+                    loaded = dashboard.load_lab_report(config)
+                    self.assertEqual(loaded["same_change_reachable"], "PROVEN")
+                    self.assertEqual(loaded["bound_to"], bound)
+
+    def test_failed_rebuild_marks_the_preserved_evidence_stale_with_its_own_read_time(self):
+        # audit F10: after a failed rebuild the old evidence must not read as current while the response clock advances
+        objective = {"status": "on-target", "headline": "OPERATIONAL TARGETS MET", "gates": [{"key": "economics", "status": "pass"}]}
+        good = {"generated_at": "2026-11-08T10:00:00Z", "aggregate": {"activity": {}, "objective": objective},
+                "projects": [{"project_id": "p", "activity": {}, "available": True, "stale": False, "objective": objective}]}
+        builds = [good, OSError("fixture acquisition failed"), {**good, "generated_at": "2026-11-08T10:05:00Z"}]
+        with mock.patch.object(dashboard.threading.Thread, "start"):
+            live = dashboard.LiveSnapshot(mock.Mock(side_effect=builds), lambda: [], lambda _: {"aggregate": {}, "projects": {}}, pause_s=0)
+        run = lambda steps: mock.patch.object(dashboard.time, "sleep", side_effect=[None] * (steps - 1) + [StopIteration])
+        with run(2), redirect_stderr(io.StringIO()), self.assertRaises(StopIteration):
+            live.loop()
+        read = live.read()
+        self.assertEqual(read["evidence_read_at"], "2026-11-08T10:00:00Z")
+        self.assertNotEqual(read["generated_at"], read["evidence_read_at"])
+        self.assertIn("fixture acquisition failed", read["rebuild_error"])
+        self.assertTrue(read["aggregate"]["stale"])
+        self.assertEqual((read["projects"][0]["stale"], read["projects"][0]["available"]), (True, False))
+        for scope in (read["aggregate"], read["projects"][0]):
+            self.assertEqual((scope["objective"]["status"], scope["objective"]["gates"][0]["status"]), ("not-measurable", "wait"))
+        with run(1), redirect_stderr(io.StringIO()), self.assertRaises(StopIteration):
+            live.loop()
+        read = live.read()
+        self.assertEqual((read["evidence_read_at"], read["rebuild_error"]), ("2026-11-08T10:05:00Z", None))
+        self.assertFalse(read["aggregate"].get("stale", False))
+        self.assertEqual((read["projects"][0]["stale"], read["projects"][0]["available"]), (False, True))
+        self.assertEqual(read["aggregate"]["objective"]["status"], "on-target")
 
     @unittest.skipUnless(shutil.which("node"), "Node required for dashboard renderer proof")
     def test_renderer_evidence_boundaries(self):
