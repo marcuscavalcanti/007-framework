@@ -79,6 +79,8 @@ class PackageContractTests(unittest.TestCase):
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
         self.assertRegex(skill, r"(?m)^  version: 1\.6\.0$")
         self.assertIn('VERSION = "1.6.0"', (ROOT / "scripts/dashboard.py").read_text())
+        shown = subprocess.run([sys.executable, str(ROOT / "bin/007"), "--version"], capture_output=True, text=True, check=True).stdout
+        self.assertEqual(shown.strip(), "007 1.6.0")
 
     def test_local_markdown_links_exist(self):
         markdown = list(ROOT.glob("*.md")) + list((ROOT / "docs").glob("*.md"))

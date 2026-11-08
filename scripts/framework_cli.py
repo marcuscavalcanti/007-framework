@@ -974,9 +974,17 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     return (4 if checks and any(check["exit"] != 0 for check in checks) else 0), destination
 
 
+def version():
+    """SKILL.md is the single version source; test_package pins the dashboard to it."""
+    match = re.search(r"(?m)^  version: (\S+)$", (Path(__file__).resolve().parents[1] / "SKILL.md").read_text())
+    return match.group(1) if match else "unknown"
+
+
 def parser():
     result = argparse.ArgumentParser(description="007 Framework local tooling")
+    result.add_argument("--version", action="version", version=f"007 {version()}")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("lab", help="replay your commits at two efforts (007 lab -h)", add_help=False)  # dispatched in main
     init = commands.add_parser("init", help="register a Git project for 007 telemetry")
     init.add_argument("--repo", default=".")
     init.add_argument("--registry", type=Path, default=default_registry_path())

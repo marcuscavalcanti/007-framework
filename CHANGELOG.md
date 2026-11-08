@@ -1,10 +1,15 @@
 # Changelog
 
-All notable changes are documented here.
+All notable changes are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
+follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html): the public interface is the `007` CLI, the receipt and report
+schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
-## [1.6.0] — 2026-11-08
+## [1.6.0] - 2026-11-08
+
+Minor release: new commands and schemas are additive, and v1 receipts stay valid. Behaviour changes are listed under
+"Migration and proof boundaries".
 
 ### Release review fixes
 
@@ -27,6 +32,7 @@ All notable changes are documented here.
 - Product thesis moved from "007 doctrine vs none" to the canonical minimum-intelligence thesis: the least reasoning effort that
   keeps accepted, durable changes, measured per repository. README states the bounded evidence (holdout: Codex `medium` matched
   `xhigh` with ~52% less time; Claude `medium` failed the zero margin; harder tasks at ceiling, Codex only, exploratory).
+- Add `007 --version` (from `SKILL.md`, the single version source) and list `lab` in `007 -h`.
 - Add `choice_observatory.py`: sessions attributed to commits by activity intervals (ambiguous commits are never guessed), line
   survival at 7/30 days, and an evidence level on every judgment; `touch_rate.survival` extracted for reuse.
 - Add `effort_trial.py`/`effort_trial_analysis.py` for an opt-in randomized field trial of default effort (off by default;
@@ -83,7 +89,7 @@ All notable changes are documented here.
   the same 41 commits would prove equal arms about three times in four if commits do not differ in effect.
   README and docs restate what one repository can show.
 
-### Evidence and replay candidate
+### Evidence and replay
 
 - Treat persisted acceptance/authority labels as declarations, not authenticated
   controller authorship. Original receipts and declared outcomes are preserved;
@@ -139,8 +145,7 @@ All notable changes are documented here.
 
 ### Migration and proof boundaries
 
-- Receipt v1 files are not rewritten. Keep the prior installation for rollback;
-  this candidate has not been installed, integrated or released.
+- Receipt v1 files are not rewritten. Keep the prior installation for rollback.
 - Amount-only v1 receipts remain valid and descriptive but no longer qualify
   measured route ranking or readiness. Supply explicit reconciled cost portions
   prospectively; this is declaration coherence, not authenticated billing or ROI.
@@ -152,10 +157,11 @@ All notable changes are documented here.
   Fresh LLM generations and newly captured local fixtures may differ.
 - Costs in synthetic tests are literal fixture data, not charges or savings.
   No new real OLD×NEW benefit, reliable-result cost or net financial ROI is claimed.
-- Final native canaries, prospective cases, financial bounds, independent review,
-  installation/rollback, public content audit and release CI remain open.
+- Still open: final native canaries, prospective cases, financial bounds and
+  installation/rollback. Release CI passed; the independent review failed identity
+  validation ([release record](evidence/v1.6.0/release-evidence.md)).
 
-## [1.5.2] — local candidate (2026-10-06)
+## [1.5.2] - 2026-10-06
 
 - remove the inherited body minimum width that caused whole-page overflow at
   320px with a classic scrollbar; sampled wider layouts remain unchanged;
@@ -170,7 +176,7 @@ All notable changes are documented here.
   is not publication, new ROI evidence or D7/D30 qualification. See
   [proof and remaining gates](evidence/v1.5.2/release-evidence.md).
 
-## [1.5.1] — source changes (2026-10-06)
+## [1.5.1] - 2026-10-06
 
 - prioritize accepted changes, measured repair rounds, terminal cost and open
   tasks in a Headroom-inspired dashboard; no assets or implementation copied;
@@ -195,7 +201,7 @@ All notable changes are documented here.
   verification remain distinct from source qualification. See
   [qualification](evidence/v1.5.1/release-evidence.md).
 
-## [1.5.0]
+## [1.5.0] - 2026-10-06
 
 - include stable version metadata, documentation and a separate public manifest;
 - preserve the RC runtime, dependencies and historical causal artifacts byte-for-byte;
@@ -208,7 +214,7 @@ All notable changes are documented here.
 - publication requires explicit identity review, final-byte gates, a clean
   committed candidate, approval, authorization and tag/artifact read-back.
 
-## [1.5.0-rc.2] - Unreleased candidate
+## [1.5.0-rc.2] - candidate, never tagged
 
 ### Added
 
@@ -344,3 +350,12 @@ All notable changes are documented here.
 - rejected external-provider credential doctrine;
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
+
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.2...v1.6.0
+[1.5.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.1.0...v1.4.0
+[1.1.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.0.0
