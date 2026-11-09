@@ -18,11 +18,30 @@ class DashboardHostTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:
             env = {"PATH": os.environ["PATH"], "HOME": temporary, "LANG": "C", "PYTHONUNBUFFERED": "1"}
-            process = subprocess.Popen([sys.executable, "-B", "-I", str(root / "bin/007"), "dashboard", "--port", "0",
+            # Separate cold imports and bind from the stdout buffering deadline.
+            startup = "\n".join((
+                "import runpy, sys",
+                "from pathlib import Path",
+                "sys.path.insert(0, str(Path(sys.argv[1]).parent.parent / 'scripts'))",
+                "import dashboard",
+                "create_server = dashboard.create_server",
+                "def ready_server(*args, **kwargs):",
+                "    server = create_server(*args, **kwargs)",
+                "    print('server-ready', file=sys.stderr, flush=True)",
+                "    return server",
+                "dashboard.create_server = ready_server",
+                "sys.argv = sys.argv[1:]",
+                "runpy.run_path(sys.argv[0], run_name='__main__')",
+            ))
+            process = subprocess.Popen([sys.executable, "-B", "-I", "-c", startup, str(root / "bin/007"), "dashboard", "--port", "0",
                                         "--registry", str(Path(temporary) / "registry.json"), "--no-open"],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
             try:
                 with selectors.DefaultSelector() as selector:
+                    selector.register(process.stderr, selectors.EVENT_READ)
+                    self.assertTrue(selector.select(30), "dashboard server did not initialize")
+                    self.assertEqual(process.stderr.readline(), "server-ready\n")
+                    selector.unregister(process.stderr)
                     selector.register(process.stdout, selectors.EVENT_READ)
                     self.assertTrue(selector.select(5), "dashboard address remained buffered")
                     self.assertRegex(process.stdout.readline(), r"^007 dashboard: http://127\.0\.0\.1:[0-9]+")
