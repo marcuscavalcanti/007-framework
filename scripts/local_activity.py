@@ -265,6 +265,12 @@ def codex_counts(raw):
     return counts(raw, USAGE_KEYS)
 
 
+def codex_usage_complete(raw):
+    return (codex_counts(raw) is not None
+            and all(key in raw for key in ("input_tokens", "output_tokens", "total_tokens"))
+            and raw["total_tokens"] == raw["input_tokens"] + raw["output_tokens"])
+
+
 def iso(stamp):
     return stamp.isoformat().replace("+00:00", "Z") if stamp else None
 
@@ -293,14 +299,20 @@ class CodexLog:
         elif kind == "event_msg" and payload.get("type") == "token_count":
             info = payload.get("info")
             if not isinstance(info, dict):
-                self.tokens.append((stamp, None, None))
+                self.tokens.append((stamp, None, None, False, False))
                 return
             total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else None
+            last = info.get("last_token_usage")
+            absent = last is None or (isinstance(last, dict) and not any(
+                key in last for key in ("input_tokens", "output_tokens", "total_tokens")))
+            total_ok, last_ok = codex_usage_complete(total), absent or codex_usage_complete(last)
             if total and total == self.previous:
+                if not total_ok or not last_ok:
+                    self.tokens.append((stamp, None, None, False, False))
                 return
             self.previous = total
-            last = info.get("last_token_usage")
-            self.tokens.append((stamp, codex_counts(total), codex_counts(last)))
+            self.tokens.append((stamp, codex_counts(total), codex_counts(last),
+                                total_ok, last_ok))
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         if not self.meta:
@@ -308,24 +320,33 @@ class CodexLog:
         now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
         usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True}
-        inside = [(total, last) for stamp, total, last in self.tokens if stamp and stamp >= cutoff]
-        increments = [last for total, last in inside if last is not None]
-        snapshots = [(stamp, total) for stamp, total, _ in self.tokens if total is not None]
+        inside = [(total, last, total_ok, last_ok) for stamp, total, last, total_ok, last_ok in self.tokens
+                  if stamp and stamp >= cutoff]
+        increments = [last for total, last, _, _ in inside if last is not None]
+        snapshots = [(stamp, total, total_ok) for stamp, total, _, total_ok, _ in self.tokens if total is not None]
         started = iso_datetime(self.meta["started_at"])
         if increments:
             usage.update({key: sum(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
-            usage["usage_complete"] = all(total is not None and last is not None for total, last in inside)
+            usage["usage_complete"] = all(total is not None and last is not None for total, last, _, _ in inside)
+            previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
+            for stamp, total, last, total_ok, _ in self.tokens:
+                if stamp and stamp >= cutoff and last is not None:
+                    usage["usage_complete"] &= previous is not None and total is not None and all(
+                        last[i] == total[i] - previous[i] for i, key in enumerate(USAGE_KEYS)
+                        if key in ("input_tokens", "output_tokens", "total_tokens"))
+                previous = total if total_ok else None
         elif snapshots:
             baseline = None
             if started and started < cutoff:
-                before = [value for stamp, value in snapshots if stamp and stamp <= cutoff]
-                after = [value for stamp, value in snapshots if stamp and stamp > cutoff]
-                baseline = before[-1] if before else after[0] if after else None
-                usage["usage_complete"] = bool(before) or not after
+                before = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp <= cutoff]
+                after = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp > cutoff]
+                selected = before[-1] if before else after[0] if after else None
+                baseline = selected[0] if selected else None
+                usage["usage_complete"] = (bool(before) or not after) and (selected is None or selected[1])
             usage.update({key: max(0, snapshots[-1][1][i] - (baseline[i] if baseline else 0)) for i, key in enumerate(USAGE_KEYS)})
         else:
             usage["usage_complete"] = False
-        usage["usage_complete"] &= all(total is not None for total, _ in inside)
+        usage["usage_complete"] &= all(total_ok and last_ok for _, _, total_ok, last_ok in inside)
         usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
         model, effort = labels(self.segments)
         return {

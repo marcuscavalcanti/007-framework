@@ -138,6 +138,13 @@ dispatch history incomplete. Controllers refuse uncertain history and concurrent
 dispatch into one output root. Claude aggregate cache-write tokens remain
 counted when tier details are missing, while tier-dependent prices stay unavailable.
 
+Replay and lab execution share artifact-namespace preflight. Recovery and the
+ledger share dispatch-history validation. Identified cells with receipt-like
+names remain distinct from receipts, while ambiguous legacy artifacts remain
+unavailable. Native usage needs coherent observations and cumulative accounting
+before it qualifies as complete.
+Recovery restores cost and failure limits before dispatching another cell.
+
 > **1.6.0** (published 2026-11-08): adds `007 lab` and restates the thesis as a decision tested
 > against a margin declared before spending. Public pre-registered evidence so far:
 > Codex on go-json not proven at 3 points, Claude on go-json not proven at 10

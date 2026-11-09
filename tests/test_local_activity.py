@@ -184,6 +184,56 @@ class LocalActivityTests(unittest.TestCase):
             self.assertEqual(result["usage"]["total_tokens"], 0)
             self.assertTrue(result["usage"]["usage_complete"])
 
+    def test_partial_primary_zero_deltas_and_opposing_incoherence_stay_incomplete(self):
+        activity = self.module()
+        for deltas in ([{"input_tokens": 0}], [{"output_tokens": 0}], [{"total_tokens": 0}],
+                       [{"input_tokens": 5, "output_tokens": 0, "total_tokens": 4},
+                        {"input_tokens": 5, "output_tokens": 0, "total_tokens": 6}]):
+            with self.subTest(deltas=deltas), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("partial-primary", tmp)[:4]
+                for index, delta in enumerate(deltas, 1):
+                    rows.append({"timestamp": f"2026-08-30T14:0{index}:00Z", "type": "event_msg",
+                                 "payload": {"type": "token_count", "info": {
+                                     "total_token_usage": {"input_tokens": 100 * index, "output_tokens": 20 * index,
+                                                           "total_tokens": 120 * index},
+                                     "last_token_usage": delta}}})
+                path = Path(tmp, "partial-primary.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertFalse(result["usage"]["usage_complete"])
+                self.assertIsNone(activity.pricing_request(result))
+
+    def test_complete_deltas_must_reconcile_with_available_cumulative_observations(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("reconcile", tmp)[:4]
+            for index in (1, 2):
+                rows.append({"timestamp": f"2026-08-30T14:0{index}:00Z", "type": "event_msg",
+                             "payload": {"type": "token_count", "info": {
+                                 "total_token_usage": {"input_tokens": 100 * index, "output_tokens": 20 * index,
+                                                       "total_tokens": 120 * index},
+                                 "last_token_usage": {"input_tokens": 5, "output_tokens": 0, "total_tokens": 5}}}})
+            path = Path(tmp, "reconcile.jsonl")
+            write_jsonl(path, rows)
+            result = activity.parse_codex_session(path, NOW)
+            self.assertEqual(result["usage"]["total_tokens"], 10)
+            self.assertFalse(result["usage"]["usage_complete"])
+            self.assertIsNone(activity.pricing_request(result))
+
+    def test_duplicate_cumulative_records_cannot_hide_an_invalid_delta(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("duplicate-invalid", tmp)
+            duplicate = json.loads(json.dumps(rows[-2]))
+            duplicate["timestamp"] = "2026-08-30T14:06:00Z"
+            duplicate["payload"]["info"]["last_token_usage"] = {"input_tokens": 0}
+            path = Path(tmp, "duplicate-invalid.jsonl")
+            write_jsonl(path, rows + [duplicate])
+            result = activity.parse_codex_session(path, NOW)
+            self.assertEqual(result["usage"]["total_tokens"], 1_100_000)
+            self.assertFalse(result["usage"]["usage_complete"])
+            self.assertIsNone(activity.pricing_request(result))
+
     def test_claude_aggregate_cache_writes_survive_optional_tiers_without_pricing_unknown_tiers(self):
         activity = self.module()
         cases = [({"cache_creation_input_tokens": 30}, 30, False),

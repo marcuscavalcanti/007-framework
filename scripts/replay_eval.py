@@ -521,8 +521,74 @@ def is_cell_id(value):
     return isinstance(value, str) and re.fullmatch(r".+-r[0-9]{2,}-.+", value) is not None
 
 
-def is_cell_result_file(name):
-    return name.endswith(".json") and not name.endswith(".runner.json") and is_cell_id(name.removesuffix(".json"))
+CELL_ARTIFACT_SUFFIXES = (".json", ".runner.json", ".observation.json", ".prompt.txt", ".candidate.patch")
+
+
+def validate_cell_artifacts(tasks, arms, replicates):
+    paths = set()
+    for task in tasks:
+        for replicate in range(1, replicates + 1):
+            for arm in arms:
+                identifier = cell_id(task, arm, replicate)
+                for suffix in CELL_ARTIFACT_SUFFIXES:
+                    path = identifier + suffix
+                    if path in paths:
+                        raise ValueError("task and arm pairs must produce distinct cell identities and artifact paths")
+                    paths.add(path)
+
+
+def read_cell_artifacts(directory):
+    """Read identified cell/receipt shapes before applying legacy filename conventions. Never rewrite ambiguous evidence."""
+    results, receipts = {}, {}
+    for path in sorted(directory.iterdir()):
+        if not path.name.endswith(".json") or not is_cell_id(path.stem):
+            continue
+        raw = path.read_bytes()
+        row = json.loads(raw) if raw.strip() else {}
+        if not isinstance(row, dict):
+            raise ValueError("invalid replay artifact")
+        if row.get("schema") == "007-framework/replay-cell/v1" or "runner_receipt_sha256" in row:
+            results[path.stem] = row
+        elif row.get("observation_kind") == "replay-candidate":
+            continue
+        elif path.name.endswith(".runner.json"):
+            if row.get("schema") is None and "valid" in row:
+                paired_result = directory / (path.name.removesuffix(".runner.json") + ".json")
+                if not paired_result.is_file() or (directory / (path.stem + ".runner.json")).exists():
+                    raise ValueError("ambiguous legacy replay artifact")
+            receipts[path.name.removesuffix(".runner.json")] = row
+        else:
+            results[path.stem] = row
+    return results, receipts
+
+
+def load_dispatch_history(directory):
+    """Share timestamp and per-stage uniqueness checks between recovery and observational accounting."""
+    try:
+        lines = (directory / "dispatch.jsonl").read_text().splitlines()
+    except FileNotFoundError:
+        lines = []
+    rows, invalid, ambiguous = [], 0, 0
+    seen = {"dispatched_at": {}, "finished_at": {}}
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            invalid += 1
+            continue
+        times = {key: harness_report._instant(row[key]) for key in seen if key in row} if isinstance(row, dict) else {}
+        if not isinstance(row, dict) or not is_cell_id(row.get("cell")) or not times or any(t is None for t in times.values()):
+            invalid += 1
+            continue
+        for key, stamp in times.items():
+            ambiguous += row["cell"] in seen[key]
+            seen[key][row["cell"]] = stamp
+        rows.append(row)
+    for cell in seen["dispatched_at"].keys() & seen["finished_at"].keys():
+        invalid += seen["finished_at"][cell] < seen["dispatched_at"][cell]
+    return rows, invalid, ambiguous
 
 
 def cell_id(task, arm, replicate):
@@ -565,7 +631,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
     retain_text = _diagnostic_retention(config, output_dir)
     acceptance_sandbox, acceptance_env = acceptance_policy(config.get("acceptance_sandbox"), config.get("acceptance_env"))
     attempt_id = cell_id(task, arm, replicate)
-    for suffix in (".json", ".runner.json", ".observation.json", ".prompt.txt"):
+    for suffix in CELL_ARTIFACT_SUFFIXES:
         existing = output_dir / (attempt_id + suffix)
         if existing.exists() or existing.is_symlink():
             raise RuntimeError(f"replay output already exists: {existing}")
@@ -1185,10 +1251,11 @@ def main():
     unknown = set(arms) - set(config["arms"])
     if unknown:
         parser.error(f"unknown arms: {sorted(unknown)}")
+    replicates = experiment_replicates(config, args.replicates)
+    validate_cell_artifacts(tasks, arms, replicates)
+    schedule = experiment_schedule(config, arms, replicates)
     output_dir = Path(args.out).expanduser().resolve()
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
-    replicates = experiment_replicates(config, args.replicates)
-    schedule = experiment_schedule(config, arms, replicates)
     rows = []
     for task in tasks:
         for replicate in range(1, replicates + 1):

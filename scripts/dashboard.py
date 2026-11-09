@@ -1263,39 +1263,17 @@ def lab_experiment(name, directories):
     Numeric receipt cost and provenance establish accounting; missing receipts stay unpriced even after a failed execution.
     Costs are the receipts' client estimates, not an invoice."""
     attempts, stamps, dispatch_errors = {}, [], 0
-    dispatched = set()
     for directory in directories:
-        for file in os.listdir(directory):  # raises on a missing or unreadable directory, unlike glob
-            if file.endswith(".runner.json"):
-                raw = (directory / file).read_bytes()
-                receipt = json.loads(raw) if raw.strip() else {}  # empty: reserved, never finished
-                attempts.setdefault((directory, file.removesuffix(".runner.json")), {})["receipt"] = receipt if isinstance(receipt, dict) else {}
-            elif replay_eval.is_cell_result_file(file):
-                result = json.loads((directory / file).read_bytes())
-                item = attempts.setdefault((directory, file.removesuffix(".json")), {})
-                item["valid"] = isinstance(result, dict) and result.get("valid") is True
-        try:
-            lines = (directory / "dispatch.jsonl").read_text().splitlines()
-        except FileNotFoundError:
-            lines = []
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except ValueError:
-                dispatch_errors += 1
-                continue
-            times = [harness_report._instant(row.get(key)) for key in ("dispatched_at", "finished_at")] if isinstance(row, dict) else []
-            cell = row.get("cell") if isinstance(row, dict) else None
-            if not replay_eval.is_cell_id(cell) or not any(times):
-                dispatch_errors += 1
-                continue
-            if row.get("dispatched_at"):
-                dispatch_errors += (directory, cell) in dispatched
-                dispatched.add((directory, cell))
-            attempts.setdefault((directory, cell), {})
-            stamps.extend(times)
+        results, receipts = replay_eval.read_cell_artifacts(directory)
+        for identifier, receipt in receipts.items():
+            attempts.setdefault((directory, identifier), {})["receipt"] = receipt
+        for identifier, result in results.items():
+            attempts.setdefault((directory, identifier), {})["valid"] = result.get("valid") is True
+        history, invalid, ambiguous = replay_eval.load_dispatch_history(directory)
+        dispatch_errors += invalid + ambiguous
+        for row in history:
+            attempts.setdefault((directory, row["cell"]), {})
+            stamps.extend(harness_report._instant(row.get(key)) for key in ("dispatched_at", "finished_at"))
     stamps = sorted(stamp for stamp in stamps if stamp)
     rows = attempts.values()
     for item in rows:

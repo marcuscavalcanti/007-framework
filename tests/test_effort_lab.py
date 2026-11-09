@@ -155,6 +155,47 @@ class LabRunAccountingTests(unittest.TestCase):
         self.assertEqual(self.calls, 0)
         self.assertFalse((output / "dispatch.jsonl").exists())
 
+    def test_distinct_cells_cannot_share_a_result_and_receipt_path(self):
+        self.config.write_text(json.dumps({"seed": 1, "tasks": [{"id": "case"}],
+                                           "arms": {"high": {}, "high.runner": {}}}))
+        with self.assertRaisesRegex(ValueError, "artifact"):
+            self.run_lab(self.root / "artifact-collision")
+        self.assertEqual(self.calls, 0)
+
+    def test_standalone_replay_rejects_all_artifact_collisions_before_execution(self):
+        cases = [({"high": {}, "x-r01-high": {}}, [{"id": "case"}, {"id": "case-r01-x"}]),
+                 ({"high": {}, "high.runner": {}}, [{"id": "case"}]),
+                 ({"high": {}, "high.observation": {}}, [{"id": "case"}])]
+        for index, (arms, tasks) in enumerate(cases):
+            with self.subTest(arms=arms):
+                self.config.write_text(json.dumps({"seed": 1, "arms": arms, "tasks": tasks}))
+                argv = ["replay_eval.py", "--set", str(self.config), "run", "--arms", ",".join(arms),
+                        "--replicates", "1", "--out", str(self.root / f"standalone-{index}")]
+                with mock.patch.object(sys, "argv", argv), mock.patch.object(sys, "stdout"), \
+                        mock.patch.object(lab.replay_eval, "execute_cell", return_value={"valid": True}) as execute, \
+                        mock.patch.object(lab.replay_eval, "write_summary"):
+                    with self.assertRaisesRegex(ValueError, "cell identities|artifact"):
+                        lab.replay_eval.main()
+                    execute.assert_not_called()
+
+    def test_invalid_timestamps_and_repeated_terminal_history_block_recovery(self):
+        for name, history in (
+                ("invalid-time", [{"cell": "case-r01-high", "dispatched_at": "not-a-time"}]),
+                ("invalid-extra-time", [{"cell": "case-r01-high", "dispatched_at": None,
+                                          "finished_at": "2026-11-09T10:00:00Z"}]),
+                ("repeated-finish", [{"cell": "case-r01-high", "finished_at": "2026-11-09T10:00:00Z", "cost_usd": 0},
+                                     {"cell": "case-r01-high", "finished_at": "2026-11-09T10:01:00Z", "cost_usd": 0.5}])):
+            with self.subTest(name=name):
+                output = self.root / name
+                output.mkdir()
+                (output / "case-r01-high.json").write_text(json.dumps({"valid": True, "cost_usd": 0}))
+                (output / "dispatch.jsonl").write_text("".join(json.dumps(row) + "\n" for row in history))
+                self.config.write_text(json.dumps({"seed": 1, "tasks": [{"id": "case"}, {"id": "new-case"}],
+                                                   "arms": {"high": {}}}))
+                result = self.run_lab(output)
+                self.assertIn(result["stop"], {"unreadable-dispatch-history", "ambiguous-dispatch-history"})
+                self.assertEqual(self.calls, 0)
+
 
 class LabEndToEnd(unittest.TestCase):
     def setUp(self):
@@ -356,6 +397,47 @@ class Budget(unittest.TestCase):
             root = Path(d)
             state = lab.run(self.config(root), root / "out", replicates=1, jobs=1, max_calls=9, max_usd=9, stop_usd=1, execute=self.fake(cost="unmeasured")[0])
             self.assertEqual(state["stop"], "cost-unavailable")
+
+    def test_recovery_preserves_the_valid_unpriced_stop_before_new_dispatch(self):
+        for valid, cost, expected in ((True, "unmeasured", "cost-unavailable"),
+                                      (True, 0, "call-budget"), (False, "unmeasured", "call-budget")):
+            with self.subTest(valid=valid, cost=cost), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                config = self.config(root)
+                execute, _ = self.fake(valid=valid, cost=cost)
+                output = root / "out"
+                lab.run(config, output, replicates=1, jobs=1, max_calls=1, max_usd=99,
+                        stop_usd=1, execute=execute, max_invalid=20)
+                (output / "STOP.json").unlink(missing_ok=True)  # result survives an interrupted controller
+                recovered = lab.run(config, output, replicates=1, jobs=1, max_calls=1, max_usd=99,
+                                    stop_usd=1, execute=execute, max_invalid=20)
+                self.assertEqual(recovered["stop"], expected)
+                self.assertEqual(recovered["calls"], 0 if valid and cost == "unmeasured" else 1)
+
+    def test_recovery_restores_per_cell_and_invalid_limits_before_dispatch(self):
+        for valid, cost, expected in ((True, 2, "cell-over-limit"), (False, 0, "invalid-budget")):
+            with self.subTest(valid=valid, cost=cost), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                config = self.config(root)
+                execute, _ = self.fake(valid=valid, cost=cost)
+                output = root / "out"
+                first = lab.run(config, output, replicates=1, jobs=1, max_calls=1, max_usd=99,
+                                stop_usd=1, execute=execute, max_invalid=1)
+                self.assertEqual(first["stop"], expected)
+                (output / "STOP.json").unlink()
+                recovered = lab.run(config, output, replicates=1, jobs=1, max_calls=1, max_usd=99,
+                                    stop_usd=1, execute=execute, max_invalid=1)
+                self.assertEqual(recovered["stop"], expected)
+                self.assertEqual(recovered["calls"], 0)
+
+    def test_invalid_numeric_costs_never_become_budget_credit_or_measured_zero(self):
+        for cost in (float("nan"), float("inf"), -1, False):
+            with self.subTest(cost_type=type(cost).__name__), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                result = lab.run(self.config(root), root / "out", replicates=1, jobs=1, max_calls=1,
+                                 max_usd=99, stop_usd=1, execute=self.fake(cost=cost)[0])
+                self.assertEqual(result["stop"], "cost-unavailable")
+                self.assertEqual(result["spent"], 0)
 
 
 class Gates(unittest.TestCase):

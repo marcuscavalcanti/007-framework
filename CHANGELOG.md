@@ -66,6 +66,13 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Recovery preserves unavailable-cost, per-cell and invalid-count stops before dispatch. Invalid numeric costs remain
+  unavailable. Controllers and the ledger share timestamp and
+  repeated-terminal validation. Replay and lab entry points preflight the full cell artifact namespace before execution.
+- Artifact readers distinguish identified replay cells from runner receipts, including arms ending in `.runner`.
+  Ambiguous legacy artifacts stay unavailable without rewriting historical bytes. Current log identities withdraw
+  obsolete parent aliases. Native usage completeness is checked per observation, before deduplication, and against
+  available cumulative counters.
 - The spend ledger joins dispatch-only attempts and marks malformed or duplicate dispatch history incomplete. The dashboard
   shows lower bounds for affected counts and costs. Lab controllers sharing an output directory serialize before dispatch
   and refuse uncertain or damaged history. Task/arm identity collisions fail before execution. Three-digit replicates

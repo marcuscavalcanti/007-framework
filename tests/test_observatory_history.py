@@ -351,6 +351,25 @@ class ObservatoryHistoryTests(unittest.TestCase):
                                  (False, 7, first["updated_at"]))
                 self.assertTrue(store.read_bytes().startswith(original))
 
+    def test_restored_self_identity_withdraws_an_obsolete_parent_alias(self):
+        repo = self.git_repo("restored-identity")
+        original = self.codex_row("child", log_id="child", subagent=False,
+                                  active_intervals=[[T0, T0 + 600]])
+        parent = self.codex_row("parent", log_id="parent", subagent=False,
+                                active_intervals=[[T0 + 4800, T0 + 5200]])
+        self.hist.record(self.store, [parent, original])
+        prefix = self.store.read_bytes()
+        self.hist.record(self.store, [{**original, "session_id": "parent", "subagent": True}])
+        self.assertEqual([r["session_id"] for r in self.hist.load(self.store)], ["parent"])
+        self.assertEqual(self.hist.record(self.store, [original]), 1)
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        by_id = {row["session_id"]: row for row in rows}
+        self.assertEqual(set(by_id), {"child", "parent"})
+        self.assertEqual(len(by_id["child"]["commits"]), 1)
+        self.assertEqual(by_id["parent"]["commits"], [])
+        self.assertTrue(self.store.read_bytes().startswith(prefix))
+
     def test_recording_current_logs_is_idempotent_and_torn_history_keeps_new_rows_readable(self):
         parent = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
         child = self.codex_row("root", log_id="child", subagent=True, active_intervals=[[T0 + 4800, T0 + 5200]])

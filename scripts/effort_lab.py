@@ -32,6 +32,7 @@ import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commit_replay  # noqa: E402
+import harness_report  # noqa: E402
 import replay_eval  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -533,18 +534,16 @@ def plan(config, replicates):
         block = [(t, rep, a) for t in config["tasks"] for a in config["arms"]]
         rng.shuffle(block)
         cells += block
-    identities = {replay_eval.cell_id(task, arm, replicate) for task, replicate, arm in cells}
-    if len(identities) != len(cells):
-        raise ValueError("task and arm pairs must produce distinct cell identities")
+    replay_eval.validate_cell_artifacts(config["tasks"], config["arms"], replicates)
     return cells
 
 
 def cost_of(out, cid, row):
-    if isinstance(row.get("cost_usd"), (int, float)):
+    if harness_report._valid_money(row.get("cost_usd")):
         return row["cost_usd"]
     receipt = out / f"{cid}.runner.json"
     value = json.loads(receipt.read_text()).get("cost_usd") if receipt.is_file() and receipt.stat().st_size else None
-    return value if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0 else None
+    return value if harness_report._valid_money(value) else None
 
 
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
@@ -567,22 +566,16 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     execute = execute or replay_eval.execute_cell
     ledger = out / "dispatch.jsonl"
     cells = plan(config, replicates)
-    done = {path.stem for path in out.glob("*.json") if replay_eval.is_cell_result_file(path.name)}
-    orphans = {p.name[:-len(".runner.json")] for p in out.glob("*.runner.json")} - done
+    results, receipts = replay_eval.read_cell_artifacts(out)
+    done = set(results)
+    orphans = set(receipts) - done
     try:
-        lines = ledger.read_text().splitlines() if ledger.exists() else []
-        dispatched = set()
-        for line in lines:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            if (not isinstance(row, dict) or not replay_eval.is_cell_id(row.get("cell"))
-                    or not any(isinstance(row.get(key), str) and row[key] for key in ("dispatched_at", "finished_at"))):
-                raise ValueError("invalid dispatch record")
-            if row.get("dispatched_at"):
-                if row["cell"] in dispatched:
-                    return {"stop": "ambiguous-dispatch-history", "calls": 0}
-                dispatched.add(row["cell"])
+        history, invalid_history, ambiguous_history = replay_eval.load_dispatch_history(out)
+        if invalid_history:
+            return {"stop": "unreadable-dispatch-history", "calls": 0}
+        if ambiguous_history:
+            return {"stop": "ambiguous-dispatch-history", "calls": 0}
+        for row in history:
             if row["cell"] not in done:
                 orphans.add(row["cell"])
     except (OSError, ValueError):
@@ -593,8 +586,15 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     for name in done:
         row = json.loads((out / f"{name}.json").read_text())
         cost = cost_of(out, name, row)
-        spent += stop_usd if cost is None else cost
+        if cost is None and row.get("valid") is True:
+            stop = "cost-unavailable"
+        else:
+            spent += stop_usd if cost is None else cost
+            if cost is not None and cost > stop_usd:
+                stop = stop or "cell-over-limit"
         invalid += row.get("valid") is not True
+    if invalid >= max_invalid:
+        stop = stop or "invalid-budget"
     cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
     todo = [c for c in cells if cell_name(c) not in done]
     calls = 0
@@ -646,11 +646,13 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
 
 def load_cells(out):
     rows = []
-    for path in sorted(out.glob("*.json")):
-        if not replay_eval.is_cell_result_file(path.name):
-            continue
-        row = json.loads(path.read_text())
-        row["cell"] = path.stem
+    try:
+        results, _ = replay_eval.read_cell_artifacts(out)
+    except FileNotFoundError:
+        return rows
+    for identifier, row in sorted(results.items()):
+        path = out / (identifier + ".json")
+        row["cell"] = identifier
         if not isinstance(row.get("acceptance_outcomes"), dict):  # unreadable report (a hung suite, the cap): no test seen passing; report() names it
             row["acceptance_outcomes"], row["outcomes_unreadable"] = {}, True
         receipt = out / f"{path.stem}.runner.json"

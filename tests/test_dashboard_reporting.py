@@ -1,6 +1,7 @@
 """Reporting regressions: statements must not exceed observed evidence."""
 
 import importlib
+import hashlib
 import io
 import json
 import shutil
@@ -296,6 +297,43 @@ class ReportingTests(unittest.TestCase):
             ledger = dashboard.lab_experiment("duplicate", [root])
             self.assertEqual(ledger["cost_usd"], 0.5)
             self.assertEqual(ledger["dispatch_errors"], 1)
+
+    def test_runner_suffix_results_keep_one_attempt_and_one_cost(self):
+        import effort_lab
+        for arm in ("high.runner", "high.observation", "high.runner.runner"):
+            with self.subTest(arm=arm), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cid = "case-r01-" + arm
+                receipt = json.dumps({"schema": "007-framework/runner-receipt/v1", "valid": True,
+                                      "cost_usd": 0.5, "cost_source": "custom:synthetic"}).encode()
+                (root / (cid + ".runner.json")).write_bytes(receipt)
+                (root / (cid + ".json")).write_text(json.dumps({"schema": "007-framework/replay-cell/v1",
+                    "task": "case", "arm": arm, "replicate": 1, "valid": True, "cost_usd": 0.5,
+                    "cost_source": "custom:synthetic", "acceptance_outcomes": {},
+                    "runner_receipt_sha256": hashlib.sha256(receipt).hexdigest()}))
+                ledger = dashboard.lab_experiment("suffix", [root])
+                self.assertEqual((ledger["attempts"], ledger["valid"], ledger["orphans"], ledger["cost_usd"]),
+                                 (1, 1, 0, 0.5))
+                rows = effort_lab.load_cells(root)
+                self.assertEqual([row["cell"] for row in rows], [cid])
+
+    def test_ambiguous_legacy_suffix_and_repeated_terminals_do_not_certify_accounting(self):
+        for name, rows, ambiguous in (
+                ("ambiguous", [], True),
+                ("single-finish", [{"cell": "case-r01-high", "finished_at": "2026-11-09T10:00:00Z"}], False),
+                ("repeated-finish", [{"cell": "case-r01-high", "finished_at": "2026-11-09T10:00:00Z", "cost_usd": 0.5},
+                                     {"cell": "case-r01-high", "finished_at": "2026-11-09T10:01:00Z", "cost_usd": 0.7}], True)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                result = root / "case-r01-high.runner.json"
+                result.write_text(json.dumps({"cost_usd": 0.5, "cost_source": "custom:synthetic",
+                                              **({"valid": True} if name == "ambiguous" else {})}))
+                original = result.read_bytes()
+                (root / "dispatch.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+                config = root / "config.json"
+                config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": name, "results": str(root)}]}}))
+                self.assertEqual(dashboard.load_lab_ledger(config)["total_complete"], not ambiguous)
+                self.assertEqual(result.read_bytes(), original)
 
     def test_lab_report_carries_the_repository_cli_and_model_it_is_bound_to(self):
         # audit F09: a bare report path has no repository identity, so its verdict must not read as evidence for any repository

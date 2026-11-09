@@ -52,6 +52,17 @@ tests. Updated documentation and the source manifest are checked separately.
 The corrected candidate still needs exact distribution/remote checks and a
 newly authorized independent review before release.
 
+Candidate `bdd702b5cbab6fd2ecfed36b894143275738a80a` received FIX FIRST in
+its single authorized follow-up review. Its six original counterexamples were
+recognized as corrected. A new local pass addresses connected recovery-cost,
+lineage, artifact-namespace, standalone preflight, usage and dispatch-history
+failures. Focused RED-to-GREEN checks passed. A connected recovery audit also
+restores per-cell and invalid-count stops and rejects invalid numeric costs.
+The final local pass passed 851 integrated native Python tests without skips
+and 52 JavaScript tests. The final release-record paragraph and source manifest
+are checked separately. Distribution, remote and newly authorized independent
+review qualification of these changed bytes remain pending.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three
