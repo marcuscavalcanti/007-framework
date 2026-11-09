@@ -54,7 +54,7 @@ is the `007` CLI, the receipt and report schemas, and the dashboard snapshot.
    shasum -a 256 -c evidence/vX.Y.Z/manifest.sha256
    ```
 
-   The tag CI checks it with `sha256sum --check`. Regenerate it after any
+   The tag CI checks it with `shasum -a 256 --check` on Linux and macOS. Regenerate it after any
    change, including a review fix.
    Spaces in tracked filenames are preserved. Unsupported escape characters or
    symbolic links (including the destination and its parents) fail before
@@ -103,6 +103,11 @@ Until it exists, run them by hand.
 
 ## Rules
 
+- CI retains the required `test (3.11)`, `test (3.12)` and `test (3.13)` check
+  names on Linux and adds `test (3.13) macOS`. The package job exercises a
+  wheel through pipx on Python 3.11. Dependabot proposes weekly GitHub Actions
+  updates. Changes to required checks or account protection need a separate
+  maintainer decision.
 - A CI failure on `main` is investigated. Re-run only for a demonstrated flake,
   and record it in the release notes.
 - The independent review follows `AGENTS.md` reviewer identity levels.

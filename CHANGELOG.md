@@ -22,6 +22,8 @@ schemas, and the dashboard snapshot.
 
 ### Added
 
+- A macOS Python 3.13 CI job alongside the existing Linux check names, portable tag-manifest verification and weekly
+  Dependabot proposals restricted to GitHub Actions.
 - An installable `007-framework` wheel with a `007` console entry point, versioned from `SKILL.md`, carrying the existing
   runtime layout, dashboard assets and default causal evidence. A synthetic installed-CLI check covers project records and
   the HTTP dashboard. CI builds the wheel at the minimum supported Python version and runs that check.
