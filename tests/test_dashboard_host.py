@@ -14,6 +14,18 @@ import dashboard
 
 
 class DashboardHostTests(unittest.TestCase):
+    def test_server_binding_does_not_require_reverse_dns(self):
+        with mock.patch("socket.getfqdn", side_effect=AssertionError("reverse DNS must not gate startup")):
+            for host in ("127.0.0.1", "0.0.0.0", "localhost"):
+                with self.subTest(host=host):
+                    server = dashboard.create_server(host, 0, self.root / "registry.json", self.root)
+                    try:
+                        self.assertEqual(server.server_name, server.server_address[0])
+                        self.assertEqual(server.server_port, server.server_address[1])
+                        self.assertGreater(server.server_port, 0)
+                    finally:
+                        server.server_close()
+
     def test_dashboard_announces_its_port_when_python_ignores_environment(self):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:

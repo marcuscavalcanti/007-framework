@@ -61,6 +61,8 @@ schemas, and the dashboard snapshot.
 
 ### Fixed
 
+- Dashboard startup uses the bound address for its server metadata, avoiding reverse-DNS stalls before announcing its URL.
+
 - Project navigation wraps to its own row when the brand and controls cannot fit, avoiding page overflow on narrow screens.
 - The lab spend ledger keeps a missing receipt or an amount without cost provenance unpriced. Zero is inferred only for the
   runner's explicit pre-reservation refusal marker; a missing file by itself never completes the cost coverage.

@@ -17,6 +17,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from urllib.parse import urlsplit
 
 import framework_cli
@@ -1534,9 +1535,17 @@ def handler_class(registry, static_dir, touch_provider, activity_provider=None, 
     return Handler
 
 
+class DashboardHTTPServer(ThreadingHTTPServer):
+    """Bind without reverse DNS, which the dashboard handler does not use."""
+
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def create_server(host, port, registry, static_dir, activity_provider=None, *, curation_checkpoint=None, curation_vault=None, background=False):
     cache = TouchCache()
-    server = ThreadingHTTPServer(
+    server = DashboardHTTPServer(
         (host, port), handler_class(Path(registry), Path(static_dir), cache, activity_provider, curation_checkpoint, curation_vault, background)
     )
     server.daemon_threads = True
