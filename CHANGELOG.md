@@ -66,6 +66,7 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- CI runs on pull requests, `main` pushes and version tags, avoiding a second full run for each development-branch push.
 - Recovery preserves unavailable-cost, per-cell and invalid-count stops before dispatch. Invalid numeric costs remain
   unavailable. Controllers and the ledger share timestamp and
   repeated-terminal validation. Replay and lab entry points preflight the full cell artifact namespace before execution.

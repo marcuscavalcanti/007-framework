@@ -13,6 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_ci_pushes_target_main_and_release_tags_while_all_pull_requests_run(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        triggers = workflow.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertEqual(triggers, "  push:\n    branches: [main]\n    tags: [\"v*\"]\n  pull_request:\n")
+        self.assertIn("name: \"test (3.13) macOS\"", workflow)
+        self.assertIn("      - name: Verify release manifest", workflow)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="007-release-fixture-")
         self.addCleanup(temporary.cleanup)

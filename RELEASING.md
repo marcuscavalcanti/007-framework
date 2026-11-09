@@ -107,6 +107,9 @@ PyPI Trusted Publishing and announcement each keep their separate approval.
 
 ## Rules
 
+- CI runs for pull requests, pushes to `main`, and `v*` tags. Development
+  branches receive CI through their pull request. Main and tag runs qualify
+  their own release gates.
 - CI retains the required `test (3.11)`, `test (3.12)` and `test (3.13)` check
   names on Linux and adds `test (3.13) macOS`. The package job exercises a
   wheel through pipx on Python 3.11. Dependabot proposes weekly GitHub Actions
