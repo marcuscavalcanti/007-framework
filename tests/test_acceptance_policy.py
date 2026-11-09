@@ -9,6 +9,8 @@ import unittest
 from unittest import mock
 from types import MappingProxyType
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+
 import effort_lab
 import replay_eval
 import test_dataset_admission as fixtures

@@ -1,6 +1,10 @@
 """HTTP authority controls over synthetic data; no session log reads."""
 import http.client
+import os
 from pathlib import Path
+import selectors
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -10,6 +14,26 @@ import dashboard
 
 
 class DashboardHostTests(unittest.TestCase):
+    def test_dashboard_announces_its_port_when_python_ignores_environment(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            env = {"PATH": os.environ["PATH"], "HOME": temporary, "LANG": "C", "PYTHONUNBUFFERED": "1"}
+            process = subprocess.Popen([sys.executable, "-B", "-I", str(root / "bin/007"), "dashboard", "--port", "0",
+                                        "--registry", str(Path(temporary) / "registry.json"), "--no-open"],
+                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    self.assertTrue(selector.select(5), "dashboard address remained buffered")
+                    self.assertRegex(process.stdout.readline(), r"^007 dashboard: http://127\.0\.0\.1:[0-9]+")
+            finally:
+                try:
+                    state = dashboard.framework_cli.kill_process_group(process)
+                finally:
+                    process.stdout.close()
+                    process.stderr.close()
+                self.assertEqual(state, "gone")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

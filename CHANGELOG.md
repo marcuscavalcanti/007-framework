@@ -22,6 +22,9 @@ schemas, and the dashboard snapshot.
 
 ### Added
 
+- An installable `007-framework` wheel with a `007` console entry point, versioned from `SKILL.md`, carrying the existing
+  runtime layout, dashboard assets and default causal evidence. A synthetic installed-CLI check covers project records and
+  the HTTP dashboard. CI builds the wheel at the minimum supported Python version and runs that check.
 - A short README quickstart, `PRIVACY.md` for local collection and explicit egress, and software citation metadata.
 - A persistent security review workflow in the shared agent instructions: native Codex Security when available, honest
   scope/coverage and completion gates, with the same criteria across hosts and separate authorization for paid/Cloud operations.

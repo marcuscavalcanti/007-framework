@@ -169,6 +169,16 @@ its LiteLLM pricing engine for a non-authoritative local estimate.
 
 ## Install
 
+For the CLI from a local checkout, an existing `pipx` installation can build an isolated environment.
+
+```bash
+pipx install .
+007 --help
+```
+
+The package includes the runtime scripts, dashboard assets and its default public evidence file. Its runtime uses the
+Python standard library. Building the wheel uses setuptools, and its version comes from `SKILL.md`.
+
 Clone the repository into the skills directory used by your coding-agent host:
 
 ```bash
