@@ -291,6 +291,30 @@ class ObservatoryHistoryTests(unittest.TestCase):
                 self.assertEqual(len(rival_result["commits"]), int(owned))
                 self.assertEqual(len(rival_result["ambiguous_commits"]), int(not owned))
 
+    def test_identified_main_fallback_survives_a_different_child_log(self):
+        repo = self.git_repo("identified-fallback", commit_at=T0 + 5000)
+        entries = [{"project_id": "p1", "path": str(repo)}]
+        for source in ("claude", "codex"):
+            with self.subTest(source=source):
+                store = Path(self.tmp.name, source + "-identified.jsonl")
+                main = self.codex_row("S", source=source, subagent=False)
+                rival = self.codex_row("R", subagent=False, log_id="R",
+                                       active_intervals=[[T0 + 4900, T0 + 5100]])
+                child = {**main, "log_id": "C", "subagent": True, "started_at": T0 + 8000,
+                         "active_intervals": [[T0 + 8000, T0 + 9000]]}
+                self.hist.record(store, [main, rival])
+                original = store.read_bytes()
+                self.hist.record(store, [child])
+                self.assertTrue(store.read_bytes().startswith(original))
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                rival_result = next(row for row in rows if row["session_id"] == "R")
+                self.assertEqual(rival_result["commits"], [])
+                self.assertEqual(len(rival_result["ambiguous_commits"]), 1)
+                fresh_main = {**main, "log_id": "S", "active_intervals": [[T0, T0 + 60]]}
+                self.hist.record(store, [fresh_main])
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(len(next(row for row in rows if row["session_id"] == "R")["commits"]), 1)
+
     def test_codex_children_and_reviews_join_their_root_session_even_when_stored_under_their_own_id(self):
         repo = self.git_repo("project-delta", commit_at=T0 + 5000)
         self.hist.record(self.store, [

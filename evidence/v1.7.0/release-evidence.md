@@ -122,6 +122,19 @@ The final native run passed 891 tests without skips in 175.764 seconds, and
 54 JavaScript tests passed. Final record, manifest, distribution, remote checks
 and fresh independent review are qualified separately.
 
+Candidate `ebb6b5e309241f4d56a9e5e3f106f712623f4e2d` received FIX FIRST
+in its single authorized review. Four source counterexamples were reproduced
+before correction. Retained identified logs now preserve fallback activity when
+other logs contribute intervals. Complete and partial repeated deltas share
+cumulative bounds. Gemini checks primary composition and cache allocations
+before aggregation. Recognized untimed native records retain window uncertainty.
+Recognized usage events with missing or non-object counters also retain
+uncertainty instead of allowing earlier observations to appear complete.
+The final connected matrix passed 156 Python checks. After that boundary fix,
+the integrated native run passed 898 tests without skips in 174.338 seconds.
+JavaScript, final record, manifest, distribution, remote checks and fresh
+independent review are qualified separately.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

@@ -467,6 +467,136 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertEqual(summary["routes"][0]["tokens"], expected)
                 self.assertEqual(summary["usage_incomplete_sessions"], int(expected is None))
 
+    def test_complete_duplicate_allocations_obey_cumulative_bounds(self):
+        activity = self.module()
+        cases = [({}, True), ({"cached_input_tokens": 50}, False),
+                 ({"cache_write_input_tokens": 20}, False),
+                 ({"cache_write_1h_input_tokens": 7, "cache_write_5m_input_tokens": 0}, False),
+                 ({"input_tokens": 50, "cached_input_tokens": 20, "output_tokens": 10, "total_tokens": 60}, True)]
+        for overrides, priced in cases:
+            with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as tmp:
+                total = {"input_tokens": 100, "cached_input_tokens": 40, "cache_write_input_tokens": 10,
+                         "cache_write_5m_input_tokens": 5, "cache_write_1h_input_tokens": 5,
+                         "output_tokens": 20, "total_tokens": 120}
+                rows = codex_rows("complete-duplicate", tmp)[:3]
+                for stamp, last in (("2026-08-30T14:05:00Z", total),
+                                    ("2026-08-30T14:06:00Z", {**total, **overrides})):
+                    rows.append({"type": "event_msg", "timestamp": stamp, "payload": {
+                        "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": last}}})
+                filename = Path(tmp, "complete-duplicate.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertEqual(activity.pricing_request(result) is not None, priced)
+
+    def test_duplicate_primary_usage_cannot_exceed_recorded_cumulative_counters(self):
+        activity = self.module()
+        for last in ({"input_tokens": 101, "output_tokens": 20, "total_tokens": 121, "reasoning_output_tokens": 10},
+                     {"input_tokens": 100, "output_tokens": 21, "total_tokens": 121, "reasoning_output_tokens": 10},
+                     {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 20}):
+            with self.subTest(last=last), tempfile.TemporaryDirectory() as tmp:
+                total = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 10}
+                rows = codex_rows("primary-bound", tmp)[:3]
+                for stamp, delta in (("2026-08-30T14:05:00Z", total), ("2026-08-30T14:06:00Z", last)):
+                    rows.append({"type": "event_msg", "timestamp": stamp, "payload": {
+                        "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": delta}}})
+                filename = Path(tmp, "primary-bound.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertFalse(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertIsNone(activity.pricing_request(result))
+
+    def test_gemini_primary_composition_is_validated_before_aggregation(self):
+        activity = self.module()
+        cases = [([{"input": 100, "output": 20, "total": 0}], False),
+                 ([{"total": 120}], False), ([{"input": 100, "output": 20}], False),
+                 ([{"input": 100, "total": 120}], False), ([{}], False),
+                 ([{"input": 100, "output": 20, "total": 120}], True),
+                 ([{"input": 0, "output": 0, "total": 0}], True),
+                 ([{"input": 100, "tool": 3, "output": 20, "thoughts": 5, "total": 128}], True),
+                 ([{"input": 100, "output": 20, "total": 0},
+                   {"input": 100, "output": 20, "total": 240}], False)]
+        for observations, complete in cases:
+            with self.subTest(observations=observations), tempfile.TemporaryDirectory() as tmp:
+                filename = Path(tmp, "gemini-primary.jsonl")
+                write_jsonl(filename, [{"sessionId": "primary", "startTime": "2026-08-30T14:00:00Z"}] + [
+                    {"type": "gemini", "timestamp": "2026-08-30T14:01:00Z", "model": "gemini-test", "tokens": raw}
+                    for raw in observations])
+                result = activity.parse_gemini_session(filename, tmp, NOW)
+                self.assertEqual(result["usage"]["usage_complete"], complete)
+                self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_gemini_cache_allocations_cannot_cancel_across_observations(self):
+        activity = self.module()
+        for cached_counts, priced in (((180, 0), False), ((80, 100), True)):
+            with self.subTest(cached=cached_counts), tempfile.TemporaryDirectory() as tmp:
+                filename = Path(tmp, "gemini-cache.jsonl")
+                write_jsonl(filename, [{"sessionId": "cache", "startTime": "2026-08-30T14:00:00Z"}] + [
+                    {"type": "gemini", "timestamp": "2026-08-30T14:01:00Z", "model": "gemini-test",
+                     "tokens": {"input": 100, "cached": cached, "output": 20, "total": 120}} for cached in cached_counts])
+                result = activity.parse_gemini_session(filename, tmp, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 240)
+                self.assertEqual(result["usage"]["cached_input_tokens"], 180)
+                request = activity.pricing_request(result)
+                self.assertEqual(request is not None, priced)
+                if request:
+                    self.assertEqual((request["prompt_tokens"], request["cache_read_input_tokens"], request["completion_tokens"]),
+                                     (20, 180, 40))
+
+    def test_other_native_usage_without_a_timestamp_keeps_window_uncertainty(self):
+        activity = self.module()
+        for source in ("kimi", "gemini"):
+            for timed in (False, True):
+                with self.subTest(source=source, timed=timed), tempfile.TemporaryDirectory() as tmp:
+                    if source == "kimi":
+                        filename = Path(tmp, "state.json")
+                        write_json(filename, {"id": "clock", "cwd": tmp, "createdAt": int(NOW.timestamp() * 1000) - 60000,
+                                             "updatedAt": int(NOW.timestamp() * 1000)})
+                        row = {"type": "usage.record", "model": "kimi-test", "usage": {"inputOther": 10, "output": 2}}
+                        time_field, stamp = "time", int(NOW.timestamp() * 1000)
+                        write_jsonl(Path(tmp, "agents/main/wire.jsonl"), [{**row, time_field: stamp},
+                            {**row, **({time_field: stamp} if timed else {})}])
+                        result = activity.parse_kimi_session(filename, NOW)
+                    else:
+                        filename = Path(tmp, "session.jsonl")
+                        row = {"type": "gemini", "model": "gemini-test", "tokens": {"input": 10, "output": 2, "total": 12}}
+                        time_field, stamp = "timestamp", "2026-08-30T14:01:00Z"
+                        write_jsonl(filename, [{"sessionId": "clock", "startTime": "2026-08-30T14:00:00Z"},
+                            {**row, time_field: stamp}, {**row, **({time_field: stamp} if timed else {})}])
+                        result = activity.parse_gemini_session(filename, tmp, NOW)
+                    self.assertEqual(result["usage"]["usage_complete"], timed)
+                    self.assertEqual(result["usage"]["total_tokens"], 24 if timed else 12)
+                    self.assertEqual(activity.pricing_request(result) is not None, timed)
+
+    def test_recognized_native_usage_without_a_counter_object_stays_incomplete(self):
+        activity = self.module()
+        for source in ("kimi", "gemini"):
+            cases = ((None, False, 12), ([], False, 12), ({}, source == "kimi", 12),
+                     ({"output": 2}, source == "kimi", 14 if source == "kimi" else 12))
+            for raw, complete, total in cases:
+                with self.subTest(source=source, raw=raw), tempfile.TemporaryDirectory() as tmp:
+                    if source == "kimi":
+                        filename = Path(tmp, "state.json")
+                        write_json(filename, {"id": "counter-object", "cwd": tmp,
+                                             "createdAt": int(NOW.timestamp() * 1000) - 60000,
+                                             "updatedAt": int(NOW.timestamp() * 1000)})
+                        write_jsonl(Path(tmp, "agents/main/wire.jsonl"), [
+                            {"type": "usage.record", "time": int(NOW.timestamp() * 1000), "model": "kimi-test",
+                             "usage": value} for value in ({"inputOther": 10, "output": 2}, raw)])
+                        result = activity.parse_kimi_session(filename, NOW)
+                    else:
+                        filename = Path(tmp, "session.jsonl")
+                        write_jsonl(filename, [{"sessionId": "counter-object", "startTime": "2026-08-30T14:00:00Z"}] + [
+                            {"type": "gemini", "timestamp": "2026-08-30T14:01:00Z", "model": "gemini-test",
+                             "tokens": value} for value in ({"input": 10, "output": 2, "total": 12}, raw)])
+                        result = activity.parse_gemini_session(filename, tmp, NOW)
+                    self.assertEqual(result["usage"]["usage_complete"], complete)
+                    self.assertEqual(result["usage"]["total_tokens"], total)
+                    self.assertEqual(activity.pricing_request(result) is not None, complete)
+
     def test_activity_token_totals_preserve_known_subtotals_without_overflow(self):
         activity = self.module()
         cases = [([10 ** 308, 10 ** 308], None, 0), ([None], None, 1),

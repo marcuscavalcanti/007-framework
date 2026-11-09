@@ -354,7 +354,7 @@ class CodexLog:
             last = info.get("last_token_usage")
             absent = last is None or (isinstance(last, dict) and not any(
                 key in last for key in ("input_tokens", "output_tokens", "total_tokens")))
-            if absent and isinstance(last, dict):
+            if isinstance(last, dict):
                 partial, cumulative = counts(last, USAGE_KEYS), codex_counts(total)
                 valid_partial = partial is not None
                 if valid_partial:
@@ -365,6 +365,10 @@ class CodexLog:
                 if not valid_partial:
                     self.price_anomalies.add(stamp)
             total_ok, last_ok = codex_usage_complete(total), absent or codex_usage_complete(last)
+            if total_ok and last_ok and not absent:
+                last_ok = all(last[key] <= total[key] for key in (
+                    "input_tokens", "output_tokens", "total_tokens", "reasoning_output_tokens")
+                    if key in last and key in total)
             if total and total == self.previous:
                 if not total_ok or not last_ok:
                     self.tokens.append((stamp, None, None, False, False))
@@ -594,10 +598,19 @@ def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
     stamps = []
     for wire in Path(path).parent.glob("agents/*/wire.jsonl"):
         for row in json_rows(wire):
-            if safe_number(row.get("time")):
-                stamps.append(row["time"] / 1000)
+            stamp = row.get("time")
+            if safe_number(stamp):
+                stamps.append(stamp / 1000)
             raw = row.get("usage")
-            if row.get("type") != "usage.record" or row.get("time", 0) < cutoff_ms or not isinstance(raw, dict):
+            if row.get("type") != "usage.record":
+                continue
+            if not isinstance(raw, dict):
+                usage["usage_complete"] = False
+                continue
+            if not valid_number(stamp):
+                usage["usage_complete"] = False
+                continue
+            if stamp < cutoff_ms:
                 continue
             model = row.get("model") or model
             usage["usage_complete"] &= all(key not in raw or valid_number(raw[key]) for key in (
@@ -633,7 +646,8 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
     if not meta:
         return None
     usage = empty_usage()
-    usage.update({"usage_complete": True, "input_includes_cache": True, "output_includes_reasoning": False})
+    usage.update({"usage_complete": True, "input_includes_cache": True, "output_includes_reasoning": False,
+                  "price_allocation_complete": True})
     model = None
     updated = iso_datetime(meta.get("startTime"))
     stamps = [updated.timestamp()] if updated else []
@@ -644,16 +658,34 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
         if stamp and (updated is None or stamp > updated):
             updated = stamp
         raw = row.get("tokens")
-        if row.get("type") != "gemini" or not stamp or stamp < cutoff or not isinstance(raw, dict):
+        if row.get("type") != "gemini":
+            continue
+        if not isinstance(raw, dict):
+            usage["usage_complete"] = False
+            usage["price_allocation_complete"] = False
+            continue
+        if not stamp:
+            usage["usage_complete"] = False
+            usage["price_allocation_complete"] = False
+            continue
+        if stamp < cutoff:
             continue
         model = row.get("model") or model
-        usage["usage_complete"] &= all(key not in raw or valid_number(raw[key]) for key in (
+        valid_counts = all(key not in raw or valid_number(raw[key]) for key in (
             "input", "tool", "cached", "output", "thoughts", "total"))
-        usage["input_tokens"] += int(safe_number(raw.get("input"))) + int(safe_number(raw.get("tool")))
-        usage["cached_input_tokens"] += int(safe_number(raw.get("cached")))
-        usage["output_tokens"] += int(safe_number(raw.get("output")))
-        usage["reasoning_output_tokens"] += int(safe_number(raw.get("thoughts")))
-        usage["total_tokens"] += int(safe_number(raw.get("total")))
+        input_tokens = int(safe_number(raw.get("input"))) + int(safe_number(raw.get("tool")))
+        cached_tokens = int(safe_number(raw.get("cached")))
+        output_tokens = int(safe_number(raw.get("output")))
+        reasoning_tokens = int(safe_number(raw.get("thoughts")))
+        total_tokens = int(safe_number(raw.get("total")))
+        usage["usage_complete"] &= (valid_counts and all(key in raw for key in ("input", "output", "total"))
+                                    and total_tokens == input_tokens + output_tokens + reasoning_tokens)
+        usage["price_allocation_complete"] &= valid_counts and "input" in raw and cached_tokens <= input_tokens
+        usage["input_tokens"] += input_tokens
+        usage["cached_input_tokens"] += cached_tokens
+        usage["output_tokens"] += output_tokens
+        usage["reasoning_output_tokens"] += reasoning_tokens
+        usage["total_tokens"] += total_tokens
     active = bool(updated and (now - updated).total_seconds() <= 120)
     return {
         "session_id": meta["sessionId"], "source": "gemini", "runtime_provider": "google",

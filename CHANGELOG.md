@@ -68,6 +68,10 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Retained identified logs preserve timestamp fallback beside other contributing logs; a fresh observation replaces only
+  its own log. Full and partial repeated deltas share cumulative bounds before duplicate suppression.
+- Gemini validates primary composition and cache allocations per observation, preserving known primary usage with unavailable
+  allocation pricing. Untimed usage and missing counter objects retain uncertainty across the native readers.
 - Invalid cache-only deltas retain allocation uncertainty before fallback and duplicate suppression. Coherent partial
   allocations remain priceable through validated cumulative counters.
   Unidentified historical activity keeps its timestamp fallback when merged with named logs.

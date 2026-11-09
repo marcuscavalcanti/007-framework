@@ -225,7 +225,7 @@ def load(store):
             spans.setdefault(key, []).extend(fallback)
             sources.setdefault(key, []).append(row)
             uncertain.setdefault(key, []).extend(fallback)
-        elif row.get("active_intervals") and newer(row, logs.get((key, log))):
+        elif newer(row, logs.get((key, log))):
             logs[(key, log)] = row
         if newer(row, latest.get(key)):
             latest[key] = row
@@ -238,7 +238,7 @@ def load(store):
         stamp = choice_observatory._ts(row["updated_at"])
         last[key] = row["updated_at"] if key not in last or stamp >= choice_observatory._ts(last[key]) else last[key]
     for (key, _), row in logs.items():
-        spans.setdefault(key, []).extend(row["active_intervals"])
+        spans.setdefault(key, []).extend([list(span) for span in choice_observatory._spans(row, 0)])
         sources.setdefault(key, []).append(row)
     return [{**(main[key][1] if key in main else row), "session_id": key[1], "updated_at": last[key],
              "activity_sources": sources.get(key, [main[key][1] if key in main else row]),
