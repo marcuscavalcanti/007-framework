@@ -112,12 +112,13 @@ distribution, remote checks and fresh independent review are qualified separatel
 
 Candidate `56e7d21b4eb8b7b547bf6fccc3a61e1d7d837563` received FIX FIRST
 in its single authorized review. The three source counterexamples were reproduced
-before correction. Recognized cache-only deltas now retain pricing uncertainty,
+before correction. Invalid cache-only deltas now retain pricing uncertainty,
+while coherent partial fallback remains priceable through cumulative counters,
 and unidentified historical rows preserve their timestamp fallback during merging.
 Shared native counter validation and checked subtotals keep unrepresentable
 aggregates unavailable while preserving finite known subtotals and explicit zero.
 The pricing, summary, route and dashboard readers enforce those boundaries.
-The final native run passed 891 tests without skips in 170.918 seconds, and
+The final native run passed 891 tests without skips in 175.764 seconds, and
 54 JavaScript tests passed. Final record, manifest, distribution, remote checks
 and fresh independent review are qualified separately.
 

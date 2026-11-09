@@ -354,8 +354,16 @@ class CodexLog:
             last = info.get("last_token_usage")
             absent = last is None or (isinstance(last, dict) and not any(
                 key in last for key in ("input_tokens", "output_tokens", "total_tokens")))
-            if absent and isinstance(last, dict) and not codex_allocation_valid(counts(last, USAGE_KEYS)):
-                self.price_anomalies.add(stamp)
+            if absent and isinstance(last, dict):
+                partial, cumulative = counts(last, USAGE_KEYS), codex_counts(total)
+                valid_partial = partial is not None
+                if valid_partial:
+                    within_total = cumulative is None or all(partial[i] <= cumulative[i] for i in range(1, 5))
+                    coherent_tiers = ("cache_write_input_tokens" not in last
+                                      or sum(partial[3:5]) <= partial[2])
+                    valid_partial = within_total and coherent_tiers
+                if not valid_partial:
+                    self.price_anomalies.add(stamp)
             total_ok, last_ok = codex_usage_complete(total), absent or codex_usage_complete(last)
             if total and total == self.previous:
                 if not total_ok or not last_ok:

@@ -68,7 +68,8 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
-- Recognized cache-only deltas retain allocation uncertainty before primary-counter fallback and duplicate suppression.
+- Invalid cache-only deltas retain allocation uncertainty before fallback and duplicate suppression. Coherent partial
+  allocations remain priceable through validated cumulative counters.
   Unidentified historical activity keeps its timestamp fallback when merged with named logs.
 - Shared native usage checks and checked token subtotals keep unrepresentable aggregates unavailable across pricing,
   summaries, routes and the dashboard. Known finite subtotals and explicit zero remain supported.

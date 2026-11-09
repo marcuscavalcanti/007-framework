@@ -407,10 +407,11 @@ class LocalActivityTests(unittest.TestCase):
 
     def test_cache_only_codex_deltas_validate_allocations_before_fallback_and_dedup(self):
         activity = self.module()
-        keys = ("cached_input_tokens", "cache_write_input_tokens",
-                "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")
-        for key in keys:
-            for value, priced in ((-1, False), (False, False), (10 ** 400, False), (1, False), (0, True)):
+        keys = (("cached_input_tokens", True), ("cache_write_input_tokens", False),
+                ("cache_write_5m_input_tokens", False), ("cache_write_1h_input_tokens", False))
+        for key, positive_priced in keys:
+            for value, priced in ((-1, False), (False, False), (10 ** 400, False),
+                                  (1, positive_priced), (180, False), (0, True)):
                 for repeated in (False, True):
                     with self.subTest(key=key, kind=type(value).__name__, priced=priced, repeated=repeated):
                         with tempfile.TemporaryDirectory() as tmp:
@@ -426,6 +427,22 @@ class LocalActivityTests(unittest.TestCase):
                             self.assertEqual(result["usage"]["total_tokens"], 120)
                             self.assertTrue(result["usage"]["usage_complete"])
                             self.assertEqual(activity.pricing_request(result) is not None, priced)
+
+        for partial, priced in (({"cache_write_input_tokens": 10}, True),
+                                ({"cache_write_1h_input_tokens": 25}, True),
+                                ({"cache_write_input_tokens": 20, "cache_write_1h_input_tokens": 25}, False)):
+            with self.subTest(partial=partial), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("partial-cache", tmp)
+                rows[-2]["payload"]["info"] = {"total_token_usage": {
+                    "input_tokens": 100, "cached_input_tokens": 40, "cache_write_input_tokens": 30,
+                    "cache_write_1h_input_tokens": 25, "output_tokens": 20, "total_tokens": 120},
+                    "last_token_usage": partial}
+                filename = Path(tmp, "partial-cache.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertEqual(activity.pricing_request(result) is not None, priced)
 
     def test_claude_counter_aggregation_exposes_unrepresentable_usage(self):
         activity = self.module()
