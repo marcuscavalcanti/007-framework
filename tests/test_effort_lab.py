@@ -95,6 +95,23 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual((result["contrast"]["medium"]["durable"], result["contrast"]["high"]["durable"]), (0, 1))
         self.assertEqual(result["verdict"]["durability"], "NO-INFORMATION")  # one task can prove nothing
 
+    def test_chain_creates_private_outputs_and_preserves_existing_directory_permissions(self):
+        config_path = self.root / "chain-input.json"
+        config_path.write_text(json.dumps({"repos": {"synthetic": str(self.repo)}, "arms": self.config["arms"], "tasks": [],
+                                           "compare": {"reference": "high"}}))
+        (self.root / "pairs.json").write_text("{}")
+        previous = os.umask(0o022)
+        try:
+            for existing, expected in ((False, 0o700), (True, 0o755)):
+                with self.subTest(existing=existing):
+                    output = self.root / ("existing-output" if existing else "new-output")
+                    if existing:
+                        output.mkdir(mode=0o755)
+                    self.assertEqual(lab.chain(config_path, self.root / "empty-results", output)["tasks"], 0)
+                    self.assertEqual(output.stat().st_mode & 0o777, expected)
+        finally:
+            os.umask(previous)
+
     def test_an_invalid_cell_leaves_the_report_and_is_named(self):
         out = self.root / "lab"
         lab.mine(self.config, out, 2)

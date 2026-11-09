@@ -692,11 +692,13 @@ function effortScores(projects, now) {
   const judged = sessions.filter((session) => JUDGED.includes(session.questions?.[2]?.verdict));
   const enough = judged.filter((session) => session.questions[2].verdict !== "above-necessary");
   const tokens = (rows) => rows.reduce((sum, session) => sum + (session.total_tokens || 0), 0);
+  const completeUsage = judged.every((session) => session.usage_complete === true &&
+    Number.isFinite(session.total_tokens) && session.total_tokens >= 0);
   const every = projects.flatMap((project) => project.observatory?.sessions || []);  // a 30-day window only matures on older sessions
   const mature = every.map((session) => session.durability?.["30"]).filter((window) => window?.status === "mature" && window.lines_added);
   const added = mature.reduce((sum, window) => sum + window.lines_added, 0);
   const calibrated = projects.filter((project) => calibrationsOf([project]).length).length;
-  return { quota: tokens(judged) ? tokens(enough) / tokens(judged) : null, enough: enough.length, judged: judged.length, sessions: sessions.length,
+  return { quota: completeUsage && tokens(judged) ? tokens(enough) / tokens(judged) : null, enough: enough.length, judged: judged.length, sessions: sessions.length,
            lines: added ? mature.reduce((sum, window) => sum + window.lines_surviving, 0) / added : null, calibrated, repositories: projects.length,
            blinded: every.some((session) => typeof session.durability === "string") };
 }

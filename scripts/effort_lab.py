@@ -410,7 +410,7 @@ def chain(config_path, results, out):
     pairs = json.loads((config_path.parent / "pairs.json").read_text())
     tasks = {t["id"]: t for t in config["tasks"]}
     repo = next(iter(config["repos"].values()))
-    out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
     mirror = out / "mirror.git"
     if not mirror.exists():
         subprocess.run(["git", "clone", "-q", "--bare", "--no-hardlinks", str(repo), str(mirror)], check=True, capture_output=True)

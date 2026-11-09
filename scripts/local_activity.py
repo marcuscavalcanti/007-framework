@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read sanitized local coding-agent usage for the 007 dashboard."""
 
+import hashlib
 import json
 import math
 import os
@@ -8,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -183,9 +185,9 @@ def json_rows(path, max_bytes=None):
             yield value
 
 
-def read_log(path, parser, offset=0):
+def read_log(path, parser, offset=0, digest=None):
     """Feeds `parser` every row of `path` after byte `offset` and returns the offset after the last whole row: a torn last row (still
-    being written) waits for the next read, so a growing log is read once in total, with memory bounded by its metadata."""
+    being written) waits for the next read. Consumed JSON is decoded once per generation, with memory bounded by metadata."""
     for raw in log_lines(path, offset):
         try:
             row = json.loads(raw)
@@ -194,9 +196,24 @@ def read_log(path, parser, offset=0):
                 break
             row = None
         offset += len(raw)
+        if digest is not None:
+            digest.update(raw)
         if isinstance(row, dict):
             parser.feed(row)
     return offset
+
+
+def unchanged_prefix(path, length, digest):
+    """Verify all consumed bytes before reusing a changed plain log's incremental parser."""
+    observed = hashlib.sha256()
+    with path.open("rb") as handle:
+        while length:
+            chunk = handle.read(min(length, 1024 * 1024))
+            if not chunk:
+                return False
+            observed.update(chunk)
+            length -= len(chunk)
+    return observed.digest() == digest.digest()
 
 
 def active_intervals(stamps, gap_s=GAP_S, cap=MAX_INTERVALS):
@@ -247,7 +264,7 @@ def iso(stamp):
 
 
 class CodexLog:
-    """Metadata of one Codex rollout, fed row by row (never content), so a growing log is read once. A thread another thread spawned
+    """Metadata of one Codex rollout, fed row by row (never retained content). A thread another thread spawned
     (subagent, guardian review) reports its root session's id, as a Claude subagent log does, with its own id as log_id."""
 
     def __init__(self, path=None):
@@ -272,12 +289,13 @@ class CodexLog:
             if not isinstance(info, dict):
                 self.tokens.append((stamp, None, None))
                 return
-            total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else {}
+            total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else None
             if total and total == self.previous:
                 return
             self.previous = total
             last = info.get("last_token_usage")
-            self.tokens.append((stamp, counts(total, USAGE_KEYS), counts(last, USAGE_KEYS) if isinstance(last, dict) else None))
+            self.tokens.append((stamp, counts(total, USAGE_KEYS) if total else None,
+                                counts(last, USAGE_KEYS) if isinstance(last, dict) else None))
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         if not self.meta:
@@ -286,7 +304,7 @@ class CodexLog:
         cutoff = now - timedelta(hours=lookback_hours)
         usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True}
         inside = [(total, last) for stamp, total, last in self.tokens if stamp and stamp >= cutoff]
-        increments = [last for total, last in inside if total is not None and last is not None]
+        increments = [last for total, last in inside if last is not None]
         snapshots = [(stamp, total) for stamp, total, _ in self.tokens if total is not None]
         started = iso_datetime(self.meta["started_at"])
         if increments:
@@ -302,6 +320,7 @@ class CodexLog:
             usage.update({key: max(0, snapshots[-1][1][i] - (baseline[i] if baseline else 0)) for i, key in enumerate(USAGE_KEYS)})
         else:
             usage["usage_complete"] = False
+        usage["usage_complete"] &= all(total is not None for total, _ in inside)
         model, effort = labels(self.segments)
         return {
             **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at", "subagent")},
@@ -374,14 +393,19 @@ class ClaudeLog:
             return
         model = message.get("model")
         add_segment(self.segments, stamp, None if isinstance(model, str) and model.startswith("<") else model, row.get("effort"))
-        if stamp and isinstance(message.get("usage"), dict):
-            raw = message["usage"]
+        if stamp:
+            raw = message.get("usage")
+            key = message.get("id") if isinstance(message.get("id"), str) and message["id"] else object()
+            if not isinstance(raw, dict):
+                if not (isinstance(model, str) and model.startswith("<")):
+                    self.messages.setdefault(key, (stamp, None))
+                return
             cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
             details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
             # Claude Code writes one row per content block of a response, each with the response's usage (the last one final):
             # one count per message id
-            key = message.get("id") if isinstance(message.get("id"), str) and message["id"] else object()
-            self.messages[key] = (stamp, counts({**details, **cache, **raw}, CLAUDE_USAGE))
+            required = all(valid_number(raw.get(name)) for name in ("input_tokens", "output_tokens"))
+            self.messages[key] = (stamp, counts({**details, **cache, **raw}, CLAUDE_USAGE) if required else None)
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         meta = self.meta
@@ -601,7 +625,8 @@ class ActivityCollector:
         self.pricer = pricer or HeadroomPricer()
         self.lookback_hours = lookback_hours
         self.gap_s = float(activity_gap_minutes) * 60
-        self.cursors = {}  # path -> ((inode, size, mtime), offset, parser) of each Codex/Claude log read
+        self.cursors = {}  # path -> (stat stamp, consumed offset, parser, consumed-byte hash)
+        self._lock = threading.RLock()
         self.unreadable = set()  # *.jsonl.zst logs no decoder could read (reported, never skipped silently)
         self.identity_cache = {}
 
@@ -624,6 +649,10 @@ class ActivityCollector:
                     continue
 
     def parse(self, source, path, now):
+        with self._lock:
+            return self._parse(source, path, now)
+
+    def _parse(self, source, path, now):
         """The session of one log as of `now`. Only what the rows say is kept between calls (a cursor per Codex/Claude log); status
         and the lookback window are recomputed every call, since they move with the clock even when the file does not."""
         if source not in LOGS:
@@ -635,21 +664,23 @@ class ActivityCollector:
             cwd = next((project for project, key in projects.items() if key == slug), None)
             return parse_gemini_session(path, cwd, now, self.lookback_hours, self.gap_s)
         stat = path.stat()
-        known, offset, log = self.cursors.pop(path, ((None, None, None), 0, None))  # a failed read never leaves a half-fed cursor
-        # ponytail: a plain log that only grows (same inode, not shorter) is read on from where the last read stopped; an in-place
-        # rewrite to a longer file would be misread (Codex renames or compresses instead), a truncation starts over. A *.zst
-        # archive is read again only when it changes.
+        known, offset, log, digest = self.cursors.pop(path, (None, 0, None, None))
+        stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        # Changed plain files must retain every consumed byte before their parser can read on. Hashing the prefix costs I/O
+        # but avoids reparsing unchanged JSON. Unchanged files and archives do not perform this prefix check.
         packed = path.suffix == ".zst"
-        stale = known != (stat.st_ino, stat.st_size, stat.st_mtime_ns) if packed else known[0] != stat.st_ino or offset > stat.st_size
+        stale = known != stamp if packed else known is None or known[:2] != stamp[:2] or offset > stat.st_size
+        if log is not None and not packed and not stale and known != stamp:
+            stale = not unchanged_prefix(path, offset, digest)
         if log is None or stale:
-            offset, log = 0, LOGS[source](path)
+            offset, log, digest = 0, LOGS[source](path), None if packed else hashlib.sha256()
         try:
             if not packed or offset == 0:
-                offset = read_log(path, log, offset)
+                offset = read_log(path, log, offset, digest)
         except UnreadableLog:
             self.unreadable.add(path)
             return None
-        self.cursors[path] = ((stat.st_ino, stat.st_size, stat.st_mtime_ns), offset, log)
+        self.cursors[path] = (stamp, offset, log, digest)
         return log.result(now, self.lookback_hours, self.gap_s)
 
     def identity(self, path):
@@ -673,6 +704,10 @@ class ActivityCollector:
         return None
 
     def collect(self, entries, now=None):
+        with self._lock:
+            return self._collect(entries, now)
+
+    def _collect(self, entries, now=None):
         if not entries:
             self.cursors.clear()
             self.unreadable.clear()

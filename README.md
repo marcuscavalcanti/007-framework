@@ -122,6 +122,15 @@ Tools for this thesis: `scripts/effort_lab.py` (`007 lab`: mine, sensitivity, ru
 survival, with an explicit evidence level) and
 `scripts/effort_trial.py` (opt-in randomized default effort; **off by default**).
 
+Attribution keeps parent and child activity inside its recorded project. Each
+commit's route comes from the contributing log, with overlapping routes marked
+mixed. Identifiable legacy main logs are repaired by a fresh complete read.
+Unresolved legacy intervals remain uncertain. Usage completeness is retained
+alongside known token subtotals. Incomplete or legacy totals stay unavailable
+for token-weighted quota comparisons. Changed plain logs verify all consumed
+bytes before their parser resumes, adding prefix-read I/O with bounded memory.
+Collection is serialized per collector and remains observational.
+
 > **1.6.0** (published 2026-11-08): adds `007 lab` and restates the thesis as a decision tested
 > against a margin declared before spending. Public pre-registered evidence so far:
 > Codex on go-json not proven at 3 points, Claude on go-json not proven at 10

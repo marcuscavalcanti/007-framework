@@ -187,7 +187,7 @@ class ReportingTests(unittest.TestCase):
             write(first / "t1-r01-high.json", {"valid": False})
             write(first / "t1-r01-high.runner.json", {"cost_usd": 0.5, "cost_source": "client-estimate", "valid": False})
             write(first / "t2-r01-low.runner.json", "")  # orphan: reserved, never finished
-            write(first / "t2-r01-high.json", {"valid": False, "runner_receipt_sha256": "unmeasured"})  # refused before spending
+            write(first / "t2-r01-high.json", {"valid": False, "runner_receipt_sha256": "unmeasured"})  # execution/cost unknown
             write(first / "dispatch.jsonl", '{"cell":"t1-r01-low","dispatched_at":"2026-11-01T10:00:00+00:00"}\n'
                   '{"cell":"t1-r01-high","finished_at":"2026-11-02T09:00:00Z"}\n{"cut')
             write(second / "t1-next-r01-low.json", {"valid": True})
@@ -201,7 +201,7 @@ class ReportingTests(unittest.TestCase):
         chain, gone, broken = ledger["experiments"]
         self.assertTrue(ledger["configured"])
         self.assertEqual({key: chain[key] for key in ("attempts", "valid", "invalid", "orphans", "unpriced")},
-                         {"attempts": 5, "valid": 2, "invalid": 2, "orphans": 1, "unpriced": 1})
+                         {"attempts": 5, "valid": 2, "invalid": 2, "orphans": 1, "unpriced": 2})
         self.assertEqual((chain["cost_usd"], chain["invalid_cost_usd"]), (3.75, 0.5))
         self.assertEqual(chain["cost_sources"], {"client-estimate": 2, "rate-card-estimate": 1})
         self.assertEqual((chain["first_attempt_at"], chain["last_attempt_at"]),
@@ -223,6 +223,41 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(ledger["experiments"][0]["unpriced"], 2)
             self.assertFalse(ledger["total_complete"])
             self.assertEqual(ledger["total_cost_usd"], 0)  # known subtotal, not a measured zero for these attempts
+
+    def test_lab_ledger_keeps_an_executed_failure_without_receipt_unpriced(self):
+        import replay_eval
+        from test_scripts import make_base_repo
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, base = make_base_repo(temporary)
+            output = root / "results"
+            output.mkdir(mode=0o700)
+            marker = root / "agent-executed.txt"
+            agent = "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('executed'); sys.exit(1)"
+            config = {"repos": {"fixture": str(repo)},
+                      "agent_command": [sys.executable, "-c", agent, str(marker)],
+                      "arms": {"NEW": {"model": "fixture", "effort": "fixture", "doctrine": ""}}}
+            task = {"id": "no-receipt", "repo": "fixture", "base": base, "accepted": base, "prompt": "fixture",
+                    "acceptance": [[sys.executable, "-c", "raise SystemExit(0)"]]}
+            cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 10)
+            self.assertEqual(marker.read_text(), "executed")
+            self.assertEqual((cell["valid"], cell["agent_exit"], cell["runner_receipt_sha256"]),
+                             (False, 1, "unmeasured"))
+            config_file = root / "config.json"
+            config_file.write_text(json.dumps({"observatory": {"lab_ledger": [
+                {"name": "fixture", "results": str(output)}]}}))
+            ledger = dashboard.load_lab_ledger(config_file)
+            self.assertEqual(ledger["experiments"][0]["unpriced"], 1)
+            self.assertFalse(ledger["total_complete"])
+            self.assertEqual(ledger["total_cost_usd"], 0)
+
+            zero = root / "known-zero"
+            zero.mkdir()
+            (zero / "fixture-r01-NEW.runner.json").write_text(json.dumps({
+                "cost_usd": 0, "cost_source": "custom:synthetic-local-control"}))
+            control = dashboard.lab_experiment("known-zero", [zero])
+            self.assertEqual((control["cost_usd"], control["unpriced"]), (0, 0))
 
     def test_lab_report_carries_the_repository_cli_and_model_it_is_bound_to(self):
         # audit F09: a bare report path has no repository identity, so its verdict must not read as evidence for any repository

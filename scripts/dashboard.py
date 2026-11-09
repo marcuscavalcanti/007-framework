@@ -1259,8 +1259,8 @@ def load_lab_report(config=None):
 
 
 def lab_experiment(name, directories):
-    """007's own spend in `007 lab run` results: one attempt per cell with a runner receipt or a result. The runner reserves its
-    receipt before spending. Only an explicit pre-reservation refusal is priced at zero; missing cost/provenance stays unpriced.
+    """007's own spend in `007 lab run` results: one attempt per cell with a runner receipt or a result.
+    Numeric receipt cost and provenance establish accounting; missing receipts stay unpriced even after a failed execution.
     Costs are the receipts' client estimates, not an invoice."""
     attempts, stamps = {}, []
     for directory in directories:
@@ -1273,7 +1273,6 @@ def lab_experiment(name, directories):
                 result = json.loads((directory / file).read_bytes())
                 item = attempts.setdefault((directory, file.removesuffix(".json")), {})
                 item["valid"] = isinstance(result, dict) and result.get("valid") is True
-                item["refused_before_spend"] = isinstance(result, dict) and result.get("valid") is False and result.get("runner_receipt_sha256") == "unmeasured"
         try:
             lines = (directory / "dispatch.jsonl").read_text().splitlines()
         except FileNotFoundError:
@@ -1289,10 +1288,9 @@ def lab_experiment(name, directories):
     rows = attempts.values()
     for item in rows:
         receipt = item.get("receipt")
-        refused = receipt is None and item.get("refused_before_spend")
-        cost = 0 if refused else (receipt or {}).get("cost_usd")
+        cost = (receipt or {}).get("cost_usd")
         source = (receipt or {}).get("cost_source")
-        accounted = refused or (is_known_label(source) and source != "unavailable")
+        accounted = is_known_label(source) and source != "unavailable"
         item["cost"] = cost if accounted and is_number(cost) and cost >= 0 else None
     priced = [item for item in rows if item["cost"] is not None]
     return {

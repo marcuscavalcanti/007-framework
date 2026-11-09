@@ -66,11 +66,20 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Parent/child consolidation preserves project scope, including record deduplication. Per-commit model and effort come from
+  the contributing logs, with mixed or unavailable identity retained explicitly. Fresh Claude main-log reads replace
+  identifiable legacy clipped intervals. Unresolved historical intervals stay uncertain for attribution.
+- Changed plain logs verify every consumed byte before resuming their parser, detecting equal-length, regrown and middle
+  rewrites on the same inode. This adds prefix-read I/O with bounded memory. Concurrent reads serialize collector state.
+- Missing Claude response usage and invalid Codex snapshots remain incomplete. Durable recording keeps completeness and
+  same-timestamp counter repairs. Reports retain known subtotals, while incomplete and legacy totals remain unavailable
+  for token-weighted quota comparisons.
+- `lab chain` creates new output directories owner-only and preserves existing directory permissions.
 - Dashboard startup uses the bound address for its server metadata, avoiding reverse-DNS stalls before announcing its URL.
 
 - Project navigation wraps to its own row when the brand and controls cannot fit, avoiding page overflow on narrow screens.
-- The lab spend ledger keeps a missing receipt or an amount without cost provenance unpriced. Zero is inferred only for the
-  runner's explicit pre-reservation refusal marker; a missing file by itself never completes the cost coverage.
+- The lab spend ledger keeps missing receipts and amounts without cost provenance unpriced, including executed failures.
+  A measured zero needs an explicit numeric receipt cost and provenance.
 - Local session capture reads every Codex and Claude log whole, streaming row metadata with bounded memory, and reads a growing
   log on from a byte cursor. It read only the last 4 MiB of a Codex rollout (64 MiB for Claude) and counted the unread head as
   active: on the maintainer's machine one 541 MB rollout was a single 291 h activity interval instead of 35 (60 h), so it was

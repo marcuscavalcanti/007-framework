@@ -71,18 +71,31 @@ def attribute(repo, sessions, slack_s=600):
     for sha, when in reversed(_commits(repo)):  # oldest first
         result["committed_at"][sha] = when
         owners = list(dict.fromkeys(sid for sid, spans in windows if any(start <= when <= end for start, end in spans)))
-        if len(owners) == 1:
+        uncertain = any(start - slack_s <= when <= end + slack_s
+                        for session in sessions for start, end in session.get("uncertain_intervals") or [])
+        if len(owners) == 1 and not uncertain:
             result["sessions"][owners[0]].append(sha)
         else:
-            result["unattributed"][sha] = "ambiguous" if owners else "no-session"
+            result["unattributed"][sha] = "uncertain-history" if uncertain else "ambiguous" if owners else "no-session"
             for sid in owners:
                 result["ambiguous"][sid].append(sha)
     return result
 
 
-def route_at(session, when):
-    """{model, effort} in force at epoch `when`: the last of the session's effort_segments ([start, model, effort]) started by
-    then (the first one before any), else the session's own labels."""
+def route_at(session, when, slack_s=0):
+    """Route at epoch `when`, limited to contributing logs' activity when present. Differing concurrent routes are mixed,
+    missing identity is unmeasured. Within a log, use its latest segment by then, or its first segment/own labels."""
+    if "activity_sources" in session:
+        routes = [route_at(source, when) for source in session["activity_sources"]
+                  if any(start <= when <= end for start, end in _spans(source, slack_s))]
+        result = {}
+        for name in ("model", "effort"):
+            values = {route.get(name) for route in routes}
+            if not values or values.intersection({None, "", "unmeasured", "unknown"}):
+                result[name] = "unmeasured"
+            else:
+                result[name] = next(iter(values)) if len(values) == 1 else "mixed"
+        return result
     segments = [s for s in session.get("effort_segments") or [] if s[0] is not None]
     current = next((s for s in reversed(segments) if s[0] <= when), segments[0] if segments else None)
     return {"model": current[1], "effort": current[2]} if current else {k: session.get(k) for k in ("model", "effort")}
@@ -159,8 +172,14 @@ def observe(repo, sessions, now, slack_s=600, windows=(7, 30), rivals=(), surviv
                      "corrective_share": corrective_share(repo, integrated, until)}
         rows.append({**{k: s.get(k) for k in ("session_id", "source", "model", "effort", "started_at", "updated_at",
                                                "total_tokens", "reasoning_output_tokens")},
+                     "usage_complete": s.get("usage_complete"),
+                     "known_total_tokens": s.get("total_tokens"),
+                     "known_reasoning_output_tokens": s.get("reasoning_output_tokens"),
+                     "attribution_uncertain": bool(s.get("uncertain_intervals")),
+                     "total_tokens": s.get("total_tokens") if s.get("usage_complete") is True else None,
+                     "reasoning_output_tokens": s.get("reasoning_output_tokens") if s.get("usage_complete") is True else None,
                      "commits": shas, "unintegrated_commits": [sha for sha in shas if sha not in head],
-                     "commit_efforts": {sha: route_at(s, attribution["committed_at"][sha]) for sha in shas},
+                     "commit_efforts": {sha: route_at(s, attribution["committed_at"][sha], slack_s) for sha in shas},
                      "ambiguous_commits": attribution["ambiguous"].get(s["session_id"], []),
                      "durability": dur, "evidence_level": 1 if mature else 0, **extra})
     return rows
@@ -327,6 +346,8 @@ def questions(row, q3):
     """The dashboard's three questions for one observed session; q3 comes from `calibrated` or `no_evidence`."""
     tokens, reasoning = row.get("total_tokens"), row.get("reasoning_output_tokens")
     quota = "quota N/A" if tokens is None else f"{tokens} tokens ({'N/A' if reasoning is None else reasoning} reasoning)"
+    if tokens is None and row.get("usage_complete") is False and row.get("known_total_tokens") is not None:
+        quota = f"quota incomplete ({row['known_total_tokens']} known tokens)"
     q1 = {"question": "What did you run?", "level": 0, "badge": "Observed",
           "answer": " · ".join([row.get("source") or "CLI N/A", row.get("model") or "model N/A",
                                 f"effort {row.get('effort') or 'unmeasured'}", _duration(row), quota])}
@@ -334,6 +355,8 @@ def questions(row, q3):
     if not row.get("commits"):
         n = len(row.get("ambiguous_commits") or [])
         answer = f"not attributed: {n} commit(s) in the window of more than one session" if n else "not attributed: no commit in the session's window"
+        if n and row.get("attribution_uncertain"):
+            answer = f"not attributed: {n} commit(s) overlap unresolved historical activity"
         q2 = {"question": "Did it last?", "level": None, "badge": None, "answer": answer, "windows": None}
     elif not windows:
         q2 = {"question": "Did it last?", "level": None, "badge": None, "windows": None,

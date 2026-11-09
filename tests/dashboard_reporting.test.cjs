@@ -514,8 +514,8 @@ const verdictSnapshot = () => ({ generated_at: '2026-11-01T12:00:00Z', lab_repor
     medium: { verdict: 'good-choice', badge: 'Calibrated', gain: { effort: 'medium', against: 'high', time_reduction: .5, cost_reduction: .3 } },
     high: { verdict: 'above-necessary', badge: 'Calibrated', gain: { effort: 'medium', against: 'high' } } } }],
   sessions: [
-    { started_at: '2026-10-30T00:00:00Z', total_tokens: 90, durability: { 30: { status: 'pending' } }, questions: [{}, {}, { verdict: 'above-necessary' }] },
-    { started_at: '2026-10-30T00:00:00Z', total_tokens: 10, durability: { 30: { status: 'mature', lines_added: 10, lines_surviving: 8 } }, questions: [{}, {}, { verdict: 'good-choice' }] },
+    { started_at: '2026-10-30T00:00:00Z', total_tokens: 90, usage_complete: true, durability: { 30: { status: 'pending' } }, questions: [{}, {}, { verdict: 'above-necessary' }] },
+    { started_at: '2026-10-30T00:00:00Z', total_tokens: 10, usage_complete: true, durability: { 30: { status: 'mature', lines_added: 10, lines_surviving: 8 } }, questions: [{}, {}, { verdict: 'good-choice' }] },
     { started_at: '2026-10-30T00:00:00Z', total_tokens: 500, questions: [{}, {}, { verdict: 'no-evidence' }] },
     { started_at: '2026-01-01T00:00:00Z', total_tokens: 500, questions: [{}, {}, { verdict: 'above-necessary' }] }] } }] });
 
@@ -536,6 +536,18 @@ test('scores weigh quota by tokens, ignore uncalibrated sessions and stay inside
   const s = vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at))', r.context);
   assert.equal(s.quota, .1);
   assert.deepEqual([s.enough, s.judged, s.sessions, s.lines, s.calibrated], [1, 2, 3, .8, 1]);
+});
+
+test('quota weighting remains unavailable when any judged usage is partial or legacy', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  vm.runInContext('for (const project of snapshotFixture.projects) for (const session of project.observatory?.sessions || []) session.usage_complete = true', r.context);
+  assert.equal(vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at)).quota', r.context), .1);
+  for (const completeness of [false, null]) {
+    r.context.completeness = completeness;
+    vm.runInContext('snapshotFixture.projects[0].observatory.sessions[0].usage_complete = completeness', r.context);
+    assert.equal(vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at)).quota', r.context), null);
+  }
 });
 
 test('durable is never claimed without a proving lab report', () => {

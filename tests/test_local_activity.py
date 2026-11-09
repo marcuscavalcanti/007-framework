@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -147,6 +148,38 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertEqual(result["usage"]["input_tokens"], 7)
                 self.assertFalse(result["usage"]["usage_complete"])
                 self.assertIsNone(activity.pricing_request(result))
+
+    def test_codex_invalid_event_after_a_valid_snapshot_stays_incomplete(self):
+        activity = self.module()
+        for info in (None, {}, {"total_token_usage": {}}, {"total_token_usage": []}):
+            with self.subTest(info=info), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp, "snapshot.jsonl")
+                write_jsonl(path, codex_rows("snapshot", tmp) + [
+                    {"timestamp": "2026-08-30T14:06:00Z", "type": "event_msg",
+                     "payload": {"type": "token_count", "info": info}}])
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["total_tokens"], 1_100_000)
+                self.assertFalse(result["usage"]["usage_complete"])
+                self.assertIsNone(activity.pricing_request(result))
+
+    def test_claude_missing_response_usage_is_unknown_and_a_final_update_can_repair_it(self):
+        activity = self.module()
+        for raw in (None, {}, [], {"input_tokens": 3}):
+            with self.subTest(usage=raw), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp, "missing.jsonl")
+                row = {"type": "assistant", "sessionId": "missing", "cwd": tmp,
+                       "timestamp": "2026-08-30T14:00:00Z",
+                       "message": {"id": "response", "model": "claude-opus-5", "usage": raw}}
+                write_jsonl(path, [row])
+                incomplete = activity.parse_claude_session(path, NOW)
+                self.assertFalse(incomplete["usage"]["usage_complete"])
+                self.assertIsNone(activity.pricing_request(incomplete))
+                final = {**row, "message": {**row["message"], "usage": {"input_tokens": 100, "output_tokens": 20}}}
+                no_usage = {**row, "message": {k: v for k, v in row["message"].items() if k != "usage"}}
+                write_jsonl(path, [row, final, no_usage])
+                repaired = activity.parse_claude_session(path, NOW)
+                self.assertEqual(repaired["usage"]["total_tokens"], 120)
+                self.assertTrue(repaired["usage"]["usage_complete"])
 
     def test_codex_log_over_4_mib_is_read_whole_so_usage_is_complete_and_priced(self):
         # a 527 MB rollout read only in its last 4 MiB reported 4 M tokens instead of 2.5 bn, unpriced
@@ -559,6 +592,80 @@ class LocalActivityTests(unittest.TestCase):
                 collector.parse("codex", path, NOW)
             self.assertEqual(collector.cursors[path][1], path.stat().st_size)
             self.assertEqual(collector.parse("codex", path, NOW), activity.parse_codex_session(path, NOW))
+
+    def test_collector_detects_same_inode_rewrites_even_with_unchanged_edges(self):
+        activity = self.module()
+        for kind in ("equal", "regrown", "middle"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root, path = Path(tmp), Path(tmp, "rewrite.jsonl")
+                rows = codex_rows("old-id", root, model="model-a")
+                rows[1]["payload"]["content"] = "x" * 8192
+                rows[-1]["payload"]["padding"] = "y" * 8192
+                write_jsonl(path, rows)
+                before = path.read_bytes()
+                inode = path.stat().st_ino
+                collector = activity.ActivityCollector(pricer=activity.HeadroomPricer(runner=lambda r: []))
+                collector.parse("codex", path, NOW)
+                if kind == "middle":
+                    rows[2]["payload"]["model"] = "model-b"
+                else:
+                    rows[0]["payload"]["id"] = "new-id"
+                if kind == "regrown":
+                    rows.append({"type": "ignored", "padding": "longer replacement"})
+                write_jsonl(path, rows)
+                self.assertEqual(path.stat().st_ino, inode)
+                if kind == "middle":
+                    self.assertEqual(before[:4096], path.read_bytes()[:4096])
+                    self.assertEqual(before[-4096:], path.read_bytes()[-4096:])
+                self.assertEqual(collector.parse("codex", path, NOW), activity.parse_codex_session(path, NOW))
+
+    def test_concurrent_collection_does_not_mix_old_usage_with_new_route_metadata(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, path = Path(tmp), Path(tmp, "codex", "concurrent.jsonl")
+            write_jsonl(path, codex_rows("concurrent", root, model="model-a"))
+            collector = activity.ActivityCollector(codex_root=path.parent, claude_root=root / "none",
+                                                   kimi_root=root / "none", gemini_root=root / "none",
+                                                   pricer=activity.HeadroomPricer(runner=lambda requests: []))
+            entries = [{"project_id": "p", "path": str(root)}]
+            entered, release, second_done = threading.Event(), threading.Event(), threading.Event()
+            original_labels, results, errors = activity.labels, {}, []
+
+            def labels(segments):
+                if threading.current_thread().name == "old-snapshot":
+                    entered.set()
+                    release.wait(5)
+                return original_labels(segments)
+
+            def collect(name):
+                try:
+                    results[name] = collector.collect(entries, NOW)["projects"]["p"]["recent_sessions"][0]
+                except Exception as error:
+                    errors.append(type(error).__name__)
+                finally:
+                    if name == "second":
+                        second_done.set()
+
+            first = threading.Thread(target=collect, args=("first",), name="old-snapshot")
+            second = threading.Thread(target=collect, args=("second",))
+            with mock.patch.object(activity, "labels", side_effect=labels):
+                first.start()
+                try:
+                    self.assertTrue(entered.wait(5))
+                    with path.open("a") as handle:
+                        handle.write(json.dumps({"timestamp": "2026-08-30T14:06:00Z", "type": "turn_context",
+                                                 "payload": {"model": "model-b", "effort": "low"}}) + "\n")
+                    second.start()
+                    second_done.wait(1)
+                finally:
+                    release.set()
+                    first.join(5)
+                    if second.ident is not None:
+                        second.join(5)
+            self.assertFalse(first.is_alive() or second.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual((results["first"]["model"], results["first"]["usage"]["total_tokens"]), ("model-a", 1_100_000))
+            self.assertEqual(results["second"]["model"], "mixed")
 
     def test_collector_applies_the_activity_gap_parameter(self):
         activity = self.module()

@@ -31,6 +31,16 @@ boundary. These additions do not select a model or authorize an execution.
 
 ## Engineering evidence and limits
 
+The versioned candidate `4cdca26bf9fd9a14e164ac446d7fbb94b192ccde` received
+FIX FIRST from its single authorized independent review. That call is consumed.
+Release is blocked. The local follow-up corrects ledger cost completeness,
+project and route attribution, legacy Claude intervals, changed-log cursors,
+usage completeness and output permissions. A reproduced concurrent-collection
+race is corrected too. The follow-up passed 822 native Python tests without
+skips and 51 JavaScript tests. Gitleaks found no secrets in its directory scan.
+The corrected candidate still needs its current manifest, distribution, CI
+and newly authorized independent review before release.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three
