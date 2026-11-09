@@ -22,6 +22,9 @@ schemas, and the dashboard snapshot.
 
 ### Added
 
+- CodeQL and Scorecard workflows retain bounded analysis reports as Actions artifacts, with pinned actions and read-only
+  repository permissions. CodeQL SARIF/database uploads and Scorecard result publication are disabled.
+
 - Tag-triggered source candidates with repeat-build and extracted-manifest checks, SHA256SUMS and GitHub build provenance,
   retained for maintainer publication after release qualification.
 - A macOS Python 3.13 CI job alongside the existing Linux check names, portable tag-manifest verification and weekly
