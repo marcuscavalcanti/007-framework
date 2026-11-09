@@ -5,7 +5,7 @@ const byId = (id) => document.getElementById(id);
 const percent = (value, digits = 0) => value == null ? "N/A" : `${(value * 100).toFixed(digits)}%`;
 const decimal = (value, digits = 1) => value == null ? "N/A" : Number(value).toFixed(digits);
 const money = (value) => value == null ? "N/A" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 3 : 2 }).format(value);
-const integer = (value) => new Intl.NumberFormat("en-US", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
+const integer = (value) => value === null ? "N/A" : new Intl.NumberFormat("en-US", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
 const equivalentMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/A";
 const terminalMoney = (activity = {}) => activity.reported_cost_sessions ? `${activity.reported_cost_coverage < 1 ? "≥ " : ""}${money(activity.cost_usd_reported_sum)} · ${percent(activity.reported_cost_coverage)}` : "N/A";
 const activityTokens = (activity = {}) => `${integer(activity.tokens_total)}${activity.usage_incomplete_sessions > 0 ? " · partial" : ""}`;
@@ -694,11 +694,13 @@ function effortScores(projects, now) {
   const tokens = (rows) => rows.reduce((sum, session) => sum + (session.total_tokens || 0), 0);
   const completeUsage = judged.every((session) => session.usage_complete === true &&
     Number.isFinite(session.total_tokens) && session.total_tokens >= 0);
+  const judgedTokens = tokens(judged), enoughTokens = tokens(enough);
   const every = projects.flatMap((project) => project.observatory?.sessions || []);  // a 30-day window only matures on older sessions
   const mature = every.map((session) => session.durability?.["30"]).filter((window) => window?.status === "mature" && window.lines_added);
   const added = mature.reduce((sum, window) => sum + window.lines_added, 0);
   const calibrated = projects.filter((project) => calibrationsOf([project]).length).length;
-  return { quota: completeUsage && tokens(judged) ? tokens(enough) / tokens(judged) : null, enough: enough.length, judged: judged.length, sessions: sessions.length,
+  return { quota: completeUsage && Number.isFinite(judgedTokens) && Number.isFinite(enoughTokens) && judgedTokens > 0
+             ? enoughTokens / judgedTokens : null, enough: enough.length, judged: judged.length, sessions: sessions.length,
            lines: added ? mature.reduce((sum, window) => sum + window.lines_surviving, 0) / added : null, calibrated, repositories: projects.length,
            blinded: every.some((session) => typeof session.durability === "string") };
 }

@@ -68,6 +68,11 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Recognized cache-only deltas retain allocation uncertainty before primary-counter fallback and duplicate suppression.
+  Unidentified historical activity keeps its timestamp fallback when merged with named logs.
+- Shared native usage checks and checked token subtotals keep unrepresentable aggregates unavailable across pricing,
+  summaries, routes and the dashboard. Known finite subtotals and explicit zero remain supported.
+  Token-weighted quota rejects unrepresentable denominators, and invalid provided Kimi/Gemini counters stay incomplete.
 - Counter timestamps survive duplicate suppression, and untimed Claude usage or cost retains window uncertainty.
   Required cumulative cache baselines and normalized Claude cache tiers are validated before pricing.
   Contradictory cache tiers preserve known primary and aggregate usage with tier pricing unavailable.

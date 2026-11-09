@@ -51,10 +51,30 @@ def empty_usage():
     return {key: 0 for key in USAGE_KEYS}
 
 
+def checked_usage(usage):
+    """Keep unrepresentable normalized counters unavailable, including after aggregation."""
+    for key in USAGE_KEYS:
+        if key in usage and not valid_number(usage[key]):
+            usage[key] = None
+            usage["usage_complete"] = False
+    return usage
+
+
+def known_token_total(values):
+    """Preserve known integer subtotals, with an unavailable result for an unusable aggregate."""
+    values = list(values)
+    known = [int(value) for value in values if valid_number(value)]
+    if values and not known:
+        return None
+    total = sum(known)
+    return total if valid_number(total) else None
+
+
 def pricing_request(session):
     usage = session.get("usage", {})
     if (usage.get("usage_complete") is False or usage.get("cache_write_tiers_complete") is False
-            or usage.get("price_allocation_complete") is False):
+            or usage.get("price_allocation_complete") is False
+            or any(key in usage and not valid_number(usage[key]) for key in USAGE_KEYS)):
         return None
     cached = int(safe_number(usage.get("cached_input_tokens")))
     cache_write = int(safe_number(usage.get("cache_write_input_tokens")))
@@ -63,13 +83,15 @@ def pricing_request(session):
         prompt -= cached + cache_write
         if prompt < 0:
             return None
+    completion = known_token_total((usage.get("output_tokens", 0),
+                                   0 if usage.get("output_includes_reasoning", True)
+                                   else usage.get("reasoning_output_tokens", 0)))
+    if completion is None:
+        return None
     return {
         "model": session.get("model"),
         "prompt_tokens": prompt,
-        "completion_tokens": int(safe_number(usage.get("output_tokens"))) + (
-            0 if usage.get("output_includes_reasoning", True)
-            else int(safe_number(usage.get("reasoning_output_tokens")))
-        ),
+        "completion_tokens": completion,
         "cache_read_input_tokens": cached,
         "cache_creation_input_tokens": cache_write,
         "cache_creation_1h_input_tokens": int(safe_number(usage.get("cache_write_1h_input_tokens"))),
@@ -332,6 +354,8 @@ class CodexLog:
             last = info.get("last_token_usage")
             absent = last is None or (isinstance(last, dict) and not any(
                 key in last for key in ("input_tokens", "output_tokens", "total_tokens")))
+            if absent and isinstance(last, dict) and not codex_allocation_valid(counts(last, USAGE_KEYS)):
+                self.price_anomalies.add(stamp)
             total_ok, last_ok = codex_usage_complete(total), absent or codex_usage_complete(last)
             if total and total == self.previous:
                 if not total_ok or not last_ok:
@@ -409,7 +433,7 @@ class CodexLog:
             "model": model,
             "effort": effort,
             "effort_segments": list(self.segments),
-            "usage": usage,
+            "usage": checked_usage(usage),
             "active_intervals": active_intervals(self.stamps, gap_s),
         }
 
@@ -533,7 +557,7 @@ class ClaudeLog:
             "model": model,
             "effort": effort,
             "effort_segments": list(self.segments),
-            "usage": usage,
+            "usage": checked_usage(usage),
             "cost_usd_reported": latest - baseline if valid and inside and baseline is not None else None,
             "active_intervals": active_intervals(self.stamps, gap_s),
             "subagent": self.in_subagents or meta["sidechain"],
@@ -568,6 +592,8 @@ def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
             if row.get("type") != "usage.record" or row.get("time", 0) < cutoff_ms or not isinstance(raw, dict):
                 continue
             model = row.get("model") or model
+            usage["usage_complete"] &= all(key not in raw or valid_number(raw[key]) for key in (
+                "inputOther", "inputCacheRead", "inputCacheCreation", "output"))
             usage["input_tokens"] += int(safe_number(raw.get("inputOther")))
             usage["cached_input_tokens"] += int(safe_number(raw.get("inputCacheRead")))
             usage["cache_write_input_tokens"] += int(safe_number(raw.get("inputCacheCreation")))
@@ -585,7 +611,7 @@ def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
         "started_at": datetime.fromtimestamp(started_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z") if started_ms else None,
         "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
         "status": "active" if active else "idle", "model": model or "unmeasured",
-        "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
+        "effort": "unmeasured", "usage": checked_usage(usage), "cost_usd_reported": None,
         "active_intervals": active_intervals(stamps, gap_s),
     }
 
@@ -613,6 +639,8 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
         if row.get("type") != "gemini" or not stamp or stamp < cutoff or not isinstance(raw, dict):
             continue
         model = row.get("model") or model
+        usage["usage_complete"] &= all(key not in raw or valid_number(raw[key]) for key in (
+            "input", "tool", "cached", "output", "thoughts", "total"))
         usage["input_tokens"] += int(safe_number(raw.get("input"))) + int(safe_number(raw.get("tool")))
         usage["cached_input_tokens"] += int(safe_number(raw.get("cached")))
         usage["output_tokens"] += int(safe_number(raw.get("output")))
@@ -624,7 +652,7 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
         "cwd": cwd, "started_at": meta.get("startTime"),
         "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
         "status": "active" if active else "idle", "model": model or "unmeasured",
-        "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
+        "effort": "unmeasured", "usage": checked_usage(usage), "cost_usd_reported": None,
         "active_intervals": active_intervals(stamps, gap_s),
     }
 
@@ -665,14 +693,14 @@ def empty_summary(window_hours):
 
 
 def summarize(sessions, window_hours):
+    sessions = [{**item, "usage": checked_usage(dict(item["usage"]))} for item in sessions]
     result = empty_summary(window_hours)
     result["sessions"] = len(sessions)
     result["active_sessions"] = sum(item["status"] == "active" for item in sessions)
     result["idle_sessions"] = len(sessions) - result["active_sessions"]
     result["usage_incomplete_sessions"] = sum(item["usage"].get("usage_complete") is not True for item in sessions)
-    for item in sessions:
-        for key in USAGE_KEYS:
-            result[key] += int(safe_number(item["usage"].get(key)))
+    for key in USAGE_KEYS:
+        result[key] = known_token_total(item["usage"].get(key, 0) for item in sessions)
     result["tokens_total"] = result.pop("total_tokens")
     priced = [item for item in sessions if item.get("cost_usd_estimate") is not None]
     result["priced_sessions"] = len(priced)
@@ -689,16 +717,17 @@ def summarize(sessions, window_hours):
     routes = {}
     for item in sessions:
         key = (item["runtime_provider"], item["model"], item["effort"])
-        row = routes.setdefault(key, {"provider": key[0], "model": key[1], "effort": key[2], "sessions": 0, "tokens": 0, "cost_usd_estimate": 0, "priced_sessions": 0})
+        row = routes.setdefault(key, {"provider": key[0], "model": key[1], "effort": key[2], "sessions": 0, "token_counts": [], "cost_usd_estimate": 0, "priced_sessions": 0})
         row["sessions"] += 1
-        row["tokens"] += item["usage"].get("total_tokens", 0)
+        row["token_counts"].append(item["usage"].get("total_tokens", 0))
         if item.get("cost_usd_estimate") is not None:
             row["cost_usd_estimate"] = harness_report._money_total((row["cost_usd_estimate"], item["cost_usd_estimate"]))
             row["priced_sessions"] += 1
-    result["routes"] = sorted(routes.values(), key=lambda row: (-row["tokens"], row["provider"], row["model"]))
-    for row in result["routes"]:
+    for row in routes.values():
+        row["tokens"] = known_token_total(row.pop("token_counts"))
         row["cost_usd_estimate"] = (round(row["cost_usd_estimate"], 6)
                                     if row["cost_usd_estimate"] is not None and row["priced_sessions"] == row["sessions"] else None)
+    result["routes"] = sorted(routes.values(), key=lambda row: (-(row["tokens"] or 0), row["provider"], row["model"]))
     result["recent_sessions"] = sorted(sessions, key=lambda item: item.get("updated_at") or "", reverse=True)[:20]
     return result
 

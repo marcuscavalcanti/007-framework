@@ -221,9 +221,10 @@ def load(store):
         key = (row.get("source"), root(row.get("session_id"), row.get("project_id")) if codex else row.get("session_id"), row.get("project_id"))
         log = _log_id(row)
         if log is None:
-            spans.setdefault(key, []).extend(row.get("active_intervals") or [])
+            fallback = [list(span) for span in choice_observatory._spans(row, 0)]
+            spans.setdefault(key, []).extend(fallback)
             sources.setdefault(key, []).append(row)
-            uncertain.setdefault(key, []).extend(row.get("active_intervals") or [])
+            uncertain.setdefault(key, []).extend(fallback)
         elif row.get("active_intervals") and newer(row, logs.get((key, log))):
             logs[(key, log)] = row
         if newer(row, latest.get(key)):

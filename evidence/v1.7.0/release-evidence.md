@@ -110,6 +110,17 @@ when finite cache tiers contradict their allocation. The final integrated native
 run passed 885 tests without skips in 223.664 seconds. Final record, manifest,
 distribution, remote checks and fresh independent review are qualified separately.
 
+Candidate `56e7d21b4eb8b7b547bf6fccc3a61e1d7d837563` received FIX FIRST
+in its single authorized review. The three source counterexamples were reproduced
+before correction. Recognized cache-only deltas now retain pricing uncertainty,
+and unidentified historical rows preserve their timestamp fallback during merging.
+Shared native counter validation and checked subtotals keep unrepresentable
+aggregates unavailable while preserving finite known subtotals and explicit zero.
+The pricing, summary, route and dashboard readers enforce those boundaries.
+The final native run passed 891 tests without skips in 170.918 seconds, and
+54 JavaScript tests passed. Final record, manifest, distribution, remote checks
+and fresh independent review are qualified separately.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

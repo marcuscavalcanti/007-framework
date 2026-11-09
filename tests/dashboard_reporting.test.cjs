@@ -42,6 +42,14 @@ test('partial native consumption is labelled in the overview and each affected p
   assert.equal(r.text('activity-tokens'), '123');
 });
 
+test('unavailable native token aggregates render as N/A while explicit zero stays zero', () => {
+  const r = renderer();
+  vm.runInContext('renderRuntimeActivity({tokens_total:null,usage_incomplete_sessions:1})', r.context);
+  assert.match(r.text('activity-tokens'), /N\/A.*partial/);
+  vm.runInContext('renderRuntimeActivity({tokens_total:0,usage_incomplete_sessions:0})', r.context);
+  assert.equal(r.text('activity-tokens'), '0');
+});
+
 test('economic totals come from the complete cohort, not accepted-only legacy sums', () => {
   const r = renderer();
   vm.runInContext('renderMetrics({cost_usd_known_sum:2, cost_usd_known_tasks:1, tasks:2, economics:{cost_basis:"api-equivalent", cost_usd_known_sum:10, cost_usd_known_tasks:2, cost_coverage:1, cohort_tasks:2, accepted_declared:1, open_tasks:0, reasons:[], cost_usd_per_declared_accepted:10, cost_usd_per_reliable_declared:null}})', r.context);
@@ -547,6 +555,17 @@ test('quota weighting remains unavailable when any judged usage is partial or le
     r.context.completeness = completeness;
     vm.runInContext('snapshotFixture.projects[0].observatory.sessions[0].usage_complete = completeness', r.context);
     assert.equal(vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at)).quota', r.context), null);
+  }
+});
+
+test('quota weighting rejects unrepresentable sums and preserves coherent controls', () => {
+  const r = renderer();
+  const started_at = '2026-11-09T12:00:00Z';
+  for (const [tokens, expected] of [[1e308, null], [10, .5], [0, null]]) {
+    r.context.projects = [{ observatory: { sessions: ['good-choice', 'above-necessary'].map(verdict => ({
+      started_at, total_tokens: tokens, usage_complete: true, questions: [null, null, { verdict }],
+    })) } }];
+    assert.equal(vm.runInContext('effortScores(projects, Date.parse("2026-11-09T12:00:00Z")).quota', r.context), expected);
   }
 });
 

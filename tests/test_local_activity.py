@@ -405,6 +405,104 @@ class LocalActivityTests(unittest.TestCase):
             self.assertTrue(result["usage"]["usage_complete"])
             self.assertIsNone(activity.pricing_request(result))
 
+    def test_cache_only_codex_deltas_validate_allocations_before_fallback_and_dedup(self):
+        activity = self.module()
+        keys = ("cached_input_tokens", "cache_write_input_tokens",
+                "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")
+        for key in keys:
+            for value, priced in ((-1, False), (False, False), (10 ** 400, False), (1, False), (0, True)):
+                for repeated in (False, True):
+                    with self.subTest(key=key, kind=type(value).__name__, priced=priced, repeated=repeated):
+                        with tempfile.TemporaryDirectory() as tmp:
+                            rows = codex_rows("cache-only", tmp)[:3]
+                            event = {"type": "event_msg", "timestamp": "2026-08-30T14:05:00Z", "payload": {
+                                "type": "token_count", "info": {
+                                    "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 40,
+                                                          "output_tokens": 20, "total_tokens": 120},
+                                    "last_token_usage": {key: value}}}}
+                            filename = Path(tmp, "cache-only.jsonl")
+                            write_jsonl(filename, rows + [event] * (2 if repeated else 1))
+                            result = activity.parse_codex_session(filename, NOW)
+                            self.assertEqual(result["usage"]["total_tokens"], 120)
+                            self.assertTrue(result["usage"]["usage_complete"])
+                            self.assertEqual(activity.pricing_request(result) is not None, priced)
+
+    def test_claude_counter_aggregation_exposes_unrepresentable_usage(self):
+        activity = self.module()
+        for amount, expected in ((10 ** 308, None), (10, 20), (0, 0)):
+            with self.subTest(representable=expected is not None), tempfile.TemporaryDirectory() as tmp:
+                filename = Path(tmp, "counter-sum.jsonl")
+                rows = [{"type": "assistant", "sessionId": "counter-sum", "cwd": tmp,
+                         "timestamp": "2026-08-30T14:00:00Z", "message": {
+                             "id": str(index), "model": "claude-test",
+                             "usage": {"input_tokens": amount, "output_tokens": 0}}} for index in range(2)]
+                write_jsonl(filename, rows)
+                result = activity.parse_claude_session(filename, NOW)
+                self.assertEqual(result["usage"]["input_tokens"], expected)
+                self.assertEqual(result["usage"]["total_tokens"], expected)
+                self.assertEqual(result["usage"]["usage_complete"], expected is not None)
+                request = activity.pricing_request(result)
+                self.assertEqual(request is not None, expected is not None)
+                if request:
+                    self.assertEqual(request["prompt_tokens"], expected)
+                summary = activity.summarize([result], 24)
+                self.assertEqual(summary["tokens_total"], expected)
+                self.assertEqual(summary["routes"][0]["tokens"], expected)
+                self.assertEqual(summary["usage_incomplete_sessions"], int(expected is None))
+
+    def test_activity_token_totals_preserve_known_subtotals_without_overflow(self):
+        activity = self.module()
+        cases = [([10 ** 308, 10 ** 308], None, 0), ([None], None, 1),
+                 ([None, 20], 20, 1), ([10, 10], 20, 0), ([0, 0], 0, 0)]
+        for amounts, expected, incomplete in cases:
+            with self.subTest(case=incomplete, expected=expected):
+                sessions = [{"session_id": str(index), "source": "claude", "status": "idle",
+                             "runtime_provider": "anthropic", "model": "test", "effort": "medium",
+                             "usage": {**activity.empty_usage(), "input_tokens": amount,
+                                       "total_tokens": amount, "usage_complete": amount is not None}}
+                            for index, amount in enumerate(amounts)]
+                summary = activity.summarize(sessions, 24)
+                self.assertEqual(summary["tokens_total"], expected)
+                self.assertEqual(summary["input_tokens"], expected)
+                self.assertEqual(summary["routes"][0]["tokens"], expected)
+                self.assertEqual(summary["usage_incomplete_sessions"], incomplete)
+                json.dumps(summary, allow_nan=False)
+
+    def test_pricing_rejects_unrepresentable_counters_and_completion_sums(self):
+        activity = self.module()
+        for usage in ({"input_tokens": 2 * 10 ** 308, "output_tokens": 0},
+                      {"input_tokens": 0, "output_tokens": 10 ** 308,
+                       "reasoning_output_tokens": 10 ** 308, "output_includes_reasoning": False}):
+            with self.subTest(keys=sorted(usage)):
+                self.assertIsNone(activity.pricing_request({"model": "test", "usage": usage}))
+
+    def test_other_native_adapters_keep_aggregate_and_invalid_counter_uncertainty(self):
+        activity = self.module()
+        cases = ((10 ** 308, None, False), (10, 20, True), (0, 0, True), (-1, 0, False))
+        for source in ("kimi", "gemini"):
+            for amount, expected, complete in cases:
+                with self.subTest(source=source, expected=expected, complete=complete), tempfile.TemporaryDirectory() as tmp:
+                    if source == "kimi":
+                        filename = Path(tmp, "state.json")
+                        write_json(filename, {"id": "counter-sum", "cwd": tmp,
+                                             "createdAt": int(NOW.timestamp() * 1000) - 60000,
+                                             "updatedAt": int(NOW.timestamp() * 1000)})
+                        write_jsonl(Path(tmp, "agents/main/wire.jsonl"), [
+                            {"type": "usage.record", "time": int(NOW.timestamp() * 1000),
+                             "model": "kimi-test", "usage": {"inputOther": amount, "output": 0}}
+                            for _ in range(2)])
+                        result = activity.parse_kimi_session(filename, NOW)
+                    else:
+                        filename = Path(tmp, "session.jsonl")
+                        write_jsonl(filename, [{"sessionId": "counter-sum", "startTime": "2026-08-30T14:00:00Z"}] + [
+                            {"type": "gemini", "timestamp": "2026-08-30T14:01:00Z", "model": "gemini-test",
+                             "tokens": {"input": amount, "output": 0, "total": amount}} for _ in range(2)])
+                        result = activity.parse_gemini_session(filename, tmp, NOW)
+                    self.assertEqual(result["usage"]["input_tokens"], expected)
+                    self.assertEqual(result["usage"]["total_tokens"], expected)
+                    self.assertEqual(result["usage"]["usage_complete"], complete)
+                    self.assertEqual(activity.pricing_request(result) is not None, complete)
+
     def test_primary_usage_and_price_allocation_have_separate_completeness(self):
         activity = self.module()
         cases = [("increment", 80, 0, False), ("increment", 80, 80, True),

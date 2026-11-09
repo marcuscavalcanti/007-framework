@@ -126,7 +126,7 @@ class ObservatoryHistoryTests(unittest.TestCase):
         repo = self.git_repo("project-alpha")
         pid = f"git:{repo}"
         self.hist.record(self.store, [{"source": "claude", "session_id": "s", "project_id": pid, "cwd": str(repo), "model": "m",
-                                       "effort": "high", "started_at": T0, "updated_at": T0 + 200, "total_tokens": 1,
+                                       "effort": "high", "subagent": False, "started_at": T0, "updated_at": T0 + 200, "total_tokens": 1,
                                        "reasoning_output_tokens": 0}])
         rows = self.hist.report(self.store, [], pid, allowed={pid}, now=T0 + 40 * 86400, slack_s=0)
         self.assertEqual((len(rows), rows[0]["evidence_level"]), (1, 1))
@@ -264,6 +264,32 @@ class ObservatoryHistoryTests(unittest.TestCase):
                                         now=T0 + 40 * 86400, slack_s=0)
                 self.assertEqual(len(row["commits"]), 1)
                 self.assertFalse(row["attribution_uncertain"])
+
+    def test_unidentified_legacy_fallback_survives_a_fresh_named_log(self):
+        repo = self.git_repo("legacy-fallback", commit_at=T0 + 5000)
+        entries = [{"project_id": "p1", "path": str(repo)}]
+        for mode, owned in (("missing-intervals", False), ("explicit-intervals", False), ("identified-main", True)):
+            with self.subTest(mode=mode):
+                store = Path(self.tmp.name, mode + ".jsonl")
+                legacy = self.codex_row("S", source="claude")
+                if mode == "explicit-intervals":
+                    legacy["active_intervals"] = [[T0, T0 + 9000]]
+                elif mode == "identified-main":
+                    legacy["subagent"] = False
+                rival = self.codex_row("R", subagent=False, log_id="R",
+                                       active_intervals=[[T0 + 4900, T0 + 5100]])
+                current = {**legacy, "subagent": False, "log_id": "S",
+                           "active_intervals": [[T0, T0 + 60], [T0 + 8000, T0 + 9000]]}
+                self.hist.record(store, [legacy, rival])
+                before = store.read_bytes()
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(next(row for row in rows if row["session_id"] == "R")["commits"], [])
+                self.hist.record(store, [current])
+                self.assertTrue(store.read_bytes().startswith(before))
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                rival_result = next(row for row in rows if row["session_id"] == "R")
+                self.assertEqual(len(rival_result["commits"]), int(owned))
+                self.assertEqual(len(rival_result["ambiguous_commits"]), int(not owned))
 
     def test_codex_children_and_reviews_join_their_root_session_even_when_stored_under_their_own_id(self):
         repo = self.git_repo("project-delta", commit_at=T0 + 5000)
