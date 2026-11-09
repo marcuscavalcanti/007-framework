@@ -196,6 +196,39 @@ class LabRunAccountingTests(unittest.TestCase):
                 self.assertIn(result["stop"], {"unreadable-dispatch-history", "ambiguous-dispatch-history"})
                 self.assertEqual(self.calls, 0)
 
+    def test_case_aliases_use_the_output_filesystems_naming_rules(self):
+        probe = self.root / "CaseProbe"
+        probe.write_bytes(b"synthetic")
+        sensitive = not (self.root / "caseprobe").exists()
+        probe.unlink()
+        self.config.write_text(json.dumps({"seed": 1, "tasks": [{"id": "case"}],
+                                           "arms": {"high": {}, "HIGH": {}}}))
+        def run():
+            return lab.run(self.config, self.root / "case-output", replicates=1, jobs=1, max_calls=2,
+                           max_usd=10, stop_usd=1, execute=self.execute)
+        if sensitive:
+            self.assertEqual(run()["calls"], 2)
+        else:
+            with self.assertRaisesRegex(ValueError, "artifact"):
+                run()
+            self.assertEqual(self.calls, 0)
+
+    def test_case_alias_guard_covers_both_execution_entrypoints(self):
+        self.config.write_text(json.dumps({"seed": 1, "tasks": [{"id": "case"}],
+                                           "arms": {"high": {}, "HIGH": {}}}))
+        with mock.patch.object(lab.replay_eval, "artifact_case_sensitive", return_value=False, create=True):
+            with self.assertRaisesRegex(ValueError, "artifact"):
+                self.run_lab(self.root / "forced-lab")
+            self.assertEqual(self.calls, 0)
+            argv = ["replay_eval.py", "--set", str(self.config), "run", "--arms", "high,HIGH",
+                    "--replicates", "1", "--out", str(self.root / "forced-replay")]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(sys, "stdout"), \
+                    mock.patch.object(lab.replay_eval, "execute_cell", return_value={"valid": True}) as execute, \
+                    mock.patch.object(lab.replay_eval, "write_summary"):
+                with self.assertRaisesRegex(ValueError, "artifact"):
+                    lab.replay_eval.main()
+                execute.assert_not_called()
+
 
 class LabEndToEnd(unittest.TestCase):
     def setUp(self):
@@ -235,6 +268,18 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual((result["contrast"]["medium"]["accepted"], result["contrast"]["high"]["accepted"]), (1, 1))
         self.assertEqual((result["contrast"]["medium"]["durable"], result["contrast"]["high"]["durable"]), (0, 1))
         self.assertEqual(result["verdict"]["durability"], "NO-INFORMATION")  # one task can prove nothing
+
+    def test_report_uses_the_shared_classifier_for_receipt_like_arm_names(self):
+        self.config["arms"]["high.runner"] = self.config["arms"].pop("high")
+        self.config["compare"]["reference"] = "high.runner"
+        output = self.root / "suffix-lab"
+        lab.mine(self.config, output, 1)
+        path, results = output / "replay-set.json", self.root / "suffix-results"
+        state = lab.run(path, results, replicates=1, jobs=1, max_calls=2, max_usd=10, stop_usd=1)
+        self.assertEqual((state["calls"], state["invalid"]), (2, 0))
+        lab.sensitivity(path, 1)
+        report = lab.report(path, results, None)
+        self.assertEqual(report["orphan_receipts"], [])
 
     def test_chain_creates_private_outputs_and_preserves_existing_directory_permissions(self):
         config_path = self.root / "chain-input.json"
@@ -337,6 +382,43 @@ class LabEndToEnd(unittest.TestCase):
 
 
 class Budget(unittest.TestCase):
+    def test_invalid_budget_operands_are_rejected_before_dispatch(self):
+        cases = [(value, 1) for value in (float("nan"), float("inf"), -1, False)]
+        cases += [(0, value) for value in (float("nan"), float("inf"), -1, False)]
+        for maximum, reserve in cases:
+            with self.subTest(max_type=type(maximum).__name__, reserve_type=type(reserve).__name__), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                execute = mock.Mock(side_effect=self.fake(cost=0)[0])
+                output = root / "out"
+                with self.assertRaisesRegex(ValueError, "budget"):
+                    lab.run(self.config(root), output, replicates=1, jobs=1, max_calls=1,
+                            max_usd=maximum, stop_usd=reserve, execute=execute)
+                execute.assert_not_called()
+                self.assertFalse((output / "dispatch.jsonl").exists())
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            execute = mock.Mock(side_effect=self.fake()[0])
+            result = lab.run(self.config(root), root / "zero", replicates=1, jobs=1, max_calls=1,
+                             max_usd=0, stop_usd=1, execute=execute)
+            self.assertEqual((result["stop"], result["calls"]), ("usd-budget", 0))
+            execute.assert_not_called()
+
+    def test_invalid_control_limits_are_rejected_before_dispatch(self):
+        cases = [(name, value) for name in ("jobs", "replicates", "max_calls", "max_invalid")
+                 for value in (-1, False, 1.5)]
+        cases += [("timeout_s", value) for value in (0, -1, False, float("nan"), float("inf"))]
+        for name, value in cases:
+            with self.subTest(name=name, value_type=type(value).__name__), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                options = {"replicates": 1, "jobs": 1, "max_calls": 1, "max_invalid": 3,
+                           "timeout_s": 30, "max_usd": 10, "stop_usd": 1, name: value}
+                execute = mock.Mock(side_effect=self.fake(cost=0)[0])
+                output = root / "out"
+                with self.assertRaisesRegex(ValueError, "limit"):
+                    lab.run(self.config(root), output, execute=execute, **options)
+                execute.assert_not_called()
+                self.assertFalse((output / "dispatch.jsonl").exists())
+
     def config(self, root, tasks=4):
         path = root / "set.json"
         path.write_text(json.dumps({"seed": 1, "arms": {"a": {}, "b": {}}, "tasks": [{"id": f"T{i}"} for i in range(tasks)]}))

@@ -234,6 +234,81 @@ class LocalActivityTests(unittest.TestCase):
             self.assertFalse(result["usage"]["usage_complete"])
             self.assertIsNone(activity.pricing_request(result))
 
+    def test_cumulative_only_windows_require_continuity(self):
+        activity = self.module()
+        for totals, complete in (((0,), False), ((0, 240), False), ((120,), True), ((240,), True)):
+            with self.subTest(totals=totals), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("reset", tmp)[:3]
+                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T12:00:00Z"
+                observations = [("2026-08-29T14:59:00Z", 120)]
+                observations += [(f"2026-08-30T14:0{i}:00Z", total) for i, total in enumerate(totals, 1)]
+                for stamp, total in observations:
+                    rows.append({"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": {
+                        "total_token_usage": {"input_tokens": total * 5 // 6, "output_tokens": total // 6,
+                                              "total_tokens": total}}}})
+                path = Path(tmp, "reset.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["usage_complete"], complete)
+                self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_primary_usage_and_price_allocation_have_separate_completeness(self):
+        activity = self.module()
+        cases = [("increment", 80, 0, False), ("increment", 80, 80, True),
+                 ("increment", 180, 180, False), ("cumulative", 80, 0, False),
+                 ("cumulative", 80, 160, True)]
+        for mode, first_cache, second_cache, price_ok in cases:
+            with self.subTest(mode=mode, first=first_cache, second=second_cache), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("cache-allocation", tmp)[:3]
+                if mode == "cumulative":
+                    rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T12:00:00Z"
+                    rows.append({"timestamp": "2026-08-29T14:59:00Z", "type": "event_msg", "payload": {
+                        "type": "token_count", "info": {"total_token_usage": {"input_tokens": 100,
+                        "output_tokens": 20, "total_tokens": 120, "cached_input_tokens": first_cache}}}})
+                    info = {"total_token_usage": {"input_tokens": 200, "output_tokens": 40,
+                                                   "total_tokens": 240, "cached_input_tokens": second_cache}}
+                else:
+                    info = {"total_token_usage": {"input_tokens": 100, "output_tokens": 20,
+                                                   "total_tokens": 120, "cached_input_tokens": first_cache},
+                            "last_token_usage": {"input_tokens": 100, "output_tokens": 20,
+                                                  "total_tokens": 120, "cached_input_tokens": second_cache}}
+                rows.append({"timestamp": "2026-08-30T14:01:00Z", "type": "event_msg",
+                             "payload": {"type": "token_count", "info": info}})
+                path = Path(tmp, "cache-allocation.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertTrue(result["usage"]["usage_complete"])
+                request = activity.pricing_request(result)
+                self.assertEqual(request is not None, price_ok)
+                if request:
+                    self.assertEqual((request["prompt_tokens"], request["cache_read_input_tokens"]), (20, 80))
+
+    def test_extreme_native_counters_are_incomplete_instead_of_breaking_collection(self):
+        activity = self.module()
+        for value in (10 ** 400, float("inf"), float("nan"), -1, False):
+            with self.subTest(counter_type=type(value).__name__), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("invalid-counter", tmp)
+                rows[-2]["payload"]["info"]["total_token_usage"]["input_tokens"] = value
+                path = Path(tmp, "invalid-counter.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertFalse(result["usage"]["usage_complete"])
+                self.assertIsNone(activity.pricing_request(result))
+
+    def test_untimed_counter_observation_cannot_qualify_a_window(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("untimed", tmp)[:3]
+            rows.append({"type": "event_msg", "payload": {"type": "token_count", "info": {
+                "total_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}}}})
+            path = Path(tmp, "untimed.jsonl")
+            write_jsonl(path, rows)
+            result = activity.parse_codex_session(path, NOW)
+            self.assertEqual(result["usage"]["total_tokens"], 120)
+            self.assertFalse(result["usage"]["usage_complete"])
+            self.assertIsNone(activity.pricing_request(result))
+
     def test_claude_aggregate_cache_writes_survive_optional_tiers_without_pricing_unknown_tiers(self):
         activity = self.module()
         cases = [({"cache_creation_input_tokens": 30}, 30, False),

@@ -58,7 +58,10 @@ RAW_METRICS = (
 
 
 def is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def is_known_label(value):
@@ -1281,7 +1284,7 @@ def lab_experiment(name, directories):
         cost = (receipt or {}).get("cost_usd")
         source = (receipt or {}).get("cost_source")
         accounted = is_known_label(source) and source != "unavailable"
-        item["cost"] = cost if accounted and is_number(cost) and cost >= 0 else None
+        item["cost"] = cost if accounted and harness_report._valid_money(cost) else None
     priced = [item for item in rows if item["cost"] is not None]
     return {
         "name": name, "available": True, "error": None,
@@ -1292,8 +1295,9 @@ def lab_experiment(name, directories):
         "valid": sum(item.get("valid") is True for item in rows),
         "invalid": sum(item.get("valid") is False for item in rows),
         "orphans": sum("valid" not in item for item in rows),
-        "cost_usd": round(sum(item["cost"] for item in priced), 6),
-        "invalid_cost_usd": round(sum(item["cost"] for item in priced if item.get("valid") is not True), 6),
+        "cost_usd": round(float(harness_report._money_sum(item["cost"] for item in priced)), 6),
+        "invalid_cost_usd": round(float(harness_report._money_sum(
+            item["cost"] for item in priced if item.get("valid") is not True)), 6),
         "unpriced": len(rows) - len(priced),
         "cost_sources": dict(Counter(item["receipt"]["cost_source"] for item in priced
                                      if item.get("receipt") and is_known_label(item["receipt"].get("cost_source")))),
@@ -1323,8 +1327,12 @@ def load_lab_ledger(config=None):
         except ValueError:
             ledger["experiments"].append({"name": name, "available": False, "error": "unreadable receipt or result"})
     available = [item for item in ledger["experiments"] if item["available"]]
-    return {**ledger, "configured": bool(ledger["experiments"]), "total_cost_usd": round(sum(item["cost_usd"] for item in available), 6),
-            "total_complete": len(available) == len(ledger["experiments"]) and not any(
+    try:
+        total = round(float(harness_report._money_sum(item["cost_usd"] for item in available)), 6)
+    except ValueError:
+        total = None
+    return {**ledger, "configured": bool(ledger["experiments"]), "total_cost_usd": total,
+            "total_complete": total is not None and len(available) == len(ledger["experiments"]) and not any(
                 item["unpriced"] or item["dispatch_errors"] for item in available)}
 
 

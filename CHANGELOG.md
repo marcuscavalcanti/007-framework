@@ -68,6 +68,10 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Lineage prefers current project-local identities and uses cross-project parent information only when unambiguous.
+  Cumulative usage requires continuity. Contradictory cache allocation keeps primary totals available and pricing unknown.
+- Replay preflight checks the target filesystem's case rules, and the lab report reuses the shared receipt classifier.
+  Numeric execution limits are validated before output/dispatch. Ledger readers and sums handle oversized values safely.
 - CI runs on pull requests, `main` pushes and version tags, avoiding a second full run for each development-branch push.
 - Recovery preserves unavailable-cost, per-cell and invalid-count stops before dispatch. Invalid numeric costs remain
   unavailable. Controllers and the ledger share timestamp and

@@ -194,21 +194,31 @@ def load(store):
     newest row with intervals, which reads the whole log: a 1.6 parse of a large log, clipped to its tail, is replaced."""
     rows = _current_rows(_rows(store))
     # a Codex child stored before 1.7 kept its own thread id as session id: a later row of the same log names its root
-    alias = {r["log_id"]: r["session_id"] for r in rows
-             if r.get("source") == "codex" and isinstance(r.get("log_id"), str)}
+    alias, global_alias = {}, {}
+    for row in rows:
+        log_id = _log_id(row) if row.get("subagent") is False else row.get("log_id")
+        if row.get("source") == "codex" and isinstance(log_id, str):
+            alias[row.get("project_id"), log_id] = row["session_id"]
+            global_alias.setdefault(log_id, set()).add(row["session_id"])
 
-    def root(session_id):
+    def root(session_id, project):
         seen = set()
-        while session_id in alias and session_id not in seen:
+        while session_id not in seen:
             seen.add(session_id)
-            session_id = alias[session_id]
+            parent = alias.get((project, session_id))
+            if parent is None:
+                candidates = global_alias.get(session_id, set())
+                parent = next(iter(candidates)) if len(candidates) == 1 else None
+            if parent is None:
+                break
+            session_id = parent
         return session_id
 
     latest, main, spans, logs, last, sources, uncertain = {}, {}, {}, {}, {}, {}, {}
     newer = lambda row, kept: kept is None or choice_observatory._ts(row["updated_at"]) >= choice_observatory._ts(kept["updated_at"])
     for row in rows:
         codex = row.get("source") == "codex"
-        key = (row.get("source"), root(row.get("session_id")) if codex else row.get("session_id"), row.get("project_id"))
+        key = (row.get("source"), root(row.get("session_id"), row.get("project_id")) if codex else row.get("session_id"), row.get("project_id"))
         log = _log_id(row)
         if log is None:
             spans.setdefault(key, []).extend(row.get("active_intervals") or [])

@@ -100,6 +100,8 @@ intended checkout before you replace them.
 
 ### Requirements by capability
 
+CI qualifies Linux and macOS. The laboratory and observatory use POSIX file locks.
+
 | Capability | Requirements |
 |---|---|
 | Core CLI, receipts and dashboard | Python 3.11+ and Git |

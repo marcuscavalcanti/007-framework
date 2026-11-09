@@ -548,6 +548,14 @@ def cost_of(out, cid, row):
 
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
     """Serialize controllers sharing an output directory before checking or publishing dispatch history."""
+    if not all(harness_report._valid_money(value) for value in (max_usd, stop_usd)):
+        raise ValueError("budget values must be finite nonnegative numbers")
+    for name, value, minimum in (("replicates", replicates, 1), ("jobs", jobs, 1),
+                                  ("max_calls", max_calls, 0), ("max_invalid", max_invalid, 1)):
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"{name} limit must be an integer >= {minimum}")
+    if not harness_report._valid_money(timeout_s) or timeout_s <= 0:
+        raise ValueError("timeout limit must be finite and positive")
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (out / ".run.lock").open("a") as handle:
         try:
@@ -566,6 +574,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     execute = execute or replay_eval.execute_cell
     ledger = out / "dispatch.jsonl"
     cells = plan(config, replicates)
+    replay_eval.validate_cell_artifacts(config["tasks"], config["arms"], replicates, directory=out)
     results, receipts = replay_eval.read_cell_artifacts(out)
     done = set(results)
     orphans = set(receipts) - done
@@ -933,7 +942,8 @@ def report(config_path, results, next_results):
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     rows = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
-    orphans = sorted({p.name[:-len(".runner.json")] for p in results.glob("*.runner.json")} - {r["cell"] for r in rows})
+    _, receipts = replay_eval.read_cell_artifacts(results)
+    orphans = sorted(set(receipts) - {r["cell"] for r in rows})
     excluded = sorted(r["cell"] for r in rows if r["valid"] is not True)
     rows = [r for r in rows if r["valid"] is True]
     if not rows:

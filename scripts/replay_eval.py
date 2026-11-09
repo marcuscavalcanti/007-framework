@@ -524,7 +524,15 @@ def is_cell_id(value):
 CELL_ARTIFACT_SUFFIXES = (".json", ".runner.json", ".observation.json", ".prompt.txt", ".candidate.patch")
 
 
-def validate_cell_artifacts(tasks, arms, replicates):
+def artifact_case_sensitive(directory):
+    with tempfile.TemporaryDirectory(prefix=".007-names-", dir=directory) as temporary:
+        root = Path(temporary)
+        (root / "CaseProbe").write_bytes(b"")
+        return not (root / "caseprobe").exists()
+
+
+def validate_cell_artifacts(tasks, arms, replicates, *, directory=None):
+    sensitive = directory is None or artifact_case_sensitive(directory)
     paths = set()
     for task in tasks:
         for replicate in range(1, replicates + 1):
@@ -532,9 +540,10 @@ def validate_cell_artifacts(tasks, arms, replicates):
                 identifier = cell_id(task, arm, replicate)
                 for suffix in CELL_ARTIFACT_SUFFIXES:
                     path = identifier + suffix
-                    if path in paths:
+                    key = path if sensitive else path.casefold()
+                    if key in paths:
                         raise ValueError("task and arm pairs must produce distinct cell identities and artifact paths")
-                    paths.add(path)
+                    paths.add(key)
 
 
 def read_cell_artifacts(directory):
@@ -1256,6 +1265,7 @@ def main():
     schedule = experiment_schedule(config, arms, replicates)
     output_dir = Path(args.out).expanduser().resolve()
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+    validate_cell_artifacts(tasks, arms, replicates, directory=output_dir)
     rows = []
     for task in tasks:
         for replicate in range(1, replicates + 1):

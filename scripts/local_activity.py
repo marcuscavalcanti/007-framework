@@ -36,7 +36,10 @@ def iso_datetime(value):
 
 
 def valid_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
 
 
 def safe_number(value):
@@ -49,13 +52,16 @@ def empty_usage():
 
 def pricing_request(session):
     usage = session.get("usage", {})
-    if usage.get("usage_complete") is False or usage.get("cache_write_tiers_complete") is False:
+    if (usage.get("usage_complete") is False or usage.get("cache_write_tiers_complete") is False
+            or usage.get("price_allocation_complete") is False):
         return None
     cached = int(safe_number(usage.get("cached_input_tokens")))
     cache_write = int(safe_number(usage.get("cache_write_input_tokens")))
     prompt = int(safe_number(usage.get("input_tokens")))
     if usage.get("input_includes_cache"):
-        prompt = max(0, prompt - cached - cache_write)
+        prompt -= cached + cache_write
+        if prompt < 0:
+            return None
     return {
         "model": session.get("model"),
         "prompt_tokens": prompt,
@@ -319,7 +325,8 @@ class CodexLog:
             return None
         now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
-        usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True}
+        usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True,
+                 "price_allocation_complete": True}
         inside = [(total, last, total_ok, last_ok) for stamp, total, last, total_ok, last_ok in self.tokens
                   if stamp and stamp >= cutoff]
         increments = [last for total, last, _, _ in inside if last is not None]
@@ -328,13 +335,6 @@ class CodexLog:
         if increments:
             usage.update({key: sum(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
             usage["usage_complete"] = all(total is not None and last is not None for total, last, _, _ in inside)
-            previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
-            for stamp, total, last, total_ok, _ in self.tokens:
-                if stamp and stamp >= cutoff and last is not None:
-                    usage["usage_complete"] &= previous is not None and total is not None and all(
-                        last[i] == total[i] - previous[i] for i, key in enumerate(USAGE_KEYS)
-                        if key in ("input_tokens", "output_tokens", "total_tokens"))
-                previous = total if total_ok else None
         elif snapshots:
             baseline = None
             if started and started < cutoff:
@@ -348,6 +348,27 @@ class CodexLog:
             usage["usage_complete"] = False
         usage["usage_complete"] &= all(total_ok and last_ok for _, _, total_ok, last_ok in inside)
         usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
+        previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
+        primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
+        allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens")]
+        for stamp, total, last, total_ok, _ in self.tokens:
+            if stamp is None:
+                usage["usage_complete"] = False
+                usage["price_allocation_complete"] = False
+            elif stamp >= cutoff:
+                if previous is None or total is None:
+                    usage["usage_complete"] = False
+                else:
+                    delta = [value - previous[i] for i, value in enumerate(total)]
+                    usage["usage_complete"] &= all(delta[i] >= 0 for i in primary)
+                    usage["price_allocation_complete"] &= all(delta[i] >= 0 for i in allocation)
+                    if last is not None:
+                        usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
+                        usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
+            previous = total if stamp is not None and total_ok else None
+        usage["price_allocation_complete"] &= usage["usage_complete"]
+        usage["price_allocation_complete"] &= (
+            usage["cached_input_tokens"] + usage["cache_write_input_tokens"] <= usage["input_tokens"])
         model, effort = labels(self.segments)
         return {
             **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at", "subagent")},

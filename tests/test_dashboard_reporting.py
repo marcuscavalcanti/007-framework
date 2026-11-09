@@ -298,6 +298,37 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(ledger["cost_usd"], 0.5)
             self.assertEqual(ledger["dispatch_errors"], 1)
 
+    def test_ledger_numeric_boundaries_keep_accounting_json_finite(self):
+        self.assertFalse(dashboard.is_number(10 ** 400))
+        self.assertTrue(dashboard.is_number(-1))
+        for cost, priced in ((10 ** 400, False), (float("nan"), False), (float("inf"), False),
+                             (-1, False), (False, False), (0, True), (0.5, True)):
+            with self.subTest(cost_type=type(cost).__name__, priced=priced), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "case-r01-high.runner.json").write_text(json.dumps({
+                    "cost_usd": cost, "cost_source": "custom:synthetic"}))
+                config = root / "config.json"
+                config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": "numeric", "results": str(root)}]}}))
+                result = dashboard.load_lab_ledger(config)
+                self.assertEqual(result["total_complete"], priced)
+                self.assertEqual(result["experiments"][0]["unpriced"], int(not priced))
+                json.dumps(result, allow_nan=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = []
+            for name in ("first", "second"):
+                directory = root / name
+                directory.mkdir()
+                (directory / "case-r01-high.runner.json").write_text(json.dumps({
+                    "cost_usd": 1e308, "cost_source": "custom:synthetic"}))
+                entries.append({"name": name, "results": str(directory)})
+            config = root / "config.json"
+            config.write_text(json.dumps({"observatory": {"lab_ledger": entries}}))
+            result = dashboard.load_lab_ledger(config)
+            self.assertFalse(result["total_complete"])
+            self.assertIsNone(result["total_cost_usd"])
+            json.dumps(result, allow_nan=False)
+
     def test_runner_suffix_results_keep_one_attempt_and_one_cost(self):
         import effort_lab
         for arm in ("high.runner", "high.observation", "high.runner.runner"):

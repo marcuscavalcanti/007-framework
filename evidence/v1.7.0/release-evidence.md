@@ -63,6 +63,18 @@ and 52 JavaScript tests. The final release-record paragraph and source manifest
 are checked separately. Distribution, remote and newly authorized independent
 review qualification of these changed bytes remain pending.
 
+Candidate `55984a336123733815813758b8000e5b450982bb` received FIX FIRST in
+its single authorized review. The next local pass covers project-local lineage,
+cumulative continuity, cache allocation, filesystem naming, numeric control and
+accounting boundaries, and the remaining report reader. The CI triggers and
+README were updated under explicit operator instructions. Focused regression
+matrices passed. The first integrated run passed 864 native Python tests
+without skips. A subsequent compatibility audit reproduced and corrected an
+explicit legacy main identity without log_id; 52 connected checks passed. The final integrated run passed 865 native Python tests without skips in
+288.964 seconds and 52 JavaScript tests. The final release-record paragraph and
+source manifest are checked separately. Exact-source distribution, remote checks
+and a newly authorized independent review remain pending.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

@@ -370,6 +370,45 @@ class ObservatoryHistoryTests(unittest.TestCase):
         self.assertEqual(by_id["parent"]["commits"], [])
         self.assertTrue(self.store.read_bytes().startswith(prefix))
 
+    def test_project_local_self_identity_wins_over_a_conflicting_remote_parent(self):
+        repo = self.git_repo("local-lineage-conflict")
+        self.hist.record(self.store, [
+            self.codex_row("child", log_id="child", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", log_id="parent", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", log_id="child", project_id="p2", subagent=True,
+                           active_intervals=[[T0 + 4800, T0 + 5200]]),
+            self.codex_row("parent", log_id="parent", project_id="p2", subagent=False,
+                           active_intervals=[[T0 + 6000, T0 + 6200]])])
+        original = self.store.read_bytes()
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual({row["session_id"] for row in rows}, {"child", "parent"})
+        for row in rows:
+            self.assertEqual(row["commits"], [])
+            self.assertEqual(len(row["ambiguous_commits"]), 1)
+            self.assertIsNone(row["durability"])
+        other, = [row for row in self.hist.load(self.store) if row["project_id"] == "p2"]
+        self.assertEqual(other["session_id"], "parent")
+        self.assertEqual(len(other["activity_sources"]), 2)
+        self.assertEqual(self.store.read_bytes(), original)
+
+    def test_legacy_main_identity_wins_over_a_conflicting_remote_parent(self):
+        repo = self.git_repo("legacy-main-lineage-conflict")
+        self.hist.record(self.store, [
+            self.codex_row("child", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", log_id="child", project_id="p2", subagent=True,
+                           active_intervals=[[T0 + 4800, T0 + 5200]])])
+        original = self.store.read_bytes()
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual({row["session_id"] for row in rows}, {"child", "parent"})
+        for row in rows:
+            self.assertEqual(row["commits"], [])
+            self.assertEqual(len(row["ambiguous_commits"]), 1)
+            self.assertIsNone(row["durability"])
+        self.assertEqual(self.store.read_bytes(), original)
+
     def test_recording_current_logs_is_idempotent_and_torn_history_keeps_new_rows_readable(self):
         parent = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
         child = self.codex_row("root", log_id="child", subagent=True, active_intervals=[[T0 + 4800, T0 + 5200]])
