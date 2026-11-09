@@ -338,8 +338,8 @@ class CodexLog:
         elif snapshots:
             baseline = None
             if started and started < cutoff:
-                before = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp <= cutoff]
-                after = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp > cutoff]
+                before = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp < cutoff]
+                after = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp >= cutoff]
                 selected = before[-1] if before else after[0] if after else None
                 baseline = selected[0] if selected else None
                 usage["usage_complete"] = (bool(before) or not after) and (selected is None or selected[1])
@@ -349,13 +349,23 @@ class CodexLog:
         usage["usage_complete"] &= all(total_ok and last_ok for _, _, total_ok, last_ok in inside)
         usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
+        previous_stamp = None
         primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
-        allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens")]
+        allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",
+                                                       "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
+        cached, written, five_minute, one_hour = allocation
         for stamp, total, last, total_ok, _ in self.tokens:
+            if stamp is not None and previous_stamp is not None and stamp < previous_stamp and previous_stamp >= cutoff:
+                usage["usage_complete"] = False
             if stamp is None:
                 usage["usage_complete"] = False
                 usage["price_allocation_complete"] = False
             elif stamp >= cutoff:
+                for observation in (total, last):
+                    if observation is not None:
+                        usage["price_allocation_complete"] &= (
+                            observation[cached] + observation[written] <= observation[primary[0]]
+                            and observation[five_minute] + observation[one_hour] <= observation[written])
                 if previous is None or total is None:
                     usage["usage_complete"] = False
                 else:
@@ -366,6 +376,7 @@ class CodexLog:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
                         usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
             previous = total if stamp is not None and total_ok else None
+            previous_stamp = stamp
         usage["price_allocation_complete"] &= usage["usage_complete"]
         usage["price_allocation_complete"] &= (
             usage["cached_input_tokens"] + usage["cache_write_input_tokens"] <= usage["input_tokens"])
@@ -434,7 +445,7 @@ class ClaudeLog:
             self.cwds.append(row["cwd"])
         cost = row.get("total_cost_usd")
         if kind == "result" and stamp:
-            valid = type(cost) in (int, float) and math.isfinite(cost) and cost >= 0
+            valid = valid_number(cost)
             self.costs.append((stamp, float(cost) if valid else None))
         message = row.get("message") if kind == "assistant" else None
         if not isinstance(message, dict):

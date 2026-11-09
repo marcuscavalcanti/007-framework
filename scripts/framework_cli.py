@@ -497,12 +497,7 @@ def validate_receipt(value, allow_cost_unavailable=False):
         if not isinstance(reason, str) or not reason:
             raise ValueError("cost_status unavailable requires cost_unavailable_reason")
     else:
-        if (
-            isinstance(cost, bool)
-            or not isinstance(cost, (int, float))
-            or not math.isfinite(cost)
-            or cost < 0
-        ):
+        if not harness_report._valid_money(cost):
             raise ValueError("cost_usd must be a non-negative measured number")
         source = value.get("cost_source")
         if not isinstance(source, str) or (

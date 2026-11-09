@@ -605,8 +605,9 @@ class DashboardTests(unittest.TestCase):
     def test_record_rejects_non_finite_or_unaccounted_cost(self):
         cli = self.module("framework_cli")
         base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
-        with self.assertRaisesRegex(ValueError, "cost_usd"):
-            cli.validate_receipt({**base, "cost_usd": float("nan")})
+        for cost in (float("nan"), 10 ** 400):
+            with self.subTest(cost_type=type(cost).__name__), self.assertRaisesRegex(ValueError, "cost_usd"):
+                cli.validate_receipt({**base, "cost_usd": cost})
         with self.assertRaisesRegex(ValueError, "cost_source"):
             cli.validate_receipt({**base, "cost_source": "unaccounted"})
         with self.assertRaisesRegex(ValueError, "authority_summary"):

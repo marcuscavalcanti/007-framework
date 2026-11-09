@@ -171,6 +171,7 @@ class ScriptContractTests(unittest.TestCase):
                 ({**exact, "served": {**policy, "model": "wrong"}}, "served-model-mismatch"),
                 ({**exact, "valid": False}, "runner-invalid"),
                 ({**exact, "cost_usd": float("nan")}, "cost-missing"),
+                ({**exact, "cost_usd": 10 ** 400}, "cost-missing"),
             ):
                 with self.subTest(expected=expected):
                     identity, failure = replay_eval.validate_served_identity(value, policy)
@@ -417,6 +418,12 @@ class ScriptContractTests(unittest.TestCase):
                 self.assertEqual(cell["dependency_manifests_changed"], [])
                 self.assertEqual(cell["binary_files_changed"], [])
                 self.assertRegex(cell["runner_receipt_sha256"], r"^[0-9a-f]{64}$")
+
+                config["agent_command"][2] = identity_script.replace("'cost_usd':0.01", "'cost_usd':10**400")
+                invalid = replay_eval.execute_cell(config, task, "NEW", 2, output, 30)
+                self.assertFalse(invalid["valid"])
+                retained = json.loads((output / "identity-cell-r02-NEW.json").read_text())
+                self.assertFalse(retained["valid"])
         finally:
             sys.path.pop(0)
 

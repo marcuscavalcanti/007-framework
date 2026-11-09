@@ -178,6 +178,25 @@ class LabRunAccountingTests(unittest.TestCase):
                         lab.replay_eval.main()
                     execute.assert_not_called()
 
+    def test_standalone_replay_rejects_nonpositive_timeouts_before_output(self):
+        for timeout in (-1, 0, 1):
+            with self.subTest(timeout=timeout):
+                output = self.root / f"timeout-{timeout}"
+                argv = ["replay_eval.py", "--set", str(self.config), "run", "--arms", "high", "--replicates", "1",
+                        "--timeout-min", str(timeout), "--out", str(output)]
+                with mock.patch.object(sys, "argv", argv), mock.patch.object(sys, "stdout"), \
+                        mock.patch.object(sys, "stderr"), \
+                        mock.patch.object(lab.replay_eval, "execute_cell", return_value={"valid": True}) as execute, \
+                        mock.patch.object(lab.replay_eval, "write_summary"):
+                    if timeout <= 0:
+                        with self.assertRaises(SystemExit):
+                            lab.replay_eval.main()
+                        execute.assert_not_called()
+                        self.assertFalse(output.exists())
+                    else:
+                        self.assertEqual(lab.replay_eval.main(), 0)
+                        self.assertEqual(execute.call_args.args[-1], 60)
+
     def test_invalid_timestamps_and_repeated_terminal_history_block_recovery(self):
         for name, history in (
                 ("invalid-time", [{"cell": "case-r01-high", "dispatched_at": "not-a-time"}]),
@@ -440,6 +459,26 @@ class Budget(unittest.TestCase):
                 live[0] -= 1
             return row
         return execute, peak
+
+    def test_spend_overflow_is_unavailable_in_live_and_recovered_accounting(self):
+        for recovering in (False, True):
+            with self.subTest(recovering=recovering), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                config = self.config(root)
+                output = root / "out"
+                if recovering:
+                    output.mkdir()
+                    populate, _ = self.fake(cost=1e308)
+                    for arm in ("a", "b"):
+                        populate({}, {"id": "T0"}, arm, 1, output, 30)
+                execute = mock.Mock(side_effect=self.fake(cost=1e308, delay=.02)[0])
+                result = lab.run(config, output, replicates=1, jobs=2, max_calls=8,
+                                 max_usd=10, stop_usd=1, execute=execute)
+                self.assertIsNotNone(result["stop"])
+                self.assertIsNone(result["spent"])
+                self.assertEqual(execute.call_count, 0 if recovering else 2)
+                stopped = json.loads((output / "STOP.json").read_text())
+                self.assertIsNone(stopped["spent"])
 
     def test_parallel_cells_never_overrun_the_money_cap(self):
         with tempfile.TemporaryDirectory() as d:

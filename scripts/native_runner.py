@@ -10,13 +10,14 @@ Stream content is never echoed or stored; only its sha256 and the normalized usa
 import argparse
 import hashlib
 import json
-import math
+from decimal import Decimal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 
 from cli_telemetry import NativeTelemetry, drain, validate_command
+import harness_report
 
 PRICE_KEYS = ("input", "cached_input", "output")
 
@@ -31,7 +32,7 @@ def price_table(path):
     ok = (isinstance(value, dict) and value.get("schema") == "007-framework/price-table/v1" and value.get("currency") == "USD"
           and type(value.get("per_tokens")) is int and value["per_tokens"] > 0 and isinstance(value.get("models"), dict)
           and all(isinstance(model, str) and isinstance(prices, dict) and set(prices) == set(PRICE_KEYS)
-                  and all(type(prices[k]) in (int, float) and math.isfinite(prices[k]) and prices[k] >= 0 for k in PRICE_KEYS)
+                  and all(harness_report._valid_money(prices[k]) for k in PRICE_KEYS)
                   for model, prices in value["models"].items()))
     if not ok:
         raise ValueError("invalid price table")
@@ -43,8 +44,11 @@ def rate_card_cost(table, model, usage):
     prices = table["models"].get(model)
     if not prices or not usage or not {"input_tokens", "cached_input_tokens", "output_tokens"} <= usage.keys():
         return None
-    return ((usage["input_tokens"] - usage["cached_input_tokens"]) * prices["input"] + usage["cached_input_tokens"]
-            * prices["cached_input"] + usage["output_tokens"] * prices["output"]) / table["per_tokens"]
+    cost = ((usage["input_tokens"] - usage["cached_input_tokens"]) * Decimal(str(prices["input"]))
+            + usage["cached_input_tokens"] * Decimal(str(prices["cached_input"]))
+            + usage["output_tokens"] * Decimal(str(prices["output"]))) / table["per_tokens"]
+    amount = float(cost)
+    return amount if harness_report._valid_money(amount) else None
 
 
 # Review r40 R2: identity is bound only when EVERY option is a listed one; anything else (other spellings, profiles, provider

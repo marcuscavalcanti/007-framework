@@ -592,13 +592,23 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
+
+    def charge(cost):
+        nonlocal spent, stop
+        if spent is not None:
+            try:
+                spent = float(harness_report._money_sum((spent, stop_usd if cost is None else cost)))
+            except ValueError:
+                spent = None
+                stop = stop or "cost-total-unavailable"
+
     for name in done:
         row = json.loads((out / f"{name}.json").read_text())
         cost = cost_of(out, name, row)
         if cost is None and row.get("valid") is True:
             stop = "cost-unavailable"
         else:
-            spent += stop_usd if cost is None else cost
+            charge(cost)
             if cost is not None and cost > stop_usd:
                 stop = stop or "cell-over-limit"
         invalid += row.get("valid") is not True
@@ -641,7 +651,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                 if cost is None and row.get("valid") is True:
                     stop = "cost-unavailable"
                 else:
-                    spent += stop_usd if cost is None else cost  # ponytail: a failed call with no receipt cost is charged its reserve
+                    charge(cost)  # A failed call with no receipt cost is charged its reserve.
                     if cost is not None and cost > stop_usd:
                         stop = "cell-over-limit"
                 if invalid >= max_invalid:

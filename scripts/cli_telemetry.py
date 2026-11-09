@@ -2,13 +2,13 @@
 
 import hashlib
 import json
-import math
 import os
 import re
 import selectors
 import sys
 import time
 from pathlib import Path
+import harness_report
 
 # Codex reports the served model only by exception, as an item: "model rerouted: <requested> -> <served> (<reason>)"
 # (codex-rs exec event_processor_with_jsonl_output.rs, from the server's openai-model header). A match is silent.
@@ -141,7 +141,7 @@ class NativeTelemetry:
                 self.result_seen = True
                 self.completed = row.get("num_turns") if type(row.get("num_turns")) is int and row["num_turns"] >= 0 else None
                 cost = row.get("total_cost_usd")
-                if cost is not None and (type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0):
+                if cost is not None and not harness_report._valid_money(cost):
                     raise ValueError("invalid-cost")
                 self.cost = cost
                 for model, values in (row.get("modelUsage") or {}).items():
@@ -149,7 +149,7 @@ class NativeTelemetry:
                         raise ValueError("invalid-model-usage")
                     self.models[model] = {key: value for key, value in values.items()
                                           if key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD")
-                                          and type(value) in (int, float) and math.isfinite(value) and value >= 0}
+                                          and harness_report._valid_money(value)}
                 if row.get("subtype") != "success" or row.get("is_error") is not False:
                     raise ValueError("native-error")
         except (ValueError, TypeError, AttributeError, UnicodeDecodeError) as error:

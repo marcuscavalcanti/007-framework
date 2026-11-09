@@ -75,6 +75,20 @@ explicit legacy main identity without log_id; 52 connected checks passed. The fi
 source manifest are checked separately. Exact-source distribution, remote checks
 and a newly authorized independent review remain pending.
 
+Candidate `222b24c586d0136721af7ca0c7a9ec063a64383d` received FIX FIRST
+in its single authorized review. The next local pass covers timestamp rewinds
+across the usage window, per-observation cache tier/allocation coherence, shared
+monetary validity in native collection, telemetry, receipts and rate cards,
+positive standalone timeouts and finite controller accounting during execution
+and recovery. Decimal pricing avoids intermediate float overflow while retaining
+representable estimates. Focused matrices passed 109 and 139 connected tests. The first integrated run
+passed 873 native Python tests without skips in 172.216 seconds. An additional
+cutoff-boundary audit reproduced and corrected cumulative undercounting at the
+inclusive window edge. The final native run passed 873 tests without skips in226.652 seconds,
+with 52 JavaScript tests. The final record and manifest are checked separately.
+Exact-source distribution, remote checks and fresh independent review remain
+pending.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

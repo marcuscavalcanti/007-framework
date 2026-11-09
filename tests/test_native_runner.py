@@ -155,7 +155,8 @@ class NativeRunnerTests(unittest.TestCase):
         work = self.root / "bad-tables"
         work.mkdir()
         bad = [self.price_table({"m": {"input": -1, "cached_input": 0, "output": 1}}), self.price_table({"m": {"input": 1}}),
-               self.price_table(schema="other"), self.price_table(currency="BRL"), self.price_table({"m": {"input": True, "cached_input": 0, "output": 1}})]
+               self.price_table(schema="other"), self.price_table(currency="BRL"), self.price_table({"m": {"input": True, "cached_input": 0, "output": 1}}),
+               self.price_table({"m": {"input": 10 ** 400, "cached_input": 0, "output": 1}})]
         for index, table in enumerate(bad):
             with self.subTest(table=index):
                 receipt = self.root / f"bad-{index}.json"
@@ -273,6 +274,16 @@ class NativeRunnerTests(unittest.TestCase):
             with self.subTest(accepted=index):
                 receipt = self.root / f"r2-ok-{index}.json"
                 self.assertEqual(self.runner(cli, receipt, *argv, cwd=work).returncode, 0)
+
+    def test_rate_card_avoids_intermediate_overflow_and_withholds_unrepresentable_cost(self):
+        native = importlib.import_module("native_runner")
+        usage = {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 0}
+        table = {"models": {"m": {"input": 1e308, "cached_input": 0, "output": 0}}, "per_tokens": 1_000_000}
+        self.assertEqual(native.rate_card_cost(table, "m", usage), 1e304)
+        table["per_tokens"] = 1
+        self.assertIsNone(native.rate_card_cost(table, "m", usage))
+        table["models"]["m"]["input"] = 0
+        self.assertEqual(native.rate_card_cost(table, "m", usage), 0)
 
     def test_native_error_events_keep_a_rate_limit_apart_from_a_transient_stream_error(self):
         # Review r40 D2: the pilot's rate-limit stop needs an observable class; only fixed codes reach the receipt.

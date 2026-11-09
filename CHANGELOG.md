@@ -68,6 +68,11 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Native usage windows use an inclusive cutoff, reject temporal rewinds and reconcile cache pricing counters.
+  Overflow-safe monetary validation is shared by collection, telemetry, task/replay receipts and rate cards.
+  Rate-card arithmetic preserves representable estimates without intermediate float overflow.
+- Standalone replay rejects nonpositive timeouts before output or launch. Controller accounting preserves
+  unavailable aggregate spend when individually finite costs exceed representable totals, including recovery.
 - Lineage prefers current project-local identities and uses cross-project parent information only when unambiguous.
   Cumulative usage requires continuity. Contradictory cache allocation keeps primary totals available and pricing unknown.
 - Replay preflight checks the target filesystem's case rules, and the lab report reuses the shared receipt classifier.

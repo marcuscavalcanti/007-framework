@@ -252,6 +252,65 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertEqual(result["usage"]["usage_complete"], complete)
                 self.assertEqual(activity.pricing_request(result) is not None, complete)
 
+    def test_cumulative_window_does_not_certify_a_timestamp_rewind(self):
+        activity = self.module()
+        cases = (("2026-08-29T15:01:00Z", "2026-08-29T14:59:30Z", False),
+                 ("2026-08-29T15:01:00Z", "2026-08-29T15:02:00Z", True),
+                 ("2026-08-29T15:00:00Z", "2026-08-29T15:02:00Z", True))
+        for second_stamp, stamp, complete in cases:
+            with self.subTest(second_stamp=second_stamp, stamp=stamp), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("rewind", tmp)[:3]
+                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T12:00:00Z"
+                for timestamp, total in (("2026-08-29T14:59:00Z", 120), (second_stamp, 240), (stamp, 360)):
+                    rows.append({"timestamp": timestamp, "type": "event_msg", "payload": {"type": "token_count", "info": {
+                        "total_token_usage": {"input_tokens": total * 5 // 6, "output_tokens": total // 6,
+                                              "total_tokens": total}}}})
+                rows.append({"timestamp": "2026-08-30T14:00:00Z", "type": "event_msg", "payload": {"type": "task_complete"}})
+                path = Path(tmp, "rewind.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["usage_complete"], complete)
+                self.assertEqual(activity.pricing_request(result) is not None, complete)
+                if complete:
+                    self.assertEqual(result["usage"]["total_tokens"], 240)
+
+    def test_codex_cache_write_tiers_must_reconcile_before_pricing(self):
+        activity = self.module()
+        for first_five, last_five, last_hour, price_ok in ((0, 30, 0, False), (0, 0, 30, True), (30, 30, 30, False)):
+            with self.subTest(first_five=first_five, last_hour=last_hour), tempfile.TemporaryDirectory() as tmp:
+                total = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+                         "cache_write_input_tokens": 30, "cache_write_5m_input_tokens": first_five,
+                         "cache_write_1h_input_tokens": 30}
+                last = {**total, "cache_write_5m_input_tokens": last_five, "cache_write_1h_input_tokens": last_hour}
+                rows = codex_rows("cache-tiers", tmp)
+                rows[-2]["payload"]["info"] = {"total_token_usage": total, "last_token_usage": last}
+                path = Path(tmp, "cache-tiers.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                request = activity.pricing_request(result)
+                self.assertEqual(request is not None, price_ok)
+                if request:
+                    self.assertEqual(request["cache_creation_1h_input_tokens"], 30)
+
+    def test_invalid_cache_allocation_cannot_cancel_out_across_observations(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("cache-observations", tmp)[:3]
+            for i, cached in ((1, 180), (2, 0)):
+                total = {"input_tokens": 100 * i, "output_tokens": 20 * i, "total_tokens": 120 * i,
+                         "cached_input_tokens": 180}
+                last = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "cached_input_tokens": cached}
+                rows.append({"timestamp": f"2026-08-30T14:0{i}:00Z", "type": "event_msg", "payload": {
+                    "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": last}}})
+            path = Path(tmp, "cache-observations.jsonl")
+            write_jsonl(path, rows)
+            result = activity.parse_codex_session(path, NOW)
+            self.assertTrue(result["usage"]["usage_complete"])
+            self.assertEqual(result["usage"]["total_tokens"], 240)
+            self.assertIsNone(activity.pricing_request(result))
+
     def test_primary_usage_and_price_allocation_have_separate_completeness(self):
         activity = self.module()
         cases = [("increment", 80, 0, False), ("increment", 80, 80, True),
@@ -637,6 +696,21 @@ class LocalActivityTests(unittest.TestCase):
             ])
             result = activity.parse_claude_session(path, NOW)
         self.assertEqual(result["cost_usd_reported"], 1.5)
+
+    def test_claude_invalid_monetary_values_keep_the_session_and_usage(self):
+        activity = self.module()
+        for cost, expected in ((10 ** 400, None), (True, None), (-1, None), (float("inf"), None), (0, 0), (0.25, 0.25)):
+            with self.subTest(cost_type=type(cost).__name__), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp, "reported-cost.jsonl")
+                write_jsonl(path, [
+                    {"type": "user", "cwd": tmp, "sessionId": "reported-cost", "timestamp": "2026-08-30T14:00:00Z"},
+                    {"type": "assistant", "timestamp": "2026-08-30T14:01:00Z", "message": {
+                        "id": "one", "model": "claude-test", "usage": {"input_tokens": 10, "output_tokens": 2}}},
+                    {"type": "result", "timestamp": "2026-08-30T14:02:00Z", "total_cost_usd": cost}])
+                result = activity.parse_claude_session(path, NOW)
+                self.assertEqual(result["session_id"], "reported-cost")
+                self.assertEqual(result["usage"]["total_tokens"], 12)
+                self.assertEqual(result["cost_usd_reported"], expected)
 
     def test_claude_window_cost_requires_a_cumulative_baseline(self):
         activity = self.module()

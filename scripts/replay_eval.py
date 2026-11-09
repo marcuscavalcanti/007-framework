@@ -10,7 +10,6 @@ import argparse
 import difflib
 import hashlib
 import json
-import math
 import os
 import random
 import re
@@ -445,10 +444,7 @@ def validate_served_identity(value, policy, unavailable_map=None, requested_only
         unavailable = (unavailable_map or {}).get(observed)
         if unavailable and value.get("cost_policy_sha256") != unavailable["policy_sha256"]:
             unavailable = None
-    if unavailable is None and (
-        isinstance(cost, bool) or not isinstance(cost, (int, float))
-        or not math.isfinite(cost) or cost < 0
-    ):
+    if unavailable is None and not harness_report._valid_money(cost):
         return None, "cost-missing"
     if not isinstance(value.get("cost_source"), str) or not value["cost_source"]:
         return None, "cost-source-missing"
@@ -1253,6 +1249,9 @@ def main():
         for task in tasks:
             print(f"{task['id']:24s} {task.get('class', 'unclassified'):12s} {task.get('subject', '')}")
         return 0
+
+    if args.timeout_min <= 0:
+        parser.error("timeout must be positive")
 
     wanted = None if args.tasks == "all" else set(args.tasks.split(","))
     tasks = [task for task in tasks if wanted is None or task["id"] in wanted]

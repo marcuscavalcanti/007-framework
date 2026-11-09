@@ -150,9 +150,20 @@ class NativeTelemetryTests(unittest.TestCase):
                 {"type": "result", "session_id": "s", "subtype": "success", "is_error": False,
                  "usage": {"input_tokens": 1, "output_tokens": 1}, "total_cost_usd": 0.2}]
         self.assertEqual(self.parse("claude", rows + rows[1:])["status"], "incomplete")
-        for cost in (True, -1, float("nan"), float("inf")):
+        for cost in (True, -1, float("nan"), float("inf"), 10 ** 400):
             rows[-1]["total_cost_usd"] = cost
             self.assertEqual(self.parse("claude", rows)["status"], "incomplete")
+
+    def test_invalid_optional_model_cost_does_not_discard_the_valid_total(self):
+        result = self.parse("claude", [
+            {"type": "system", "subtype": "init", "session_id": "s"},
+            {"type": "result", "session_id": "s", "subtype": "success", "is_error": False,
+             "usage": {"input_tokens": 1, "output_tokens": 1}, "total_cost_usd": 0.2,
+             "modelUsage": {"claude-test": {"inputTokens": 1, "costUSD": 10 ** 400}}}])
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["estimated_cost_usd"], 0.2)
+        self.assertEqual(result["reported_model"], "claude-test")
+        self.assertEqual(result["model_usage"]["claude-test"], {"inputTokens": 1})
 
     def test_command_boundary_enriches_receipt_without_rewriting_source(self):
         self.run_fixture("codex", exit_code=0)
