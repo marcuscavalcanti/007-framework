@@ -49,7 +49,7 @@ def empty_usage():
 
 def pricing_request(session):
     usage = session.get("usage", {})
-    if usage.get("usage_complete") is False:
+    if usage.get("usage_complete") is False or usage.get("cache_write_tiers_complete") is False:
         return None
     cached = int(safe_number(usage.get("cached_input_tokens")))
     cache_write = int(safe_number(usage.get("cache_write_input_tokens")))
@@ -259,6 +259,12 @@ def counts(raw, keys):
     return tuple(int(raw.get(key, 0)) for key in keys)
 
 
+def codex_counts(raw):
+    if not isinstance(raw, dict) or not any(key in raw for key in ("input_tokens", "output_tokens", "total_tokens")):
+        return None
+    return counts(raw, USAGE_KEYS)
+
+
 def iso(stamp):
     return stamp.isoformat().replace("+00:00", "Z") if stamp else None
 
@@ -294,8 +300,7 @@ class CodexLog:
                 return
             self.previous = total
             last = info.get("last_token_usage")
-            self.tokens.append((stamp, counts(total, USAGE_KEYS) if total else None,
-                                counts(last, USAGE_KEYS) if isinstance(last, dict) else None))
+            self.tokens.append((stamp, codex_counts(total), codex_counts(last)))
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         if not self.meta:
@@ -321,6 +326,7 @@ class CodexLog:
         else:
             usage["usage_complete"] = False
         usage["usage_complete"] &= all(total is not None for total, _ in inside)
+        usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
         model, effort = labels(self.segments)
         return {
             **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at", "subagent")},
@@ -360,7 +366,7 @@ def parse_codex_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
 
 
 CLAUDE_USAGE = ("input_tokens", "cache_read_input_tokens", "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens",
-                "output_tokens", "thinking_tokens")
+                "cache_creation_input_tokens", "output_tokens", "thinking_tokens")
 
 
 class ClaudeLog:
@@ -398,14 +404,18 @@ class ClaudeLog:
             key = message.get("id") if isinstance(message.get("id"), str) and message["id"] else object()
             if not isinstance(raw, dict):
                 if not (isinstance(model, str) and model.startswith("<")):
-                    self.messages.setdefault(key, (stamp, None))
+                    self.messages.setdefault(key, (stamp, None, False))
                 return
             cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
             details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
             # Claude Code writes one row per content block of a response, each with the response's usage (the last one final):
             # one count per message id
             required = all(valid_number(raw.get(name)) for name in ("input_tokens", "output_tokens"))
-            self.messages[key] = (stamp, counts({**details, **cache, **raw}, CLAUDE_USAGE) if required else None)
+            tier_sum = sum(safe_number(cache.get(name)) for name in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"))
+            aggregate = raw.get("cache_creation_input_tokens", tier_sum)
+            coherent = valid_number(aggregate) and aggregate >= tier_sum
+            value = counts({**details, **cache, **raw, "cache_creation_input_tokens": aggregate}, CLAUDE_USAGE) if required and coherent else None
+            self.messages[key] = (stamp, value, value is not None and aggregate == tier_sum)
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         meta = self.meta
@@ -413,12 +423,14 @@ class ClaudeLog:
             return None
         now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
-        window = [value for stamp, value in self.messages.values() if stamp >= cutoff]
+        observed = [(value, tiers) for stamp, value, tiers in self.messages.values() if stamp >= cutoff]
+        window = [value for value, _ in observed]
         usage = {**empty_usage(), "usage_complete": None not in window, "input_includes_cache": False}
-        sums = [sum(column) for column in zip(*(value for value in window if value is not None))] or [0] * 6
+        usage["cache_write_tiers_complete"] = all(tiers for _, tiers in observed)
+        sums = [sum(column) for column in zip(*(value for value in window if value is not None))] or [0] * 7
         (usage["input_tokens"], usage["cached_input_tokens"], usage["cache_write_5m_input_tokens"],
-         usage["cache_write_1h_input_tokens"], usage["output_tokens"], usage["reasoning_output_tokens"]) = sums
-        usage["cache_write_input_tokens"] = usage["cache_write_5m_input_tokens"] + usage["cache_write_1h_input_tokens"]
+         usage["cache_write_1h_input_tokens"], usage["cache_write_input_tokens"], usage["output_tokens"],
+         usage["reasoning_output_tokens"]) = sums
         usage["total_tokens"] = usage["input_tokens"] + usage["cached_input_tokens"] + usage["cache_write_input_tokens"] + usage["output_tokens"]
         started = iso_datetime(meta["started_at"])
         baseline = 0 if started and started >= cutoff else None
@@ -680,6 +692,7 @@ class ActivityCollector:
         except UnreadableLog:
             self.unreadable.add(path)
             return None
+        self.unreadable.discard(path)
         self.cursors[path] = (stamp, offset, log, digest)
         return log.result(now, self.lookback_hours, self.gap_s)
 

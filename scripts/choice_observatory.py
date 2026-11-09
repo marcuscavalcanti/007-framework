@@ -63,11 +63,15 @@ def _spans(session, slack_s):
     return [] if start is None or end is None else [(start - slack_s, end + slack_s)]
 
 
+def _owner_key(session):
+    return session.get("source"), session.get("project_id"), session["session_id"]
+
+
 def attribute(repo, sessions, slack_s=600):
-    """Rows sharing a session id (its main log, Claude subagents, Codex children and reviews) are ONE owner, never rivals."""
-    windows = [(s["session_id"], _spans(s, slack_s)) for s in sessions]
-    result = {"sessions": {s["session_id"]: [] for s in sessions}, "unattributed": {},
-              "ambiguous": {s["session_id"]: [] for s in sessions}, "committed_at": {}}
+    """Internal maps use (source, project, root session). Parent and child logs share an owner only inside that scope."""
+    windows = [(_owner_key(s), _spans(s, slack_s)) for s in sessions]
+    result = {"sessions": {_owner_key(s): [] for s in sessions}, "unattributed": {},
+              "ambiguous": {_owner_key(s): [] for s in sessions}, "committed_at": {}}
     for sha, when in reversed(_commits(repo)):  # oldest first
         result["committed_at"][sha] = when
         owners = list(dict.fromkeys(sid for sid, spans in windows if any(start <= when <= end for start, end in spans)))
@@ -161,7 +165,7 @@ def observe(repo, sessions, now, slack_s=600, windows=(7, 30), rivals=(), surviv
     head = _on_head(repo) if any(owned.values()) else set()
     rows = []
     for s in sessions:
-        shas = owned.get(s["session_id"], [])
+        shas = owned.get(_owner_key(s), [])
         integrated = [sha for sha in shas if sha in head]
         dur = durability(repo, integrated, now, windows) if integrated else None
         mature = bool(dur) and any(v["status"] == "mature" for v in dur.values())
@@ -170,7 +174,7 @@ def observe(repo, sessions, now, slack_s=600, windows=(7, 30), rivals=(), surviv
             until = min(_ts(now), _last(repo, integrated) + survival_days * DAY)
             extra = {"line_survival": line_survival(repo, integrated, now, survival_days),
                      "corrective_share": corrective_share(repo, integrated, until)}
-        rows.append({**{k: s.get(k) for k in ("session_id", "source", "model", "effort", "started_at", "updated_at",
+        rows.append({**{k: s.get(k) for k in ("session_id", "source", "project_id", "model", "effort", "started_at", "updated_at",
                                                "total_tokens", "reasoning_output_tokens")},
                      "usage_complete": s.get("usage_complete"),
                      "known_total_tokens": s.get("total_tokens"),
@@ -180,7 +184,7 @@ def observe(repo, sessions, now, slack_s=600, windows=(7, 30), rivals=(), surviv
                      "reasoning_output_tokens": s.get("reasoning_output_tokens") if s.get("usage_complete") is True else None,
                      "commits": shas, "unintegrated_commits": [sha for sha in shas if sha not in head],
                      "commit_efforts": {sha: route_at(s, attribution["committed_at"][sha], slack_s) for sha in shas},
-                     "ambiguous_commits": attribution["ambiguous"].get(s["session_id"], []),
+                     "ambiguous_commits": attribution["ambiguous"].get(_owner_key(s), []),
                      "durability": dur, "evidence_level": 1 if mature else 0, **extra})
     return rows
 

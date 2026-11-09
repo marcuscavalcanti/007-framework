@@ -571,6 +571,15 @@ test('the same change is only called proven by a lab report that says so', () =>
   assert.equal(claim({ same_change: 'KILL', same_change_reachable: 'NOT-PROVEN' }), 'NOT PROVEN');  // the superseded rule never decides
 });
 
+test('damaged dispatch history keeps each experiment amount visibly incomplete', () => {
+  const r = renderer();
+  vm.runInContext('renderLabLedger({total_complete:false,total_cost_usd:0.5,experiments:[{name:"damaged",available:true,attempts:1,valid:1,invalid:0,orphans:0,unpriced:0,dispatch_errors:1,cost_usd:0.5,invalid_cost_usd:0,cost_sources:{"custom:synthetic":1}}]})', r.context);
+  const row = r.root('lab-ledger-body').children[0];
+  assert.match(row.children[7].textContent, /^≥ /);
+  assert.match(row.children[3].textContent, /^≥ /);
+  assert.match(r.text('lab-ledger-body'), /dispatch history incomplete/i);
+});
+
 test('quota is never called supported from a price estimate', () => {
   const r = renderer();
   r.context.snapshotFixture = verdictSnapshot();
@@ -599,7 +608,7 @@ test('007 spend ledger shows each experiment as an estimate, a lower bound when 
   assert.deepEqual(gone, ['gone', 'Unavailable: results directory unavailable']);
   assert.equal(r.root('lab-ledger-body').children[2].children[1].colSpan, 9);
   assert.match(r.text('lab-ledger-total'), /≥ \$3\.75.*estimate/);
-  assert.match(r.text('lab-ledger-note'), /not an invoice/);
+  assert.match(r.text('lab-ledger-note'), /Client-side cost estimate/);
   assert.equal(r.root('lab-ledger-scroll').hidden, false);
   vm.runInContext('renderLabLedger({configured:false, experiments:[], error:"unreadable config: bad"})', r.context);
   assert.match(r.text('lab-ledger-note'), /No 007 experiments configured \(unreadable config: bad\)/);

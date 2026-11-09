@@ -517,6 +517,14 @@ def write_summary(output_dir, replay_set, config, replicates, rows):
     )
 
 
+def is_cell_id(value):
+    return isinstance(value, str) and re.fullmatch(r".+-r[0-9]{2,}-.+", value) is not None
+
+
+def is_cell_result_file(name):
+    return name.endswith(".json") and not name.endswith(".runner.json") and is_cell_id(name.removesuffix(".json"))
+
+
 def cell_id(task, arm, replicate):
     validate_task_id(task["id"])
     validate_task_id(arm)

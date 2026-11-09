@@ -131,6 +131,13 @@ for token-weighted quota comparisons. Changed plain logs verify all consumed
 bytes before their parser resumes, adding prefix-read I/O with bounded memory.
 Collection is serialized per collector and remains observational.
 
+Durable recording selects the latest recorded observation of each identified
+log and serializes updates. It retains unresolved historical uncertainty.
+The lab ledger includes dispatch-only attempts and marks damaged or duplicate
+dispatch history incomplete. Controllers refuse uncertain history and concurrent
+dispatch into one output root. Claude aggregate cache-write tokens remain
+counted when tier details are missing, while tier-dependent prices stay unavailable.
+
 > **1.6.0** (published 2026-11-08): adds `007 lab` and restates the thesis as a decision tested
 > against a margin declared before spending. Public pre-registered evidence so far:
 > Codex on go-json not proven at 3 points, Claude on go-json not proven at 10

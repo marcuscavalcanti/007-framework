@@ -41,6 +41,17 @@ skips and 51 JavaScript tests. Gitleaks found no secrets in its directory scan.
 The corrected candidate still needs its current manifest, distribution, CI
 and newly authorized independent review before release.
 
+The follow-up candidate5dca544 received FIX FIRST in a subsequent single
+authorized review. Its new fix pass covers dispatch-only and damaged-history
+accounting, scoped ownership through attribution, observation supersession,
+legacy-only uncertainty, empty native deltas and aggregate cache writes.
+Connected controls cover duplicate controllers, ambiguous cell identities,
+three-digit replicates, torn-history append and decoder recovery. These runtime
+changes passed 839 integrated native Python tests without skips and 52 JavaScript
+tests. Updated documentation and the source manifest are checked separately.
+The corrected candidate still needs exact distribution/remote checks and a
+newly authorized independent review before release.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

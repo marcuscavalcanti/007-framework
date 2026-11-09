@@ -15,6 +15,7 @@ lab_accept.py; nothing here knows a vendor or a language.
 import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
+import fcntl
 import hashlib
 import json
 import math
@@ -532,6 +533,9 @@ def plan(config, replicates):
         block = [(t, rep, a) for t in config["tasks"] for a in config["arms"]]
         rng.shuffle(block)
         cells += block
+    identities = {replay_eval.cell_id(task, arm, replicate) for task, replicate, arm in cells}
+    if len(identities) != len(cells):
+        raise ValueError("task and arm pairs must produce distinct cell identities")
     return cells
 
 
@@ -544,6 +548,18 @@ def cost_of(out, cid, row):
 
 
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
+    """Serialize controllers sharing an output directory before checking or publishing dispatch history."""
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (out / ".run.lock").open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"stop": "run-already-active", "calls": 0}
+        return _run(config_path, out, replicates=replicates, jobs=jobs, max_calls=max_calls, max_usd=max_usd,
+                    stop_usd=stop_usd, timeout_s=timeout_s, execute=execute, max_invalid=max_invalid)
+
+
+def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s, execute, max_invalid):
     """Spend rule: a cell is dispatched only if the spend so far plus stop_usd for it and for each cell in flight stays under max_usd.
     A failed call that reports no cost is charged stop_usd (its reserve), never zero; only a valid cell without a cost stops the run."""
     config = json.loads(config_path.read_text())
@@ -551,8 +567,26 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
     execute = execute or replay_eval.execute_cell
     ledger = out / "dispatch.jsonl"
     cells = plan(config, replicates)
-    done = {p.stem for p in out.glob("*-r[0-9][0-9]-*.json") if not p.name.endswith(".runner.json")}
+    done = {path.stem for path in out.glob("*.json") if replay_eval.is_cell_result_file(path.name)}
     orphans = {p.name[:-len(".runner.json")] for p in out.glob("*.runner.json")} - done
+    try:
+        lines = ledger.read_text().splitlines() if ledger.exists() else []
+        dispatched = set()
+        for line in lines:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if (not isinstance(row, dict) or not replay_eval.is_cell_id(row.get("cell"))
+                    or not any(isinstance(row.get(key), str) and row[key] for key in ("dispatched_at", "finished_at"))):
+                raise ValueError("invalid dispatch record")
+            if row.get("dispatched_at"):
+                if row["cell"] in dispatched:
+                    return {"stop": "ambiguous-dispatch-history", "calls": 0}
+                dispatched.add(row["cell"])
+            if row["cell"] not in done:
+                orphans.add(row["cell"])
+    except (OSError, ValueError):
+        return {"stop": "unreadable-dispatch-history", "calls": 0}
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
@@ -612,8 +646,8 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
 
 def load_cells(out):
     rows = []
-    for path in sorted(out.glob("*-r[0-9][0-9]-*.json")):
-        if path.name.endswith(".runner.json"):
+    for path in sorted(out.glob("*.json")):
+        if not replay_eval.is_cell_result_file(path.name):
             continue
         row = json.loads(path.read_text())
         row["cell"] = path.stem

@@ -636,17 +636,17 @@ function renderLabLedger(ledger) {
     return;
   }
   setText("lab-ledger-total", `${ledger.total_complete ? "" : "≥ "}${money(ledger.total_cost_usd)} in all · estimate`);
-  setText("lab-ledger-note", "Counts and sums of the runner receipts in each configured 007 lab run directory: spend caused by 007, kept apart from your agents' own usage. Client estimate, not an invoice. ≥ marks attempts without a cost or an unavailable experiment.");
+  setText("lab-ledger-note", "Attempt records and retained receipt costs in each configured 007 lab run directory. Spend caused by 007 is tracked separately from your agents' own usage. Client-side cost estimate. ≥ marks missing cost, incomplete dispatch history or an unavailable experiment.");
   for (const item of experiments) {
     const row = element("tr");
-    row.append(element("td", null, item.name));
+    row.append(element("td", null, `${item.name}${item.dispatch_errors ? " · dispatch history incomplete" : ""}`));
     if (!item.available) {
       const cell = element("td", "dim", `Unavailable: ${item.error || "N/A"}`);
       cell.colSpan = 9;
       row.append(cell);
     } else {
-      const atLeast = item.unpriced ? "≥ " : "";
-      for (const [text, cls] of [[shortDateTime(item.first_attempt_at)], [shortDateTime(item.last_attempt_at)], [integer(item.attempts), "num"],
+      const atLeast = item.unpriced || item.dispatch_errors ? "≥ " : "";
+      for (const [text, cls] of [[shortDateTime(item.first_attempt_at)], [shortDateTime(item.last_attempt_at)], [`${item.dispatch_errors ? "≥ " : ""}${integer(item.attempts)}`, "num"],
           [integer(item.valid), "num"], [integer(item.invalid), "num"], [integer(item.orphans), "num"], [`${atLeast}${money(item.cost_usd)}`, "num"],
           [`${atLeast}${money(item.invalid_cost_usd)}`, "num"], [Object.keys(item.cost_sources || {}).sort().join(", ") || "source N/A"]]) row.append(element("td", cls, text));
     }

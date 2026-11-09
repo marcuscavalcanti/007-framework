@@ -5,8 +5,9 @@ Only projects the user opted in (config `observatory.projects`) are recorded, or
 every project with an active session (registered in 007, or any git repository by its root, id "git:<root>"; a linked worktree is
 its repository) except `observatory.exclude` (names or ids); only FIELDS are stored, never conversation content (active_intervals are row timestamps merged across pauses of at most
 `observatory.activity_gap_minutes`, default 30). `observatory.lookback_hours` (default 168) bounds each record pass.
-The store is append-only JSONL; a session is appended again only when its updated_at changes, or when the stored row predates
-active_intervals and a fresh parse brings them; readers keep the latest row, with the union of the session's intervals.
+The store is append-only JSONL. Identified logs append changed observations in recorded order, including same-timestamp
+repairs and restored native timestamps. Writers serialize read/dedup/append. Readers combine the current observations'
+intervals and preserve uncertainty for unresolved legacy logs.
 Sessions of other projects on the same repository (git common dir) compete for its commits.
 Question 3 at level 3 uses the holdout analysis that config `observatory.calibrations` maps to (project_id, cli, model); no
 guessing: an unmapped session is "no evidence to judge".
@@ -20,6 +21,7 @@ Usage: python3 scripts/observatory_history.py record | report --project-id ID | 
 """
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -157,6 +159,34 @@ def _union(intervals):
     return out
 
 
+def _log_id(row):
+    identifiable = row.get("source") in ("codex", "kimi", "gemini") or row.get("subagent") is False
+    return row.get("log_id") or (row.get("session_id") if identifiable else None)
+
+
+def _log_key(row):
+    return row.get("source"), row.get("project_id"), _log_id(row)
+
+
+def _can_replace(row, kept):
+    if kept is None:
+        return True
+    if kept.get("active_intervals") and not row.get("active_intervals"):
+        return False
+    return not kept.get("log_id") or bool(row.get("log_id"))
+
+
+def _current_rows(rows):
+    """A named log's latest recorded observation wins, including restored generations and native clock rewinds."""
+    named, unresolved = {}, []
+    for row in rows:
+        if _log_id(row) is None:
+            unresolved.append(row)
+        elif _can_replace(row, named.get(_log_key(row))):
+            named[_log_key(row)] = row
+    return [*unresolved, *named.values()]
+
+
 def load(store):
     """The latest row of each session; its active_intervals are the union over all its logs, because one session id spans
     several logs (Claude subagents under <session>/subagents/ carry the parent sessionId, Codex children their root's) and the
@@ -176,10 +206,10 @@ def load(store):
 
     latest, main, spans, logs, last, sources, uncertain = {}, {}, {}, {}, {}, {}, {}
     newer = lambda row, kept: kept is None or choice_observatory._ts(row["updated_at"]) >= choice_observatory._ts(kept["updated_at"])
-    for row in rows:
+    for row in _current_rows(rows):
         codex = row.get("source") == "codex"
         key = (row.get("source"), root(row.get("session_id")) if codex else row.get("session_id"), row.get("project_id"))
-        log = row.get("log_id") or (row.get("session_id") if codex or row.get("subagent") is False else None)
+        log = _log_id(row)
         if log is None:
             spans.setdefault(key, []).extend(row.get("active_intervals") or [])
             sources.setdefault(key, []).append(row)
@@ -199,28 +229,43 @@ def load(store):
     for (key, _), row in logs.items():
         spans.setdefault(key, []).extend(row["active_intervals"])
         sources.setdefault(key, []).append(row)
-    named = {key for key, _ in logs}
     return [{**(main[key][1] if key in main else row), "session_id": key[1], "updated_at": last[key],
              "activity_sources": sources.get(key, [main[key][1] if key in main else row]),
-             "uncertain_intervals": _union(uncertain.get(key, [])) if key in named else [],
+             "uncertain_intervals": _union(uncertain.get(key, [])),
              "active_intervals": _union(spans.get(key, [])) or None} for key, row in latest.items()]
 
 
 def record(store, rows):
+    if not rows:
+        return 0
     store = Path(store)
-    seen = {}
-    parsed = lambda r: tuple(r.get(k) for k in ("log_id", "active_intervals", "effort_segments", "usage_complete",
-                                               "total_tokens", "reasoning_output_tokens"))
-    for r in _rows(store):  # every stored row, not only the latest: an older log of the same session is not appended again
-        seen.setdefault((r.get("source"), r.get("session_id"), r.get("project_id"), r.get("updated_at")), []).append(parsed(r))
-    # a row whose parse brings what the stored ones lack (intervals; a whole-log read; 1.7 fields) is appended once, never one
-    # without intervals
-    new = [r for r in rows if (had := seen.get((r["source"], r["session_id"], r.get("project_id"), r["updated_at"]))) is None
-           or (r.get("active_intervals") and parsed(r) not in had)]
-    if new:
-        store.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with open(store, "a") as handle:
-            handle.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in new))
+    store.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parsed = lambda row: tuple(row.get(key) for key in FIELDS)
+    with store.open("a+b") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        stored = _rows(store)
+        current = {_log_key(row): row for row in _current_rows(stored) if _log_id(row) is not None}
+        unresolved = [parsed(row) for row in stored if _log_id(row) is None]
+        new = []
+        for row in rows:
+            key = _log_key(row)
+            kept = current.get(key)
+            if _log_id(row) is None:
+                if parsed(row) in unresolved:
+                    continue
+                unresolved.append(parsed(row))
+            elif not _can_replace(row, kept) or (kept is not None and parsed(row) == parsed(kept)):
+                continue
+            else:
+                current[key] = row
+            new.append(row)
+        if new:
+            handle.seek(0, 2)
+            if handle.tell():
+                handle.seek(-1, 2)
+                if handle.read(1) != b"\n":
+                    handle.write(b"\n")
+            handle.write("".join(json.dumps(row, sort_keys=True) + "\n" for row in new).encode())
     return len(new)
 
 

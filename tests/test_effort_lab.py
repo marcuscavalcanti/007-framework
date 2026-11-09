@@ -56,6 +56,106 @@ def synthetic(repo):
     return sha
 
 
+class LabRunAccountingTests(unittest.TestCase):
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.config = self.root / "set.json"
+        self.config.write_text(json.dumps({"seed": 1, "tasks": [{"id": "case"}], "arms": {"high": {}}}))
+        self.calls = 0
+
+    def execute(self, config, task, arm, replicate, output, timeout):
+        self.calls += 1
+        cell = lab.replay_eval.cell_id(task, arm, replicate)
+        row = {"valid": False, "cost_usd": 0, "task": task["id"], "arm": arm, "cell": cell}
+        (output / (cell + ".json")).write_text(json.dumps(row))
+        return row
+
+    def run_lab(self, output):
+        return lab.run(self.config, output, replicates=1, jobs=1, max_calls=1, max_usd=1,
+                       stop_usd=1, execute=self.execute)
+
+    def test_dispatch_without_terminal_or_damaged_history_blocks_another_execution(self):
+        for name, history, stop in (
+                ("started", '{"cell":"case-r01-high","dispatched_at":"2026-11-09T10:00:00Z"}\n', "uncertain-attempts"),
+                ("finished", '{"cell":"case-r01-high","finished_at":"2026-11-09T10:00:00Z"}\n', "uncertain-attempts"),
+                ("torn", '{"cell":"case', "unreadable-dispatch-history")):
+            with self.subTest(name=name):
+                output = self.root / name
+                output.mkdir()
+                (output / "dispatch.jsonl").write_text(history)
+                self.assertEqual(self.run_lab(output)["stop"], stop)
+                self.assertEqual(self.calls, 0)
+        completed = self.root / "completed"
+        self.assertEqual(self.run_lab(completed)["calls"], 1)
+        self.assertEqual(self.run_lab(completed)["calls"], 0)
+        self.assertEqual(self.calls, 1)
+
+    def test_two_controllers_cannot_dispatch_into_one_output_directory(self):
+        entered, release = threading.Event(), threading.Event()
+        real_pool = lab.ThreadPoolExecutor
+        failures = []
+
+        def pause_owner(*args, **kwargs):
+            if threading.current_thread().name == "lab-owner":
+                entered.set()
+                release.wait(5)
+            return real_pool(*args, **kwargs)
+
+        output = self.root / "shared"
+
+        def first():
+            try:
+                self.run_lab(output)
+            except Exception as error:
+                failures.append(type(error).__name__)
+
+        owner = threading.Thread(target=first, name="lab-owner")
+        with mock.patch.object(lab, "ThreadPoolExecutor", side_effect=pause_owner):
+            owner.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                other = self.run_lab(output)
+            finally:
+                release.set()
+                owner.join(5)
+        self.assertFalse(owner.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(self.calls, 1)
+        self.assertEqual(other["stop"], "run-already-active")
+
+    def test_duplicate_dispatch_history_blocks_new_work_even_when_the_cell_has_a_result(self):
+        output = self.root / "duplicate"
+        self.run_lab(output)
+        with (output / "dispatch.jsonl").open("a") as handle:
+            handle.write(json.dumps({"cell": "case-r01-high", "dispatched_at": "2026-11-09T10:00:00Z"}) + "\n")
+        self.config.write_text(json.dumps({"seed": 1, "tasks": [{"id": "case"}, {"id": "new-case"}], "arms": {"high": {}}}))
+        result = self.run_lab(output)
+        self.assertEqual(result["stop"], "ambiguous-dispatch-history")
+        self.assertEqual(self.calls, 1)
+
+    def test_three_digit_replicates_remain_visible_to_budget_and_result_readers(self):
+        output = self.root / "long-run"
+        output.mkdir()
+        (output / "case-r100-high.json").write_text(json.dumps({"task": "case", "arm": "high", "valid": False,
+            "cost_usd": 0.5, "runner_receipt_sha256": "unmeasured"}))
+        result = lab.run(self.config, output, replicates=100, jobs=1, max_calls=1, max_usd=0.75,
+                         stop_usd=1, execute=self.execute)
+        self.assertEqual(result["spent"], 0.5)
+        self.assertEqual(self.calls, 0)
+        self.assertEqual(len(lab.load_cells(output)), 1)
+
+    def test_different_task_arm_pairs_cannot_share_one_cell_identity(self):
+        self.config.write_text(json.dumps({"seed": 1, "tasks": [{"id": "case"}, {"id": "case-r01-x"}],
+                                           "arms": {"x-r01-high": {}, "high": {}}}))
+        output = self.root / "collision"
+        with self.assertRaisesRegex(ValueError, "cell identities"):
+            self.run_lab(output)
+        self.assertEqual(self.calls, 0)
+        self.assertFalse((output / "dispatch.jsonl").exists())
+
+
 class LabEndToEnd(unittest.TestCase):
     def setUp(self):
         scratch = tempfile.TemporaryDirectory()

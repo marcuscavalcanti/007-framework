@@ -66,6 +66,17 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- The spend ledger joins dispatch-only attempts and marks malformed or duplicate dispatch history incomplete. The dashboard
+  shows lower bounds for affected counts and costs. Lab controllers sharing an output directory serialize before dispatch
+  and refuse uncertain or damaged history. Task/arm identity collisions fail before execution. Three-digit replicates
+  remain visible to result and budget readers.
+- Commit ownership carries source, project and root session through attribution, including linked worktrees. Named-log
+  observations supersede by recorded order, including same-timestamp repairs and restored native timestamps. Recording
+  serializes read/dedup/append and preserves torn historical bytes while separating new JSON rows. Unresolved Claude
+  legacy history stays uncertain even without a fresh companion log.
+- Empty Codex per-turn usage falls back to cumulative observations. Incoherent totals remain incomplete. Claude aggregate
+  cache writes survive missing tier detail, with tier-dependent prices unavailable when the breakdown is unknown.
+  Successful decoder recovery clears the previous unreadable-log marker.
 - Parent/child consolidation preserves project scope, including record deduplication. Per-commit model and effort come from
   the contributing logs, with mixed or unavailable identity retained explicitly. Fresh Claude main-log reads replace
   identifiable legacy clipped intervals. Unresolved historical intervals stay uncertain for attribution.

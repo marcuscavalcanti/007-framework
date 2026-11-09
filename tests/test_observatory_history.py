@@ -1,4 +1,5 @@
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import importlib
 import json
 import os
@@ -241,6 +242,29 @@ class ObservatoryHistoryTests(unittest.TestCase):
                 self.assertEqual(row["commits"], [])
                 self.assertEqual(["ambiguous"] * len(row["ambiguous_commits"]), expected)
 
+    def test_legacy_only_claude_uncertainty_does_not_require_a_fresh_companion_log(self):
+        repo = self.git_repo("legacy-only", commit_at=T0 + 5000)
+        for role in (None, True, False):
+            with self.subTest(role=role):
+                store = Path(self.tmp.name, "legacy-only-" + str(role) + ".jsonl")
+                legacy = self.codex_row("legacy", source="claude", active_intervals=[[T0, T0 + 9000]])
+                if role is not None:
+                    legacy["subagent"] = role
+                self.hist.record(store, [legacy])
+                row, = self.hist.report(store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                        now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(len(row["commits"]), 1 if role is False else 0)
+                self.assertEqual(len(row["ambiguous_commits"]), 0 if role is False else 1)
+                self.assertEqual(row["attribution_uncertain"], role is not False)
+        for source in ("kimi", "gemini"):
+            with self.subTest(source=source):
+                store = Path(self.tmp.name, source + ".jsonl")
+                self.hist.record(store, [self.codex_row("own-log", source=source, active_intervals=[[T0, T0 + 9000]])])
+                row, = self.hist.report(store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                        now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(len(row["commits"]), 1)
+                self.assertFalse(row["attribution_uncertain"])
+
     def test_codex_children_and_reviews_join_their_root_session_even_when_stored_under_their_own_id(self):
         repo = self.git_repo("project-delta", commit_at=T0 + 5000)
         self.hist.record(self.store, [
@@ -273,6 +297,33 @@ class ObservatoryHistoryTests(unittest.TestCase):
         self.assertEqual(len(second_report["commits"]), 1)
         self.assertEqual(second_report["model"], "child-model")
 
+    def test_root_sessions_keep_project_scope_across_worktrees_of_the_same_git(self):
+        repo = self.git_repo("scoped-main", commit_at=T0 + 5000)
+        worktree = Path(self.tmp.name, "scoped-worktree")
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(worktree)], cwd=repo,
+                       check=True, capture_output=True)
+        self.hist.record(self.store, [
+            self.codex_row("root", log_id="root", subagent=False, project_id="p1", active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("root", log_id="child", subagent=True, project_id="p2", active_intervals=[[T0 + 4800, T0 + 5200]])])
+        entries = [{"project_id": "p1", "path": str(repo)}, {"project_id": "p2", "path": str(worktree)}]
+        parent, = self.hist.report(self.store, entries, "p1", {"p1", "p2"}, now=T0 + 40 * 86400, slack_s=0)
+        child, = self.hist.report(self.store, entries, "p2", {"p1", "p2"}, now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual((parent["commits"], parent["ambiguous_commits"]), ([], []))
+        self.assertIsNone(parent["durability"])
+        self.assertEqual(len(child["commits"]), 1)
+
+    def test_same_session_id_in_different_cli_sources_keeps_separate_owners(self):
+        repo = self.git_repo("scoped-sources", commit_at=T0 + 5000)
+        self.hist.record(self.store, [
+            self.codex_row("same", log_id="same", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("same", source="claude", log_id="same", subagent=False,
+                           active_intervals=[[T0 + 4800, T0 + 5200]])])
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        by_source = {row["source"]: row for row in rows}
+        self.assertEqual(by_source["codex"]["commits"], [])
+        self.assertEqual(len(by_source["claude"]["commits"]), 1)
+
     def test_record_deduplication_keeps_the_declared_project_scope(self):
         row = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
         other = {**row, "project_id": "p2"}
@@ -280,6 +331,47 @@ class ObservatoryHistoryTests(unittest.TestCase):
         self.assertEqual(self.hist.record(self.store, [other]), 1)
         self.assertEqual(self.hist.record(self.store, [row, other]), 0)
         self.assertEqual({r["project_id"] for r in self.hist.load(self.store)}, {"p1", "p2"})
+
+    def test_named_log_restoration_becomes_current_even_at_an_old_native_timestamp(self):
+        for same_timestamp in (True, False):
+            with self.subTest(same_timestamp=same_timestamp):
+                store = Path(self.tmp.name, "restored-" + str(same_timestamp) + ".jsonl")
+                first = self.codex_row("root", log_id="root", subagent=False, usage_complete=False,
+                                       total_tokens=7, active_intervals=[[T0, T0 + 600]])
+                second = {**first, "usage_complete": True, "total_tokens": 9,
+                          "updated_at": first["updated_at"] + (0 if same_timestamp else 60)}
+                self.assertEqual(self.hist.record(store, [first]), 1)
+                original = store.read_bytes()
+                self.assertEqual(self.hist.record(store, [second]), 1)
+                self.assertEqual(self.hist.record(store, [second]), 0)
+                self.assertEqual(self.hist.record(store, [first]), 1)
+                self.assertEqual(self.hist.record(store, [first]), 0)
+                current, = self.hist.load(store)
+                self.assertEqual((current["usage_complete"], current["total_tokens"], current["updated_at"]),
+                                 (False, 7, first["updated_at"]))
+                self.assertTrue(store.read_bytes().startswith(original))
+
+    def test_recording_current_logs_is_idempotent_and_torn_history_keeps_new_rows_readable(self):
+        parent = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
+        child = self.codex_row("root", log_id="child", subagent=True, active_intervals=[[T0 + 4800, T0 + 5200]])
+        self.assertEqual(self.hist.record(self.store, [parent, child]), 2)
+        self.assertEqual(self.hist.record(self.store, [parent, child]), 0)
+        repaired = {**parent, "usage_complete": False, "total_tokens": 7}
+        self.assertEqual(self.hist.record(self.store, [repaired, child]), 1)
+        self.assertEqual(self.hist.record(self.store, [repaired, child]), 0)
+        torn = Path(self.tmp.name, "torn.jsonl")
+        fragment = b'{"source":"unresolved-fragment'
+        torn.write_bytes(fragment)
+        self.assertEqual(self.hist.record(torn, [parent]), 1)
+        self.assertEqual(self.hist.load(torn)[0]["log_id"], "root")
+        self.assertTrue(torn.read_bytes().startswith(fragment + b"\n"))
+
+    def test_concurrent_recording_deduplicates_current_observations_under_one_lock(self):
+        row = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
+        with ThreadPoolExecutor(4) as pool:
+            counts = list(pool.map(lambda _: self.hist.record(self.store, [row]), range(8)))
+        self.assertEqual(sum(counts), 1)
+        self.assertEqual(len(self.store.read_text().splitlines()), 1)
 
     def test_commit_routes_follow_the_contributing_logs_activity(self):
         cases = [

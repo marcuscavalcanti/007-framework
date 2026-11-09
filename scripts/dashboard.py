@@ -1262,14 +1262,15 @@ def lab_experiment(name, directories):
     """007's own spend in `007 lab run` results: one attempt per cell with a runner receipt or a result.
     Numeric receipt cost and provenance establish accounting; missing receipts stay unpriced even after a failed execution.
     Costs are the receipts' client estimates, not an invoice."""
-    attempts, stamps = {}, []
+    attempts, stamps, dispatch_errors = {}, [], 0
+    dispatched = set()
     for directory in directories:
         for file in os.listdir(directory):  # raises on a missing or unreadable directory, unlike glob
             if file.endswith(".runner.json"):
                 raw = (directory / file).read_bytes()
                 receipt = json.loads(raw) if raw.strip() else {}  # empty: reserved, never finished
                 attempts.setdefault((directory, file.removesuffix(".runner.json")), {})["receipt"] = receipt if isinstance(receipt, dict) else {}
-            elif fnmatch.fnmatchcase(file, "*-r[0-9][0-9]-*.json"):
+            elif replay_eval.is_cell_result_file(file):
                 result = json.loads((directory / file).read_bytes())
                 item = attempts.setdefault((directory, file.removesuffix(".json")), {})
                 item["valid"] = isinstance(result, dict) and result.get("valid") is True
@@ -1278,12 +1279,23 @@ def lab_experiment(name, directories):
         except FileNotFoundError:
             lines = []
         for line in lines:
+            if not line.strip():
+                continue
             try:
                 row = json.loads(line)
             except ValueError:
-                continue  # ponytail: a line cut by a killed run only loses a timestamp
-            if isinstance(row, dict):
-                stamps += [harness_report._instant(row.get(key)) for key in ("dispatched_at", "finished_at")]
+                dispatch_errors += 1
+                continue
+            times = [harness_report._instant(row.get(key)) for key in ("dispatched_at", "finished_at")] if isinstance(row, dict) else []
+            cell = row.get("cell") if isinstance(row, dict) else None
+            if not replay_eval.is_cell_id(cell) or not any(times):
+                dispatch_errors += 1
+                continue
+            if row.get("dispatched_at"):
+                dispatch_errors += (directory, cell) in dispatched
+                dispatched.add((directory, cell))
+            attempts.setdefault((directory, cell), {})
+            stamps.extend(times)
     stamps = sorted(stamp for stamp in stamps if stamp)
     rows = attempts.values()
     for item in rows:
@@ -1298,6 +1310,7 @@ def lab_experiment(name, directories):
         "first_attempt_at": stamps[0].isoformat() if stamps else None,
         "last_attempt_at": stamps[-1].isoformat() if stamps else None,
         "attempts": len(rows),
+        "dispatch_errors": dispatch_errors,
         "valid": sum(item.get("valid") is True for item in rows),
         "invalid": sum(item.get("valid") is False for item in rows),
         "orphans": sum("valid" not in item for item in rows),
@@ -1333,7 +1346,8 @@ def load_lab_ledger(config=None):
             ledger["experiments"].append({"name": name, "available": False, "error": "unreadable receipt or result"})
     available = [item for item in ledger["experiments"] if item["available"]]
     return {**ledger, "configured": bool(ledger["experiments"]), "total_cost_usd": round(sum(item["cost_usd"] for item in available), 6),
-            "total_complete": len(available) == len(ledger["experiments"]) and not any(item["unpriced"] for item in available)}
+            "total_complete": len(available) == len(ledger["experiments"]) and not any(
+                item["unpriced"] or item["dispatch_errors"] for item in available)}
 
 
 def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provider=None, project_provider=None, curation_provider=None,

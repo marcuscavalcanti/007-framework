@@ -162,6 +162,67 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertFalse(result["usage"]["usage_complete"])
                 self.assertIsNone(activity.pricing_request(result))
 
+    def test_codex_empty_delta_uses_cumulative_counts_and_explicit_zero_stays_valid(self):
+        activity = self.module()
+        for last in ({}, {"unrecognized": 0}, {"cached_input_tokens": 0}):
+            with self.subTest(last=last), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp, "delta.jsonl")
+                rows = codex_rows("delta", tmp)
+                rows[-2]["payload"]["info"] = {"total_token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+                                               "last_token_usage": last}
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertTrue(result["usage"]["usage_complete"])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "zero.jsonl")
+            rows = codex_rows("zero", tmp)
+            zero = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+            rows[-2]["payload"]["info"] = {"total_token_usage": zero, "last_token_usage": zero}
+            write_jsonl(path, rows)
+            result = activity.parse_codex_session(path, NOW)
+            self.assertEqual(result["usage"]["total_tokens"], 0)
+            self.assertTrue(result["usage"]["usage_complete"])
+
+    def test_claude_aggregate_cache_writes_survive_optional_tiers_without_pricing_unknown_tiers(self):
+        activity = self.module()
+        cases = [({"cache_creation_input_tokens": 30}, 30, False),
+                 ({"cache_creation_input_tokens": 0}, 0, True),
+                 ({"cache_creation": {"ephemeral_5m_input_tokens": 30}}, 30, True),
+                 ({"cache_creation_input_tokens": 30, "cache_creation": {"ephemeral_1h_input_tokens": 30}}, 30, True),
+                 ({"cache_creation_input_tokens": 30, "cache_creation": {"ephemeral_5m_input_tokens": 20}}, 30, False)]
+        for extra, writes, tiers_complete in cases:
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp, "cache.jsonl")
+                write_jsonl(path, [{"type": "assistant", "sessionId": "cache", "cwd": tmp,
+                                   "timestamp": "2026-08-30T14:00:00Z", "message": {"id": "response", "model": "claude-opus-5",
+                                   "usage": {"input_tokens": 100, "output_tokens": 20, **extra}}}])
+                result = activity.parse_claude_session(path, NOW)
+                self.assertEqual(result["usage"]["cache_write_input_tokens"], writes)
+                self.assertEqual(result["usage"]["total_tokens"], 120 + writes)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["cache_write_tiers_complete"], tiers_complete)
+                self.assertEqual(activity.pricing_request(result) is not None, tiers_complete)
+
+    def test_inconsistent_codex_counts_and_claude_cache_aggregates_stay_unpriced(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "inconsistent.jsonl")
+            rows = codex_rows("inconsistent", tmp)
+            rows[-2]["payload"]["info"]["last_token_usage"] = {"input_tokens": 5}
+            write_jsonl(path, rows)
+            partial = activity.parse_codex_session(path, NOW)
+            self.assertEqual(partial["usage"]["input_tokens"], 5)
+            self.assertFalse(partial["usage"]["usage_complete"])
+            self.assertIsNone(activity.pricing_request(partial))
+            write_jsonl(path, [{"type": "assistant", "sessionId": "inconsistent", "cwd": tmp,
+                               "timestamp": "2026-08-30T14:00:00Z", "message": {"id": "response", "model": "claude-opus-5",
+                               "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 10,
+                                         "cache_creation": {"ephemeral_5m_input_tokens": 30}}}}])
+            partial = activity.parse_claude_session(path, NOW)
+            self.assertFalse(partial["usage"]["usage_complete"])
+            self.assertIsNone(activity.pricing_request(partial))
+
     def test_claude_missing_response_usage_is_unknown_and_a_final_update_can_repair_it(self):
         activity = self.module()
         for raw in (None, {}, [], {"input_tokens": 3}):
@@ -618,6 +679,25 @@ class LocalActivityTests(unittest.TestCase):
                     self.assertEqual(before[:4096], path.read_bytes()[:4096])
                     self.assertEqual(before[-4096:], path.read_bytes()[-4096:])
                 self.assertEqual(collector.parse("codex", path, NOW), activity.parse_codex_session(path, NOW))
+
+    def test_a_successful_decoder_recovery_clears_the_prior_unreadable_marker(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root, path = Path(tmp), Path(tmp, "recover.jsonl.zst")
+            path.write_bytes(b"synthetic-decoder-fixture")
+            collector = activity.ActivityCollector(pricer=activity.HeadroomPricer(runner=lambda requests: []))
+            with mock.patch.object(activity, "read_log", side_effect=activity.UnreadableLog("synthetic-unavailable")):
+                self.assertIsNone(collector.parse("codex", path, NOW))
+            self.assertIn(path, collector.unreadable)
+
+            def recovered(source, parser, offset=0, digest=None):
+                for row in codex_rows("recovered", root):
+                    parser.feed(row)
+                return path.stat().st_size
+
+            with mock.patch.object(activity, "read_log", side_effect=recovered):
+                self.assertEqual(collector.parse("codex", path, NOW)["session_id"], "recovered")
+            self.assertNotIn(path, collector.unreadable)
 
     def test_concurrent_collection_does_not_mix_old_usage_with_new_route_metadata(self):
         activity = self.module()

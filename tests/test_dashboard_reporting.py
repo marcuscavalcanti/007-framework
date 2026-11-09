@@ -259,6 +259,44 @@ class ReportingTests(unittest.TestCase):
             control = dashboard.lab_experiment("known-zero", [zero])
             self.assertEqual((control["cost_usd"], control["unpriced"]), (0, 0))
 
+    def test_lab_ledger_counts_dispatch_only_attempts_and_marks_damaged_history_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            results = root / "results"
+            results.mkdir()
+            config = root / "config.json"
+            config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": "fixture", "results": str(results)}]}}))
+            dispatch = results / "dispatch.jsonl"
+            started = {"cell": "lost-r01-NEW", "dispatched_at": "2026-11-09T10:00:00Z"}
+            finished = {"cell": started["cell"], "finished_at": "2026-11-09T10:01:00Z"}
+            dispatch.write_text(json.dumps(started) + "\n" + json.dumps(finished) + "\n")
+            ledger = dashboard.load_lab_ledger(config)
+            self.assertEqual((ledger["experiments"][0]["attempts"], ledger["experiments"][0]["unpriced"]), (1, 1))
+            self.assertFalse(ledger["total_complete"])
+            (results / "priced-r01-NEW.runner.json").write_text(json.dumps({
+                "cost_usd": 0.5, "cost_source": "custom:synthetic-control"}))
+            ledger = dashboard.load_lab_ledger(config)
+            self.assertEqual((ledger["total_cost_usd"], ledger["experiments"][0]["attempts"]), (0.5, 2))
+            self.assertFalse(ledger["total_complete"])
+            (results / "lost-r01-NEW.runner.json").write_text(json.dumps({
+                "cost_usd": 0, "cost_source": "custom:synthetic-control"}))
+            self.assertTrue(dashboard.load_lab_ledger(config)["total_complete"])
+            with dispatch.open("a") as handle:
+                handle.write('{"cell":"torn')
+            damaged = dashboard.load_lab_ledger(config)
+            self.assertFalse(damaged["total_complete"])
+            self.assertEqual(damaged["experiments"][0]["dispatch_errors"], 1)
+
+    def test_repeated_dispatches_cannot_be_certified_by_one_retained_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "case-r01-high.runner.json").write_text(json.dumps({"cost_usd": 0.5, "cost_source": "custom:synthetic"}))
+            started = {"cell": "case-r01-high", "dispatched_at": "2026-11-09T10:00:00Z"}
+            (root / "dispatch.jsonl").write_text(json.dumps(started) + "\n" + json.dumps(started) + "\n")
+            ledger = dashboard.lab_experiment("duplicate", [root])
+            self.assertEqual(ledger["cost_usd"], 0.5)
+            self.assertEqual(ledger["dispatch_errors"], 1)
+
     def test_lab_report_carries_the_repository_cli_and_model_it_is_bound_to(self):
         # audit F09: a bare report path has no repository identity, so its verdict must not read as evidence for any repository
         with tempfile.TemporaryDirectory() as tmp:
