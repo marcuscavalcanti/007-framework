@@ -6,6 +6,11 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-09
+
+Candidate prepared for independent review. Release qualification is recorded in
+[the release record](evidence/v1.7.0/release-evidence.md).
+
 ### Security
 
 - The dashboard rejects foreign, missing, duplicate or malformed HTTP authorities and absolute request targets before
@@ -529,7 +534,9 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...HEAD
+
+[1.7.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...v1.7.0
 [1.6.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.2...v1.6.0
