@@ -97,9 +97,13 @@ is the `007` CLI, the receipt and report schemas, and the dashboard snapshot.
      `git ls-tree -r --name-only vX.Y.Z | wc -l`).
    - **Qualification:** actual-main CI, exact-tag CI, independent review status.
 
-Planned: a tag-triggered release workflow that builds the archive, attaches
-build provenance through OIDC, and creates the release, replacing steps 3–5.
-Until it exists, run them by hand.
+The tag-triggered `release.yml` prepares the source archive twice, checks their
+bytes and the extracted manifest, computes SHA256SUMS and attaches GitHub build
+provenance through OIDC. It accepts stable annotated tags whose version agrees
+with the CLI and whose release record exists. It retains a source-candidate
+Actions artifact for the maintainer. Exact-tag CI, independent review and the
+publication authorization remain required before step 5. Account configuration,
+PyPI Trusted Publishing and announcement each keep their separate approval.
 
 ## Rules
 

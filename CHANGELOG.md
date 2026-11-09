@@ -22,6 +22,8 @@ schemas, and the dashboard snapshot.
 
 ### Added
 
+- Tag-triggered source candidates with repeat-build and extracted-manifest checks, SHA256SUMS and GitHub build provenance,
+  retained for maintainer publication after release qualification.
 - A macOS Python 3.13 CI job alongside the existing Linux check names, portable tag-manifest verification and weekly
   Dependabot proposals restricted to GitHub Actions.
 - An installable `007-framework` wheel with a `007` console entry point, versioned from `SKILL.md`, carrying the existing
