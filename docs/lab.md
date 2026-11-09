@@ -70,3 +70,12 @@ pin) and is not a claim about other forms, such as written signatures or a skele
 toward "equal". Commit messages often under-specify what their tests pin. A generated contract states names and strings, never behaviour, but tests can stay out of reach. Tests that fail in every cell carry no signal and leave the metric.
 
 Durability is harder than it looks. In the repository where this was built, five instruments failed their own sensitivity gates, so durability was not testable there. Proving a binary outcome non-inferior at -5 points needs 235 to 1039 changes per arm, depending on the base rate. Treat `durable` as unproven unless `report` says otherwise.
+
+## Published replay evidence
+
+The Codex top-up and Claude public replay reports retain their pre-registered margins, invalid-attempt accounting, estimands and full statistical readings. The short result table in the README is an entry point to these frozen records.
+
+- [Codex go-json top-up, margin 3 pp](../evidence/go-json-topup-20261106/RESULT-TOPUP.md).
+- [Claude go-json replay, margin 10 pp](../evidence/go-json-claude-20261107/RESULT-CLAUDE.md).
+
+The detailed planning assumptions and earlier README evidence table are preserved in the [immutable public README checkpoint](https://github.com/marcuscavalcanti/007-framework/blob/1e9f3c1a85e10e4508ccd94c9d44a74cbeec6a77/README.md#current-thesis-minimum-sufficient-effort-november-2026). Those estimates keep their original experiment scope. Choosing the margin and evaluating feasibility above define the decision for a new run.

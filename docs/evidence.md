@@ -178,3 +178,9 @@ framework improves longitudinal productivity.
 - accuracy of touch-rate without agent commit attribution;
 - causal benefit of the complete framework bundle.
 - task-class or cross-project superiority of the experimental route recommendation.
+
+## Product and release history
+
+The [changelog](../CHANGELOG.md) records version-level capabilities. Each version under [evidence](../evidence/) keeps its qualification record and original claim limits. The historical V1 mechanism and v1.4 cost/time observations above retain their narrow scopes.
+
+The [public README checkpoint at 1e9f3c1](https://github.com/marcuscavalcanti/007-framework/blob/1e9f3c1a85e10e4508ccd94c9d44a74cbeec6a77/README.md) preserves the earlier release narratives and evidence table. Current laboratory methods and frozen replay result links are collected in the [laboratory guide](lab.md#published-replay-evidence).

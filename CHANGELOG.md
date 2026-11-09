@@ -54,6 +54,8 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Changed
 
+- The README separates effort evaluation, local observation and host-skill use. It states log-decoding and served-identity
+  limits, compressed-log requirements, stable installation/PATH and integration coverage, with detailed evidence linked.
 - A session whose turns used more than one model or effort is labelled `mixed` instead of its last value, so a mixed-model
   session is no longer priced at one model's rate nor matched to one model's calibration. Claude's `<synthetic>` placeholder is
   not a model.
