@@ -13,6 +13,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import harness_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -277,6 +278,23 @@ def codex_usage_complete(raw):
             and raw["total_tokens"] == raw["input_tokens"] + raw["output_tokens"])
 
 
+def coherent_window(stamps, cutoff):
+    previous = None
+    for stamp in stamps:
+        if stamp is None or previous is not None and stamp < previous and previous >= cutoff:
+            return False
+        previous = stamp
+    return True
+
+
+def codex_allocation_valid(values):
+    if values is None:
+        return False
+    prompt, cached, written, five_minute, one_hour = values[:5]
+    return (min(prompt, cached, written, five_minute, one_hour) >= 0
+            and cached + written <= prompt and five_minute + one_hour <= written)
+
+
 def iso(stamp):
     return stamp.isoformat().replace("+00:00", "Z") if stamp else None
 
@@ -288,6 +306,7 @@ class CodexLog:
     def __init__(self, path=None):
         self.meta, self.updated, self.last_task, self.previous = None, None, None, None
         self.stamps, self.segments, self.tokens = set(), [], []
+        self.price_anomalies = set()
 
     def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
@@ -315,6 +334,9 @@ class CodexLog:
             if total and total == self.previous:
                 if not total_ok or not last_ok:
                     self.tokens.append((stamp, None, None, False, False))
+                elif (not codex_allocation_valid(codex_counts(total))
+                      or not absent and not codex_allocation_valid(codex_counts(last))):
+                    self.price_anomalies.add(stamp)
                 return
             self.previous = total
             self.tokens.append((stamp, codex_counts(total), codex_counts(last),
@@ -348,38 +370,32 @@ class CodexLog:
             usage["usage_complete"] = False
         usage["usage_complete"] &= all(total_ok and last_ok for _, _, total_ok, last_ok in inside)
         usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
+        usage["usage_complete"] &= coherent_window((row[0] for row in self.tokens), cutoff)
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
-        previous_stamp = None
         primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
         allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",
                                                        "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
-        cached, written, five_minute, one_hour = allocation
         for stamp, total, last, total_ok, _ in self.tokens:
-            if stamp is not None and previous_stamp is not None and stamp < previous_stamp and previous_stamp >= cutoff:
-                usage["usage_complete"] = False
             if stamp is None:
                 usage["usage_complete"] = False
                 usage["price_allocation_complete"] = False
             elif stamp >= cutoff:
                 for observation in (total, last):
                     if observation is not None:
-                        usage["price_allocation_complete"] &= (
-                            observation[cached] + observation[written] <= observation[primary[0]]
-                            and observation[five_minute] + observation[one_hour] <= observation[written])
+                        usage["price_allocation_complete"] &= codex_allocation_valid(observation)
                 if previous is None or total is None:
                     usage["usage_complete"] = False
                 else:
                     delta = [value - previous[i] for i, value in enumerate(total)]
                     usage["usage_complete"] &= all(delta[i] >= 0 for i in primary)
-                    usage["price_allocation_complete"] &= all(delta[i] >= 0 for i in allocation)
+                    usage["price_allocation_complete"] &= codex_allocation_valid(delta)
                     if last is not None:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
                         usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
             previous = total if stamp is not None and total_ok else None
-            previous_stamp = stamp
         usage["price_allocation_complete"] &= usage["usage_complete"]
-        usage["price_allocation_complete"] &= (
-            usage["cached_input_tokens"] + usage["cache_write_input_tokens"] <= usage["input_tokens"])
+        usage["price_allocation_complete"] &= codex_allocation_valid(tuple(usage[key] for key in USAGE_KEYS))
+        usage["price_allocation_complete"] &= not any(stamp is None or stamp >= cutoff for stamp in self.price_anomalies)
         model, effort = labels(self.segments)
         return {
             **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at", "subagent")},
@@ -487,14 +503,14 @@ class ClaudeLog:
         usage["total_tokens"] = usage["input_tokens"] + usage["cached_input_tokens"] + usage["cache_write_input_tokens"] + usage["output_tokens"]
         started = iso_datetime(meta["started_at"])
         baseline = 0 if started and started >= cutoff else None
-        latest, inside, valid = None, False, True
+        latest, inside, valid = None, False, coherent_window((row[0] for row in self.costs), cutoff)
         for stamp, cost in self.costs:
             if cost is None:
                 valid = False
                 continue
             valid &= latest is None or cost >= latest
             latest = cost
-            if stamp <= cutoff:
+            if stamp < cutoff:
                 baseline = latest
             else:
                 inside = True
@@ -657,10 +673,12 @@ def summarize(sessions, window_hours):
     result["priced_sessions"] = len(priced)
     result["unpriced_sessions"] = len(sessions) - len(priced)
     result["pricing_coverage"] = len(priced) / len(sessions) if sessions else None
-    result["cost_usd_known_sum"] = round(sum(item["cost_usd_estimate"] for item in priced), 6)
+    known = harness_report._money_total(item["cost_usd_estimate"] for item in priced)
+    result["cost_usd_known_sum"] = round(known, 6) if known is not None else None
     result["cost_usd_estimate"] = result["cost_usd_known_sum"] if sessions and len(priced) == len(sessions) else None
     reported = [item for item in sessions if item.get("cost_usd_reported") is not None]
-    result["cost_usd_reported_sum"] = round(sum(item["cost_usd_reported"] for item in reported), 6)
+    known = harness_report._money_total(item["cost_usd_reported"] for item in reported)
+    result["cost_usd_reported_sum"] = round(known, 6) if known is not None else None
     result["reported_cost_sessions"] = len(reported)
     result["reported_cost_coverage"] = len(reported) / len(sessions) if sessions else None
     routes = {}
@@ -670,11 +688,12 @@ def summarize(sessions, window_hours):
         row["sessions"] += 1
         row["tokens"] += item["usage"].get("total_tokens", 0)
         if item.get("cost_usd_estimate") is not None:
-            row["cost_usd_estimate"] += item["cost_usd_estimate"]
+            row["cost_usd_estimate"] = harness_report._money_total((row["cost_usd_estimate"], item["cost_usd_estimate"]))
             row["priced_sessions"] += 1
     result["routes"] = sorted(routes.values(), key=lambda row: (-row["tokens"], row["provider"], row["model"]))
     for row in result["routes"]:
-        row["cost_usd_estimate"] = round(row["cost_usd_estimate"], 6) if row["priced_sessions"] == row["sessions"] else None
+        row["cost_usd_estimate"] = (round(row["cost_usd_estimate"], 6)
+                                    if row["cost_usd_estimate"] is not None and row["priced_sessions"] == row["sessions"] else None)
     result["recent_sessions"] = sorted(sessions, key=lambda item: item.get("updated_at") or "", reverse=True)[:20]
     return result
 

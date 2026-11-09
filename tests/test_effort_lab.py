@@ -179,16 +179,16 @@ class LabRunAccountingTests(unittest.TestCase):
                     execute.assert_not_called()
 
     def test_standalone_replay_rejects_nonpositive_timeouts_before_output(self):
-        for timeout in (-1, 0, 1):
+        for index, timeout in enumerate((-1, 0, 1, 10 ** 400, 10 ** 9)):
             with self.subTest(timeout=timeout):
-                output = self.root / f"timeout-{timeout}"
+                output = self.root / f"timeout-{index}"
                 argv = ["replay_eval.py", "--set", str(self.config), "run", "--arms", "high", "--replicates", "1",
                         "--timeout-min", str(timeout), "--out", str(output)]
                 with mock.patch.object(sys, "argv", argv), mock.patch.object(sys, "stdout"), \
                         mock.patch.object(sys, "stderr"), \
                         mock.patch.object(lab.replay_eval, "execute_cell", return_value={"valid": True}) as execute, \
                         mock.patch.object(lab.replay_eval, "write_summary"):
-                    if timeout <= 0:
+                    if timeout != 1:
                         with self.assertRaises(SystemExit):
                             lab.replay_eval.main()
                         execute.assert_not_called()
@@ -425,7 +425,7 @@ class Budget(unittest.TestCase):
     def test_invalid_control_limits_are_rejected_before_dispatch(self):
         cases = [(name, value) for name in ("jobs", "replicates", "max_calls", "max_invalid")
                  for value in (-1, False, 1.5)]
-        cases += [("timeout_s", value) for value in (0, -1, False, float("nan"), float("inf"))]
+        cases += [("timeout_s", value) for value in (0, -1, False, float("nan"), float("inf"), 10 ** 400, 1e308)]
         for name, value in cases:
             with self.subTest(name=name, value_type=type(value).__name__), tempfile.TemporaryDirectory() as d:
                 root = Path(d)
@@ -479,6 +479,28 @@ class Budget(unittest.TestCase):
                 self.assertEqual(execute.call_count, 0 if recovering else 2)
                 stopped = json.loads((output / "STOP.json").read_text())
                 self.assertIsNone(stopped["spent"])
+
+    def test_reservation_overflow_stops_without_losing_the_first_terminal(self):
+        for reserve, budget in ((10 ** 308, 1.7e308), (1e308, 1.7e308), (1, 1.7)):
+            with self.subTest(reserve_type=type(reserve).__name__), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                execute = mock.Mock(side_effect=self.fake(cost=0, delay=.02)[0])
+                output = root / "out"
+                result = lab.run(self.config(root), output, replicates=1, jobs=2, max_calls=2,
+                                 max_usd=budget, stop_usd=reserve, execute=execute)
+                self.assertEqual((result["stop"], result["calls"], execute.call_count), ("usd-budget", 1, 1))
+                self.assertEqual(result["spent"], 0)
+                self.assertEqual(json.loads((output / "STOP.json").read_text())["stop"], "usd-budget")
+
+    def test_arm_monetary_totals_remain_representable(self):
+        for amount, expected in ((1e308, None), (0.25, 0.5), (0, 0)):
+            with self.subTest(amount=amount):
+                rows = [{"accepted": True, "agent_wall_s": 1, "cost_usd": amount, "cell": str(i)} for i in range(2)]
+                stats = lab.arm_stats(rows, {}, {row["cell"]: row for row in rows})
+                self.assertEqual(stats["cost_usd"], expected)
+                self.assertEqual(stats["total_cost_usd"], None if expected is None else expected * 2)
+                self.assertEqual(stats["cost_per_accepted_usd"], None if expected is None else expected / 2)
+                json.dumps(stats, allow_nan=False)
 
     def test_parallel_cells_never_overrun_the_money_cap(self):
         with tempfile.TemporaryDirectory() as d:

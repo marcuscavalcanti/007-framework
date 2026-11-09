@@ -311,6 +311,56 @@ class LocalActivityTests(unittest.TestCase):
             self.assertEqual(result["usage"]["total_tokens"], 240)
             self.assertIsNone(activity.pricing_request(result))
 
+    def test_cumulative_cache_allocation_validates_derived_intervals(self):
+        activity = self.module()
+        cases = [(30, 40, False), (30, 60, True)]
+        for initial_write, final_write, priced in cases:
+            with self.subTest(final_write=final_write), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("derived-tiers", tmp)[:3]
+                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T12:00:00Z"
+                for stamp, amount, writes, hour in (("2026-08-29T14:59:00Z", 120, initial_write, 0),
+                                                    ("2026-08-30T14:00:00Z", 240, final_write, 30)):
+                    rows.append({"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": {
+                        "total_token_usage": {"input_tokens": amount * 5 // 6, "output_tokens": amount // 6,
+                            "total_tokens": amount, "cache_write_input_tokens": writes, "cache_write_1h_input_tokens": hour}}}})
+                path = Path(tmp, "derived-tiers.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertEqual(activity.pricing_request(result) is not None, priced)
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("derived-cache", tmp)[:3]
+            rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T12:00:00Z"
+            for stamp, amount, cached in (("2026-08-29T14:59:00Z", 120, 0),
+                                          ("2026-08-30T14:00:00Z", 240, 150),
+                                          ("2026-08-30T14:01:00Z", 360, 150)):
+                rows.append({"timestamp": stamp, "type": "event_msg", "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {"input_tokens": amount * 5 // 6, "output_tokens": amount // 6,
+                                         "total_tokens": amount, "cached_input_tokens": cached}}}})
+            path = Path(tmp, "derived-cache.jsonl")
+            write_jsonl(path, rows)
+            result = activity.parse_codex_session(path, NOW)
+            self.assertTrue(result["usage"]["usage_complete"])
+            self.assertEqual(result["usage"]["total_tokens"], 240)
+            self.assertIsNone(activity.pricing_request(result))
+
+    def test_duplicate_allocation_anomaly_keeps_primary_tokens_without_pricing(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("duplicate-allocation", tmp)
+            duplicate = json.loads(json.dumps(rows[-2]))
+            duplicate["timestamp"] = "2026-08-30T14:06:00Z"
+            duplicate["payload"]["info"]["last_token_usage"] = {
+                "input_tokens": 1_000_000, "output_tokens": 100_000, "total_tokens": 1_100_000,
+                "cached_input_tokens": 1_500_000}
+            path = Path(tmp, "duplicate-allocation.jsonl")
+            write_jsonl(path, rows + [duplicate])
+            result = activity.parse_codex_session(path, NOW)
+            self.assertEqual(result["usage"]["total_tokens"], 1_100_000)
+            self.assertTrue(result["usage"]["usage_complete"])
+            self.assertIsNone(activity.pricing_request(result))
+
     def test_primary_usage_and_price_allocation_have_separate_completeness(self):
         activity = self.module()
         cases = [("increment", 80, 0, False), ("increment", 80, 80, True),
@@ -711,6 +761,35 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertEqual(result["session_id"], "reported-cost")
                 self.assertEqual(result["usage"]["total_tokens"], 12)
                 self.assertEqual(result["cost_usd_reported"], expected)
+
+    def test_claude_cost_window_rejects_rewinds_and_includes_the_cutoff(self):
+        activity = self.module()
+        cases = [("2026-08-28T12:00:00Z", [("2026-08-29T14:59:00Z", 1), ("2026-08-29T15:01:00Z", 2),
+                                                         ("2026-08-29T14:59:30Z", 3)], None),
+                 ("2026-08-28T12:00:00Z", [("2026-08-29T14:59:00Z", 1), ("2026-08-29T15:01:00Z", 2),
+                                                         ("2026-08-29T15:02:00Z", 3)], 2),
+                 ("2026-08-29T15:00:00Z", [("2026-08-29T15:00:00Z", 0.5), ("2026-08-29T15:01:00Z", 1)], 1)]
+        for started, costs, expected in cases:
+            with self.subTest(started=started, expected=expected), tempfile.TemporaryDirectory() as tmp:
+                rows = [{"type": "user", "cwd": tmp, "sessionId": "cost-clock", "timestamp": started}]
+                rows += [{"type": "result", "timestamp": stamp, "total_cost_usd": cost} for stamp, cost in costs]
+                path = Path(tmp, "cost-clock.jsonl")
+                write_jsonl(path, rows)
+                self.assertEqual(activity.parse_claude_session(path, NOW)["cost_usd_reported"], expected)
+
+    def test_activity_monetary_totals_remain_representable(self):
+        activity = self.module()
+        for amount, expected in ((1e308, None), (0.25, 0.5), (0, 0)):
+            with self.subTest(amount=amount):
+                sessions = [{"session_id": str(i), "status": "idle", "runtime_provider": "anthropic",
+                             "model": "test", "effort": "medium", "usage": {**activity.empty_usage(), "usage_complete": True},
+                             "cost_usd_reported": amount, "cost_usd_estimate": amount} for i in range(2)]
+                result = activity.summarize(sessions, 24)
+                self.assertEqual(result["cost_usd_reported_sum"], expected)
+                self.assertEqual(result["cost_usd_known_sum"], expected)
+                self.assertEqual(result["cost_usd_estimate"], expected)
+                self.assertEqual(result["routes"][0]["cost_usd_estimate"], expected)
+                json.dumps(result, allow_nan=False)
 
     def test_claude_window_cost_requires_a_cumulative_baseline(self):
         activity = self.module()

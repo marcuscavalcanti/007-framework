@@ -424,6 +424,14 @@ class ScriptContractTests(unittest.TestCase):
                 self.assertFalse(invalid["valid"])
                 retained = json.loads((output / "identity-cell-r02-NEW.json").read_text())
                 self.assertFalse(retained["valid"])
+
+                config["agent_command"][2] = identity_script
+                for replicate, timeout in enumerate((0, -1, 10 ** 400, 1e308), 3):
+                    with self.subTest(timeout_type=type(timeout).__name__), \
+                            mock.patch.object(replay_eval, "run", wraps=replay_eval.run) as execute:
+                        with self.assertRaisesRegex(ValueError, "timeout"):
+                            replay_eval.execute_cell(config, {**task, "acceptance_timeout_s": timeout}, "NEW", replicate, output, 30)
+                        execute.assert_not_called()
         finally:
             sys.path.pop(0)
 
@@ -1226,6 +1234,19 @@ class ScriptContractTests(unittest.TestCase):
             )
             self.assertEqual(explicit["strategy"], "policy-fallback")
             self.assertEqual(explicit["eligible_candidates"], 0)
+        finally:
+            sys.path.pop(0)
+
+    def test_replay_runner_rejects_invalid_timeout_before_process_creation(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import replay_eval
+            for timeout in (0, -1, 10 ** 400, 1e308, float("inf"), float("nan")):
+                with self.subTest(timeout_type=type(timeout).__name__), \
+                        mock.patch.object(replay_eval.subprocess, "Popen", wraps=replay_eval.subprocess.Popen) as launch:
+                    with self.assertRaisesRegex(ValueError, "timeout"):
+                        replay_eval.run([sys.executable, "-c", "pass"], timeout=timeout)
+                    launch.assert_not_called()
         finally:
             sys.path.pop(0)
 

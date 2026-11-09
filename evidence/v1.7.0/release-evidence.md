@@ -89,6 +89,17 @@ with 52 JavaScript tests. The final record and manifest are checked separately.
 Exact-source distribution, remote checks and fresh independent review remain
 pending.
 
+Candidate `9af7c9e00c92ca8feb86c154f0aa196ff99b4b66` received FIX FIRST
+in its single authorized review. The next local pass applies shared window
+coherence to Claude and Codex, preserves duplicate-allocation anomalies without
+double counting, and validates raw, derived and aggregated price allocations.
+Overflow-safe totals cover activity, routes and lab reports. Portable timeout
+limits are checked before execution, and reservation comparisons use checked
+monetary arithmetic. Focused regressions reproduced the six findings before
+correction. The integrated native run passed 880 tests without skips in
+323.438 seconds. JavaScript, final record/manifest, distribution and remote
+checks are recorded separately; fresh independent review remains required.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

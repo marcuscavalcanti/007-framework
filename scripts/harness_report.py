@@ -62,6 +62,16 @@ def _money_sum(values):
     return total
 
 
+def _money_total(values):
+    values = tuple(values)
+    if any(not _valid_money(value) for value in values):
+        return None
+    try:
+        return float(_money_sum(values))
+    except ValueError:
+        return None
+
+
 def route_identity_unavailable(row):
     return any(not isinstance(value, str) or value.strip().lower() in ("", "unmeasured", "unknown", "n/d")
                for value in (row.get("served_" + field) or row.get(field) for field in ("provider", "model", "effort")))

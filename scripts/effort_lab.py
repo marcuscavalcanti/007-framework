@@ -554,8 +554,7 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
                                   ("max_calls", max_calls, 0), ("max_invalid", max_invalid, 1)):
         if type(value) is not int or value < minimum:
             raise ValueError(f"{name} limit must be an integer >= {minimum}")
-    if not harness_report._valid_money(timeout_s) or timeout_s <= 0:
-        raise ValueError("timeout limit must be finite and positive")
+    timeout_s = replay_eval.validate_timeout(timeout_s)
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (out / ".run.lock").open("a") as handle:
         try:
@@ -628,7 +627,11 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                 if calls >= max_calls:
                     stop = stop or ("call-budget" if next(queue, None) else None)
                     break
-                if spent + stop_usd * (len(active) + 1) > max_usd:
+                try:
+                    reserved = harness_report._money_sum((spent, stop_usd * (len(active) + 1)))
+                except ValueError:
+                    reserved = None
+                if reserved is None or reserved > harness_report._money_sum((max_usd,)):
                     stop = "usd-budget"
                     break
                 cell = next(queue, None)
@@ -688,12 +691,14 @@ def load_cells(out):
 
 def arm_stats(rows, durable, next_rows):
     accepted = sum(r["accepted"] for r in rows)
-    wall, cost = sum(r["agent_wall_s"] for r in rows), sum(r["cost_usd"] for r in rows)
+    wall = sum(r["agent_wall_s"] for r in rows)
+    cost = harness_report._money_total(r["cost_usd"] for r in rows)
     following = [next_rows[r["cell"]] for r in rows if r["cell"] in next_rows]
     good = sum(durable.get(r["cell"], False) for r in rows)
     return {"units": len(rows), "accepted": accepted, "agent_wall_s": wall, "cost_usd": cost, "wall_per_accepted_s": wall / accepted if accepted else None,
-            "cost_per_accepted_usd": cost / accepted if accepted else None, "durable": good, "durable_rate": good / len(rows) if rows else None,
-            "next_accepted": sum(r["accepted"] for r in following), "total_wall_s": wall + sum(r["agent_wall_s"] for r in following), "total_cost_usd": cost + sum(r["cost_usd"] for r in following)}
+            "cost_per_accepted_usd": cost / accepted if accepted and cost is not None else None, "durable": good, "durable_rate": good / len(rows) if rows else None,
+            "next_accepted": sum(r["accepted"] for r in following), "total_wall_s": wall + sum(r["agent_wall_s"] for r in following),
+            "total_cost_usd": harness_report._money_total(r["cost_usd"] for group in (rows, following) for r in group)}
 
 
 def contrast(rows, durable, next_rows, low, ref):

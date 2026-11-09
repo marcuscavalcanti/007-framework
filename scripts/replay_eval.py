@@ -100,7 +100,15 @@ def kill_process_group(process, wait_s=2.0):
         time.sleep(min(0.01, remaining))
 
 
+def validate_timeout(seconds):
+    # POSIX poll accepts a signed32-bit millisecond wait.
+    if not harness_report._valid_money(seconds) or not 0 < seconds <= (2**31 - 1) // 1000:
+        raise ValueError("timeout limit must be positive and fit the portable subprocess wait range")
+    return seconds
+
+
 def run(args, cwd=None, timeout=1800, input_text=None, env=None):
+    timeout = validate_timeout(timeout)
     # The child leads its own session; whenever it returns (exit, failure or timeout)
     # every remaining member of that group is killed before the result is interpreted.
     # No context manager: Popen.__exit__ would add an unbounded wait.
@@ -531,6 +539,7 @@ def validate_cell_artifacts(tasks, arms, replicates, *, directory=None):
     sensitive = directory is None or artifact_case_sensitive(directory)
     paths = set()
     for task in tasks:
+        validate_timeout(task.get("acceptance_timeout_s", 900))
         for replicate in range(1, replicates + 1):
             for arm in arms:
                 identifier = cell_id(task, arm, replicate)
@@ -633,6 +642,7 @@ def execute_reserved_cell(config, task, arm, replicate, output_dir, timeout_s, *
 
 
 def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root=None):
+    timeout_s = validate_timeout(timeout_s)
     retain_text = _diagnostic_retention(config, output_dir)
     acceptance_sandbox, acceptance_env = acceptance_policy(config.get("acceptance_sandbox"), config.get("acceptance_env"))
     attempt_id = cell_id(task, arm, replicate)
@@ -673,6 +683,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
         source_repo = None
     else:
         source_repo = Path(config["repos"][task["repo"]]).expanduser().resolve()
+    validate_timeout(task.get("acceptance_timeout_s", 900))
     policy = config["arms"][arm]
     workspace = Path(tempfile.mkdtemp(prefix=f"007-{task['id']}-{arm}-r{replicate:02d}-")).resolve()
     try:
@@ -1250,8 +1261,10 @@ def main():
             print(f"{task['id']:24s} {task.get('class', 'unclassified'):12s} {task.get('subject', '')}")
         return 0
 
-    if args.timeout_min <= 0:
-        parser.error("timeout must be positive")
+    try:
+        timeout_s = validate_timeout(args.timeout_min * 60)
+    except ValueError as error:
+        parser.error(str(error))
 
     wanted = None if args.tasks == "all" else set(args.tasks.split(","))
     tasks = [task for task in tasks if wanted is None or task["id"] in wanted]
@@ -1269,7 +1282,7 @@ def main():
     for task in tasks:
         for replicate in range(1, replicates + 1):
             for arm in schedule[(task["id"], replicate)]:
-                record = execute_cell(config, task, arm, replicate, output_dir, args.timeout_min * 60)
+                record = execute_cell(config, task, arm, replicate, output_dir, timeout_s)
                 record["execution_index"] = len(rows) + 1
                 rows.append(record)
                 if not record["valid"]:

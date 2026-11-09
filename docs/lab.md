@@ -64,6 +64,10 @@ the verdict in plain words at the declared margin.
 
 ## Limits
 
+Execution and acceptance timeouts must be positive and at most 2,147,483 seconds,
+the portable subprocess wait range. The standalone CLI accepts whole minutes,
+up to 35,791. Invalid limits are refused before execution.
+
 A verdict holds for the specification form the set used (by default the commit message plus a contract of names its tests
 pin) and is not a claim about other forms, such as written signatures or a skeleton. Filters that keep well-specified tasks
 (`min_message`, the reach set, `sufficiency`) select tasks where the specification is already enough, which pulls a verdict

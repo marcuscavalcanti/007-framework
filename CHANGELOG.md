@@ -68,6 +68,11 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Cumulative windows share temporal validation across native providers. Cache allocation is validated
+  before duplicate suppression and after interval/window derivation, preserving primary usage.
+- Activity, route and lab-report totals expose unavailable aggregates when they cannot be represented.
+  Reservation comparisons handle large integer operands. Execution and acceptance timeout limits are
+  checked before launch within the portable subprocess wait range.
 - Native usage windows use an inclusive cutoff, reject temporal rewinds and reconcile cache pricing counters.
   Overflow-safe monetary validation is shared by collection, telemetry, task/replay receipts and rate cards.
   Rate-card arithmetic preserves representable estimates without intermediate float overflow.
