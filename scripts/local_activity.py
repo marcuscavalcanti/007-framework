@@ -306,6 +306,7 @@ class CodexLog:
     def __init__(self, path=None):
         self.meta, self.updated, self.last_task, self.previous = None, None, None, None
         self.stamps, self.segments, self.tokens = set(), [], []
+        self.token_stamps = []
         self.price_anomalies = set()
 
     def feed(self, row):
@@ -322,6 +323,7 @@ class CodexLog:
         elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete"):
             self.last_task = payload["type"]
         elif kind == "event_msg" and payload.get("type") == "token_count":
+            self.token_stamps.append(stamp)  # Duplicate counters still carry temporal evidence.
             info = payload.get("info")
             if not isinstance(info, dict):
                 self.tokens.append((stamp, None, None, False, False))
@@ -370,7 +372,7 @@ class CodexLog:
             usage["usage_complete"] = False
         usage["usage_complete"] &= all(total_ok and last_ok for _, _, total_ok, last_ok in inside)
         usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
-        usage["usage_complete"] &= coherent_window((row[0] for row in self.tokens), cutoff)
+        usage["usage_complete"] &= coherent_window(self.token_stamps, cutoff)
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
         primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
         allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",
@@ -386,6 +388,7 @@ class CodexLog:
                 if previous is None or total is None:
                     usage["usage_complete"] = False
                 else:
+                    usage["price_allocation_complete"] &= codex_allocation_valid(previous)
                     delta = [value - previous[i] for i, value in enumerate(total)]
                     usage["usage_complete"] &= all(delta[i] >= 0 for i in primary)
                     usage["price_allocation_complete"] &= codex_allocation_valid(delta)
@@ -460,7 +463,7 @@ class ClaudeLog:
         if isinstance(row.get("cwd"), str) and row["cwd"] not in self.cwds:
             self.cwds.append(row["cwd"])
         cost = row.get("total_cost_usd")
-        if kind == "result" and stamp:
+        if kind == "result":
             valid = valid_number(cost)
             self.costs.append((stamp, float(cost) if valid else None))
         message = row.get("message") if kind == "assistant" else None
@@ -468,23 +471,24 @@ class ClaudeLog:
             return
         model = message.get("model")
         add_segment(self.segments, stamp, None if isinstance(model, str) and model.startswith("<") else model, row.get("effort"))
-        if stamp:
-            raw = message.get("usage")
-            key = message.get("id") if isinstance(message.get("id"), str) and message["id"] else object()
-            if not isinstance(raw, dict):
-                if not (isinstance(model, str) and model.startswith("<")):
-                    self.messages.setdefault(key, (stamp, None, False))
-                return
-            cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
-            details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
-            # Claude Code writes one row per content block of a response, each with the response's usage (the last one final):
-            # one count per message id
-            required = all(valid_number(raw.get(name)) for name in ("input_tokens", "output_tokens"))
-            tier_sum = sum(safe_number(cache.get(name)) for name in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"))
-            aggregate = raw.get("cache_creation_input_tokens", tier_sum)
-            coherent = valid_number(aggregate) and aggregate >= tier_sum
-            value = counts({**details, **cache, **raw, "cache_creation_input_tokens": aggregate}, CLAUDE_USAGE) if required and coherent else None
-            self.messages[key] = (stamp, value, value is not None and aggregate == tier_sum)
+        raw = message.get("usage")
+        key = message.get("id") if isinstance(message.get("id"), str) and message["id"] else object()
+        if not isinstance(raw, dict):
+            if not (isinstance(model, str) and model.startswith("<")):
+                self.messages.setdefault(key, (stamp, None, False))
+            return
+        cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
+        details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
+        # Claude Code repeats usage per content block; the last observation of a message is authoritative.
+        required = all(valid_number(raw.get(name)) for name in ("input_tokens", "output_tokens"))
+        normalized = {**details, **cache, **raw}
+        tiers = ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+        tier_sum = sum(safe_number(normalized.get(name)) for name in tiers)
+        aggregate = raw.get("cache_creation_input_tokens", tier_sum)
+        aliases_match = all(name not in raw or name not in cache
+                            or valid_number(cache[name]) and raw[name] == cache[name] for name in tiers)
+        value = counts({**normalized, "cache_creation_input_tokens": aggregate}, CLAUDE_USAGE) if required else None
+        self.messages[key] = (stamp, value, value is not None and aggregate == tier_sum and aliases_match)
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         meta = self.meta
@@ -492,9 +496,10 @@ class ClaudeLog:
             return None
         now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=lookback_hours)
-        observed = [(value, tiers) for stamp, value, tiers in self.messages.values() if stamp >= cutoff]
+        observed = [(value, tiers) for stamp, value, tiers in self.messages.values() if stamp is None or stamp >= cutoff]
         window = [value for value, _ in observed]
         usage = {**empty_usage(), "usage_complete": None not in window, "input_includes_cache": False}
+        usage["usage_complete"] &= all(stamp is not None for stamp, _, _ in self.messages.values())
         usage["cache_write_tiers_complete"] = all(tiers for _, tiers in observed)
         sums = [sum(column) for column in zip(*(value for value in window if value is not None))] or [0] * 7
         (usage["input_tokens"], usage["cached_input_tokens"], usage["cache_write_5m_input_tokens"],
@@ -505,7 +510,7 @@ class ClaudeLog:
         baseline = 0 if started and started >= cutoff else None
         latest, inside, valid = None, False, coherent_window((row[0] for row in self.costs), cutoff)
         for stamp, cost in self.costs:
-            if cost is None:
+            if stamp is None or cost is None:
                 valid = False
                 continue
             valid &= latest is None or cost >= latest

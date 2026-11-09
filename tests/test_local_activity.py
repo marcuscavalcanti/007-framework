@@ -294,6 +294,50 @@ class LocalActivityTests(unittest.TestCase):
                 if request:
                     self.assertEqual(request["cache_creation_1h_input_tokens"], 30)
 
+    def test_duplicate_cumulative_timestamps_preserve_window_uncertainty(self):
+        activity = self.module()
+        cases = [("2026-08-29T14:59:30Z", False), (None, False),
+                 ("2026-08-29T15:02:00Z", True)]
+        for duplicate_stamp, complete in cases:
+            with self.subTest(stamp=duplicate_stamp), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("duplicate-clock", tmp)[:3]
+                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T12:00:00Z"
+                for stamp, amount in (("2026-08-29T14:59:00Z", 120),
+                                      ("2026-08-29T15:01:00Z", 240), (duplicate_stamp, 240)):
+                    rows.append({"type": "event_msg", "timestamp": stamp, "payload": {
+                        "type": "token_count", "info": {"total_token_usage": {
+                            "input_tokens": amount * 5 // 6, "output_tokens": amount // 6,
+                            "total_tokens": amount}}}})
+                filename = Path(tmp, "duplicate-clock.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertEqual(result["usage"]["usage_complete"], complete)
+                self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_cumulative_pricing_requires_valid_baseline_allocation(self):
+        activity = self.module()
+        for cached, priced in ((180, False), (100, True)):
+            with self.subTest(cached=cached), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("baseline-allocation", tmp)[:3]
+                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T12:00:00Z"
+                for stamp, amount, cache in (("2026-08-29T14:59:00Z", 120, cached),
+                                             ("2026-08-29T15:01:00Z", 240, 200)):
+                    rows.append({"type": "event_msg", "timestamp": stamp, "payload": {
+                        "type": "token_count", "info": {"total_token_usage": {
+                            "input_tokens": amount * 5 // 6, "output_tokens": amount // 6,
+                            "total_tokens": amount, "cached_input_tokens": cache}}}})
+                filename = Path(tmp, "baseline-allocation.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                request = activity.pricing_request(result)
+                self.assertEqual(request is not None, priced)
+                if request:
+                    self.assertEqual(request["prompt_tokens"], 0)
+                    self.assertEqual(request["cache_read_input_tokens"], 100)
+
     def test_invalid_cache_allocation_cannot_cancel_out_across_observations(self):
         activity = self.module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -454,8 +498,33 @@ class LocalActivityTests(unittest.TestCase):
                                "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 10,
                                          "cache_creation": {"ephemeral_5m_input_tokens": 30}}}}])
             partial = activity.parse_claude_session(path, NOW)
-            self.assertFalse(partial["usage"]["usage_complete"])
+            self.assertTrue(partial["usage"]["usage_complete"])
+            self.assertEqual(partial["usage"]["total_tokens"], 130)
             self.assertIsNone(activity.pricing_request(partial))
+
+    def test_claude_pricing_validates_emitted_cache_tiers_and_alias_conflicts(self):
+        activity = self.module()
+        cases = [(None, 30, True), (30, 30, True), (60, 30, False),
+                 (20, 30, False), (30, 60, False)]
+        for top_level, nested, priced in cases:
+            with self.subTest(top_level=top_level, nested=nested), tempfile.TemporaryDirectory() as tmp:
+                usage = {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 30,
+                         "cache_creation": {"ephemeral_1h_input_tokens": nested}}
+                if top_level is not None:
+                    usage["ephemeral_1h_input_tokens"] = top_level
+                filename = Path(tmp, "merged-tiers.jsonl")
+                write_jsonl(filename, [{"type": "assistant", "sessionId": "merged-tiers", "cwd": tmp,
+                    "timestamp": "2026-08-30T14:00:00Z", "message": {
+                        "id": "one", "model": "claude-test", "usage": usage}}])
+                result = activity.parse_claude_session(filename, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 150)
+                self.assertEqual(result["usage"]["cache_write_tiers_complete"], priced)
+                request = activity.pricing_request(result)
+                self.assertEqual(request is not None, priced)
+                if request:
+                    self.assertEqual(request["cache_creation_input_tokens"], 30)
+                    self.assertEqual(request["cache_creation_1h_input_tokens"], 30)
 
     def test_claude_missing_response_usage_is_unknown_and_a_final_update_can_repair_it(self):
         activity = self.module()
@@ -475,6 +544,23 @@ class LocalActivityTests(unittest.TestCase):
                 repaired = activity.parse_claude_session(path, NOW)
                 self.assertEqual(repaired["usage"]["total_tokens"], 120)
                 self.assertTrue(repaired["usage"]["usage_complete"])
+
+    def test_untimed_claude_usage_remains_uncertain_until_a_timed_update(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            filename = Path(tmp, "untimed-usage.jsonl")
+            meta = {"type": "user", "sessionId": "untimed-usage", "cwd": tmp,
+                    "timestamp": "2026-08-30T14:00:00Z"}
+            response = {"type": "assistant", "message": {
+                "id": "one", "model": "claude-test", "usage": {"input_tokens": 10, "output_tokens": 2}}}
+            write_jsonl(filename, [meta, response])
+            incomplete = activity.parse_claude_session(filename, NOW)
+            self.assertFalse(incomplete["usage"]["usage_complete"])
+            self.assertIsNone(activity.pricing_request(incomplete))
+            write_jsonl(filename, [meta, response, {**response, "timestamp": "2026-08-30T14:01:00Z"}])
+            repaired = activity.parse_claude_session(filename, NOW)
+            self.assertTrue(repaired["usage"]["usage_complete"])
+            self.assertEqual(repaired["usage"]["total_tokens"], 12)
 
     def test_codex_log_over_4_mib_is_read_whole_so_usage_is_complete_and_priced(self):
         # a 527 MB rollout read only in its last 4 MiB reported 4 M tokens instead of 2.5 bn, unpriced
@@ -776,6 +862,34 @@ class LocalActivityTests(unittest.TestCase):
                 path = Path(tmp, "cost-clock.jsonl")
                 write_jsonl(path, rows)
                 self.assertEqual(activity.parse_claude_session(path, NOW)["cost_usd_reported"], expected)
+
+    def test_untimed_claude_cost_cannot_establish_zero_or_a_window_delta(self):
+        activity = self.module()
+        for include_untimed, final, expected in ((True, 1, None), (True, 2, None),
+                                                  (False, 1, 0), (False, 2, 1)):
+            with self.subTest(untimed=include_untimed, final=final), tempfile.TemporaryDirectory() as tmp:
+                rows = [
+                    {"type": "user", "cwd": tmp, "sessionId": "untimed-cost",
+                     "timestamp": "2026-08-28T12:00:00Z"},
+                    {"type": "result", "timestamp": "2026-08-29T14:59:00Z", "total_cost_usd": 1},
+                ]
+                if include_untimed:
+                    rows.append({"type": "result", "total_cost_usd": 0})
+                rows.append({"type": "result", "timestamp": "2026-08-29T15:01:00Z", "total_cost_usd": final})
+                rows.append({"type": "assistant", "timestamp": "2026-08-30T14:00:00Z", "message": {
+                    "id": "one", "model": "claude-test", "usage": {"input_tokens": 10, "output_tokens": 2}}})
+                filename = Path(tmp, "untimed-cost.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_claude_session(filename, NOW)
+                self.assertEqual(result["cost_usd_reported"], expected)
+                self.assertEqual(result["usage"]["total_tokens"], 12)
+                self.assertTrue(result["usage"]["usage_complete"])
+                summary = activity.summarize([result], 24)
+                reported = expected is not None
+                self.assertEqual(summary["reported_cost_sessions"], int(reported))
+                self.assertEqual(summary["reported_cost_coverage"], int(reported))
+                if reported:
+                    self.assertEqual(summary["cost_usd_reported_sum"], expected)
 
     def test_activity_monetary_totals_remain_representable(self):
         activity = self.module()

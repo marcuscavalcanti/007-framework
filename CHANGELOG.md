@@ -68,6 +68,9 @@ Candidate prepared for independent review. Release qualification is recorded in
 
 ### Fixed
 
+- Counter timestamps survive duplicate suppression, and untimed Claude usage or cost retains window uncertainty.
+  Required cumulative cache baselines and normalized Claude cache tiers are validated before pricing.
+  Contradictory cache tiers preserve known primary and aggregate usage with tier pricing unavailable.
 - Cumulative windows share temporal validation across native providers. Cache allocation is validated
   before duplicate suppression and after interval/window derivation, preserving primary usage.
 - Activity, route and lab-report totals expose unavailable aggregates when they cannot be represented.

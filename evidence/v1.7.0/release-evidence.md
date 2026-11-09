@@ -100,6 +100,16 @@ correction. The integrated native run passed 880 tests without skips in
 323.438 seconds. JavaScript, final record/manifest, distribution and remote
 checks are recorded separately; fresh independent review remains required.
 
+Candidate `ea561e2be4f8add1337fb0875b6403b50fd2c6e3` received FIX FIRST
+in its single authorized review. Its four connected counterexamples were
+reproduced before correction. Temporal evidence now survives counter
+deduplication, and untimed Claude cost and usage retain window uncertainty.
+Pricing validates required cumulative baselines, normalized cache tiers and
+conflicting tier aliases. Known primary and aggregate usage remains available
+when finite cache tiers contradict their allocation. The final integrated native
+run passed 885 tests without skips in 223.664 seconds. Final record, manifest,
+distribution, remote checks and fresh independent review are qualified separately.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three
