@@ -26,6 +26,11 @@ jobs:
       - name: Require offline historical proofs
         run: python -m unittest discover -s tests -p test_package.py -k historical_proofs -v
       - run: python -m py_compile scripts/*.py
+      - name: Check dashboard startup on macOS
+        if: runner.os == 'macOS'
+        env:
+          PYTHONPATH: scripts
+        run: python -m unittest discover -s tests -p test_dashboard_host.py -k announces -v
       - run: python -m unittest discover -s tests -v
       - name: Verify release manifest
         if: startsWith(github.ref, 'refs/tags/v')

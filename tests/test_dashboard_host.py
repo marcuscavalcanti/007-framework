@@ -18,8 +18,12 @@ class DashboardHostTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:
             env = {"PATH": os.environ["PATH"], "HOME": temporary, "LANG": "C", "PYTHONUNBUFFERED": "1"}
+            trace_path = Path(temporary) / "startup-trace.txt"
             # Separate cold imports and bind from the stdout buffering deadline.
             startup = "\n".join((
+                "import faulthandler",
+                f"trace = open({str(trace_path)!r}, 'w')",
+                "faulthandler.dump_traceback_later(25, file=trace)",
                 "import runpy, sys",
                 "from pathlib import Path",
                 "sys.path.insert(0, str(Path(sys.argv[1]).parent.parent / 'scripts'))",
@@ -27,6 +31,8 @@ class DashboardHostTests(unittest.TestCase):
                 "create_server = dashboard.create_server",
                 "def ready_server(*args, **kwargs):",
                 "    server = create_server(*args, **kwargs)",
+                "    faulthandler.cancel_dump_traceback_later()",
+                "    trace.close()",
                 "    print('server-ready', file=sys.stderr, flush=True)",
                 "    return server",
                 "dashboard.create_server = ready_server",
@@ -39,7 +45,10 @@ class DashboardHostTests(unittest.TestCase):
             try:
                 with selectors.DefaultSelector() as selector:
                     selector.register(process.stderr, selectors.EVENT_READ)
-                    self.assertTrue(selector.select(30), "dashboard server did not initialize")
+                    if not selector.select(30):
+                        dashboard.framework_cli.kill_process_group(process)
+                        diagnostics = trace_path.read_text()[-4000:] if trace_path.exists() else "child trace absent"
+                        self.fail("dashboard server did not initialize\n" + diagnostics)
                     self.assertEqual(process.stderr.readline(), "server-ready\n")
                     selector.unregister(process.stderr)
                     selector.register(process.stdout, selectors.EVENT_READ)
