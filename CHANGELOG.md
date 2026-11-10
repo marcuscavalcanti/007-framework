@@ -79,6 +79,10 @@ Candidate prepared for independent review. Release qualification is recorded in
   Continuous pre-window omissions retain earlier reasoning evidence. Unanchored last observations constrain their own
   cumulative reasoning within output bounds. Mixed full/sparse last objects retain every reconstructible primary increment,
   while contradictory reported deltas remain incomplete and preserve known diagnostic totals.
+  Malformed optional scalars preserve readable primary counters. Unreported reasoning stays unavailable through summaries
+  and snapshots, with an explicit availability flag; Codex output pricing can use complete primary usage without that optional
+  measurement. Duplicate consumption is identified by primary counters while every physical observation retains validation
+  and optional evidence. Subset constraints include non-reasoning capacity, and resets preserve known interval subtotals.
 - Sparse Codex reasoning deltas obey reported cumulative bounds before deduplication, while absent optional bounds remain
   unavailable. Reliably dated Kimi/Gemini events outside the window cannot invalidate current usage because of missing counters.
 - Retained identified logs preserve timestamp fallback beside other contributing logs; a fresh observation replaces only

@@ -534,12 +534,14 @@ class LocalActivityTests(unittest.TestCase):
 
     def test_sparse_reasoning_does_not_assume_an_absent_cumulative_bound_is_zero(self):
         activity = self.module()
-        for reasoning, complete in ((0, True), (5, True), (11, True), (20, True), (21, False)):
-            with self.subTest(reasoning=reasoning), tempfile.TemporaryDirectory() as tmp:
+        for reasoning, full in itertools.product((0, 5, 11, 20, 21), (False, True)):
+            complete = reasoning <= 20 and (full or reasoning == 20)
+            with self.subTest(reasoning=reasoning, full=full), tempfile.TemporaryDirectory() as tmp:
                 total = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+                last = {**total, "reasoning_output_tokens": reasoning} if full else {"reasoning_output_tokens": reasoning}
                 rows = codex_rows("unreported-reasoning", tmp)[:3]
                 for stamp, delta in (("2026-08-30T14:05:00Z", total),
-                                     ("2026-08-30T14:06:00Z", {"reasoning_output_tokens": reasoning})):
+                                     ("2026-08-30T14:06:00Z", last)):
                     rows.append({"type": "event_msg", "timestamp": stamp, "payload": {
                         "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": delta}}})
                 filename = Path(tmp, "unreported-reasoning.jsonl")
@@ -548,6 +550,7 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertEqual(result["usage"]["usage_complete"], complete)
                 self.assertEqual(result["usage"]["total_tokens"], 120)
                 self.assertEqual(activity.pricing_request(result) is not None, complete)
+                self.assertEqual(result["usage"]["reasoning_output_tokens"], reasoning if complete else None)
 
     def test_codex_reasoning_reconciles_available_cumulative_and_last_observations(self):
         activity = self.module()
@@ -976,8 +979,9 @@ class LocalActivityTests(unittest.TestCase):
                                 self.assertEqual(result["usage"]["usage_complete"], complete)
                                 self.assertEqual(result["usage"]["total_tokens"], 20 + sum(growth))
                                 self.assertEqual(activity.pricing_request(result) is not None, complete)
-                                if complete and seen:
-                                    self.assertIn(result["usage"]["reasoning_output_tokens"], window_values)
+                                if complete:
+                                    expected_reasoning = next(iter(window_values)) if seen or sum(growth) == 0 else None
+                                    self.assertEqual(result["usage"]["reasoning_output_tokens"], expected_reasoning)
 
     def test_codex_reasoning_availability_matches_feasible_multi_observation_prefixes(self):
         activity = self.module()
@@ -1024,8 +1028,9 @@ class LocalActivityTests(unittest.TestCase):
                                 self.assertEqual(result["usage"]["usage_complete"], complete)
                                 self.assertEqual(result["usage"]["total_tokens"], 10 + current_growth)
                                 self.assertEqual(activity.pricing_request(result) is not None, complete)
-                                if complete and seen:
-                                    self.assertIn(result["usage"]["reasoning_output_tokens"], values)
+                                if complete:
+                                    expected_reasoning = next(iter(values)) if seen or current_growth == 0 else None
+                                    self.assertEqual(result["usage"]["reasoning_output_tokens"], expected_reasoning)
 
     def test_codex_dated_bad_transition_discards_the_older_reasoning_chain(self):
         activity = self.module()

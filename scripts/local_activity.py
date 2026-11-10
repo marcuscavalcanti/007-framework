@@ -13,6 +13,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 import harness_report
 
 
@@ -23,6 +24,7 @@ USAGE_KEYS = (
     "cache_write_5m_input_tokens", "cache_write_1h_input_tokens",
     "output_tokens", "reasoning_output_tokens", "total_tokens",
 )
+CODEX_PRIMARY_KEYS = ("input_tokens", "output_tokens", "total_tokens")
 GAP_S = 1800  # observatory.activity_gap_minutes default
 MAX_INTERVALS = 500
 
@@ -54,6 +56,9 @@ def empty_usage():
 def checked_usage(usage):
     """Keep unrepresentable normalized counters unavailable, including after aggregation."""
     for key in USAGE_KEYS:
+        if (key == "reasoning_output_tokens" and usage.get(key) is None
+                and usage.get("reasoning_output_tokens_available") is False):
+            continue
         if key in usage and not valid_number(usage[key]):
             usage[key] = None
             usage["usage_complete"] = False
@@ -72,9 +77,13 @@ def known_token_total(values):
 
 def pricing_request(session):
     usage = session.get("usage", {})
+    unavailable_reasoning = (session.get("source") == "codex" and usage.get("reasoning_output_tokens") is None
+                             and usage.get("reasoning_output_tokens_available") is False
+                             and usage.get("output_includes_reasoning", True))
     if (usage.get("usage_complete") is False or usage.get("cache_write_tiers_complete") is False
             or usage.get("price_allocation_complete") is False
-            or any(key in usage and not valid_number(usage[key]) for key in USAGE_KEYS)):
+            or any(key in usage and not valid_number(usage[key]) for key in USAGE_KEYS
+                   if key != "reasoning_output_tokens" or not unavailable_reasoning)):
         return None
     cached = int(safe_number(usage.get("cached_input_tokens")))
     cache_write = int(safe_number(usage.get("cache_write_input_tokens")))
@@ -289,15 +298,21 @@ def counts(raw, keys):
 
 
 def codex_counts(raw):
-    if not isinstance(raw, dict) or not any(key in raw for key in ("input_tokens", "output_tokens", "total_tokens")):
+    if (not isinstance(raw, dict) or not any(key in raw for key in CODEX_PRIMARY_KEYS)
+            or any(key in raw and not valid_number(raw[key]) for key in CODEX_PRIMARY_KEYS)):
         return None
-    return counts(raw, USAGE_KEYS)
+    # An optional scalar cannot erase independently readable primary counters.
+    return tuple(int(raw.get(key, 0)) if valid_number(raw.get(key, 0)) else None for key in USAGE_KEYS)
+
+
+def codex_primary_complete(raw):
+    return (isinstance(raw, dict) and all(valid_number(raw.get(key)) for key in CODEX_PRIMARY_KEYS)
+            and raw["total_tokens"] == raw["input_tokens"] + raw["output_tokens"])
 
 
 def codex_usage_complete(raw):
-    return (codex_counts(raw) is not None
-            and all(key in raw for key in ("input_tokens", "output_tokens", "total_tokens"))
-            and raw["total_tokens"] == raw["input_tokens"] + raw["output_tokens"])
+    return (codex_primary_complete(raw) and counts(raw, USAGE_KEYS) is not None
+            and ("reasoning_output_tokens" not in raw or raw["reasoning_output_tokens"] <= raw["output_tokens"]))
 
 
 def coherent_window(stamps, cutoff):
@@ -310,7 +325,7 @@ def coherent_window(stamps, cutoff):
 
 
 def codex_allocation_valid(values):
-    if values is None:
+    if values is None or not all(valid_number(value) for value in values[:5]):
         return False
     prompt, cached, written, five_minute, one_hour = values[:5]
     return (min(prompt, cached, written, five_minute, one_hour) >= 0
@@ -332,6 +347,25 @@ def reconcile_reasoning_ranges(baseline, cumulative, window):
         (max(window_low, cumulative_low - baseline_high), min(window_high, cumulative_high - baseline_low)),
     )
     return ranges if all(lower <= upper for lower, upper in ranges) else None
+
+
+def codex_reasoning_subset(total, last, reasoning):
+    """Bounds on cumulative reasoning imposed by one last-usage subset."""
+    upper = total[USAGE_KEYS.index("output_tokens")]
+    if last is not None:
+        upper -= last[USAGE_KEYS.index("output_tokens")] - reasoning
+    return reasoning, min(total[USAGE_KEYS.index("output_tokens")], upper)
+
+
+class CodexToken(NamedTuple):
+    stamp: datetime | None
+    total: tuple | None
+    last: tuple | None
+    total_ok: bool
+    last_ok: bool
+    reasoning: tuple
+    duplicate: bool
+    primary_ok: bool
 
 
 class CodexLog:
@@ -361,17 +395,25 @@ class CodexLog:
             self.token_stamps.append(stamp)  # Duplicate counters still carry temporal evidence.
             info = payload.get("info")
             if not isinstance(info, dict):
-                self.tokens.append((stamp, None, None, False, False, (None, None)))
+                self.tokens.append(CodexToken(stamp, None, None, False, False, (None, None), False, False))
                 return
             total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else None
             last = info.get("last_token_usage")
+            primary_ok = codex_primary_complete(total)
+            duplicate = (primary_ok and codex_primary_complete(self.previous)
+                         and all(total[key] == self.previous[key] for key in CODEX_PRIMARY_KEYS))
+            if duplicate:
+                # An omitted allocation on unchanged consumption preserves its earlier evidence.
+                total = {**{key: value for key, value in self.previous.items()
+                            if key in USAGE_KEYS[1:5] and valid_number(value)}, **total}
             absent = last is None or (isinstance(last, dict) and not any(
                 key in last for key in ("input_tokens", "output_tokens", "total_tokens")))
             if isinstance(last, dict):
                 partial, cumulative = counts(last, USAGE_KEYS), codex_counts(total)
                 valid_partial = partial is not None
                 if valid_partial:
-                    within_total = cumulative is None or all(partial[i] <= cumulative[i] for i in range(1, 5))
+                    within_total = cumulative is None or all(cumulative[i] is not None and partial[i] <= cumulative[i]
+                                                            for i in range(1, 5))
                     coherent_tiers = ("cache_write_input_tokens" not in last
                                       or sum(partial[3:5]) <= partial[2])
                     valid_partial = within_total and coherent_tiers
@@ -389,16 +431,12 @@ class CodexLog:
             reasoning = tuple(int(raw["reasoning_output_tokens"])
                               if isinstance(raw, dict) and valid_number(raw.get("reasoning_output_tokens")) else None
                               for raw in (total, last))
-            if total and total == self.previous:
-                if not total_ok or not last_ok:
-                    self.tokens.append((stamp, codex_counts(total), None, total_ok, last_ok, reasoning))
-                elif (not codex_allocation_valid(codex_counts(total))
-                      or not absent and not codex_allocation_valid(codex_counts(last))):
-                    self.price_anomalies.add(stamp)
-                return
+            if primary_ok and last_ok and reasoning[0] is not None and reasoning[1] is not None:
+                lower, upper = codex_reasoning_subset(codex_counts(total), codex_counts(last), reasoning[1])
+                last_ok = lower <= reasoning[0] <= upper
             self.previous = total
-            self.tokens.append((stamp, codex_counts(total), codex_counts(last),
-                                total_ok, last_ok, reasoning))
+            self.tokens.append(CodexToken(stamp, codex_counts(total), codex_counts(last),
+                                         total_ok, last_ok, reasoning, duplicate, primary_ok))
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         if not self.meta:
@@ -410,38 +448,25 @@ class CodexLog:
         started = iso_datetime(self.meta["started_at"])
         primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
-        inside = []
-        for stamp, total, last, total_ok, last_ok, _ in self.tokens:
-            effective_last = last
-            if total_ok and total is not None and last is None and previous is not None:
-                delta = tuple(value - previous[i] for i, value in enumerate(total))
-                if all(delta[i] >= 0 for i in primary):
+        increments = []
+        usage["usage_complete"] = bool(self.tokens)
+        for stamp, total, last, total_ok, last_ok, _, duplicate, primary_ok in self.tokens:
+            effective_last = (0,) * len(USAGE_KEYS) if duplicate else last
+            if primary_ok and last is None and previous is not None and not duplicate:
+                delta = tuple(value - previous[i] if value is not None and previous[i] is not None else None
+                              for i, value in enumerate(total))
+                if all(valid_number(delta[i]) for i in primary):
                     # Optional reasoning is reconstructed separately from its presence metadata.
-                    effective_last = tuple(0 if key == "reasoning_output_tokens" else max(0, delta[i])
-                                           for i, key in enumerate(USAGE_KEYS))
-            if stamp and stamp >= cutoff:
-                inside.append((total, last, effective_last, total_ok, last_ok))
-            previous = total if stamp is not None and total_ok else None
-        has_reported_last = any(last is not None for _, last, _, _, _ in inside)
-        inside = [(total, effective if has_reported_last else last, total_ok, last_ok)
-                  for total, last, effective, total_ok, last_ok in inside]
-        increments = [last for total, last, _, _ in inside if last is not None]
-        snapshots = [(stamp, total, total_ok) for stamp, total, _, total_ok, _, _ in self.tokens if total is not None]
-        if increments:
-            usage.update({key: sum(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
-            usage["usage_complete"] = all(total is not None and last is not None for total, last, _, _ in inside)
-        elif snapshots:
-            baseline = None
-            if started and started < cutoff:
-                before = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp < cutoff]
-                after = [(value, complete) for stamp, value, complete in snapshots if stamp and stamp >= cutoff]
-                selected = before[-1] if before else after[0] if after else None
-                baseline = selected[0] if selected else None
-                usage["usage_complete"] = (bool(before) or not after) and (selected is None or selected[1])
-            usage.update({key: max(0, snapshots[-1][1][i] - (baseline[i] if baseline else 0)) for i, key in enumerate(USAGE_KEYS)})
-        else:
-            usage["usage_complete"] = False
-        usage["usage_complete"] &= all(total_ok and last_ok for _, _, total_ok, last_ok in inside)
+                    effective_last = [max(0, value) if value is not None else None for value in delta]
+                    effective_last[USAGE_KEYS.index("reasoning_output_tokens")] = 0
+            if stamp is None and effective_last is None and not duplicate:
+                effective_last = total
+            if stamp is None or stamp >= cutoff:
+                usage["usage_complete"] &= stamp is not None and total_ok and last_ok and effective_last is not None
+                if effective_last is not None:
+                    increments.append(effective_last)
+            previous = total if primary_ok else None
+        usage.update({key: known_token_total(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
         usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
         usage["usage_complete"] &= coherent_window(self.token_stamps, cutoff)
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
@@ -453,12 +478,16 @@ class CodexLog:
         diagnostic_baseline = diagnostic_current = 0 if reasoning_bounds is not None else None
         diagnostic_window, diagnostic_complete = 0, True
         reasoning_seen, reasoning_valid = False, True
-        for stamp, total, last, total_ok, last_ok, (reasoning_total, reasoning_last) in self.tokens:
+        for stamp, total, last, total_ok, last_ok, reasoning, duplicate, primary_ok in self.tokens:
+            reasoning_total, reported_last_reasoning = reasoning
+            reasoning_last = 0 if duplicate else reported_last_reasoning
+            has_reasoning = any(value is not None for value in reasoning)
             reasoning_total_valid = (reasoning_total is not None and total is not None
-                                     and total_ok and reasoning_total <= total[output_index])
-            delta = [value - previous[i] for i, value in enumerate(total)] if previous is not None and total is not None else None
-            primary_continuous = total_ok and delta is not None and all(delta[i] >= 0 for i in primary)
-            last_matches = last is None or delta is not None and all(last[i] == delta[i] for i in primary)
+                                     and primary_ok and reasoning_total <= total[output_index])
+            delta = ([value - previous[i] if value is not None and previous[i] is not None else None
+                      for i, value in enumerate(total)] if previous is not None and total is not None else None)
+            primary_continuous = primary_ok and delta is not None and all(valid_number(delta[i]) for i in primary)
+            last_matches = duplicate or last is None or delta is not None and all(last[i] == delta[i] for i in primary)
             reasoning_step_valid = (last_ok and last_matches and primary_continuous
                                     and (reasoning_last is None or reasoning_last <= delta[output_index]))
             if stamp is None:
@@ -469,30 +498,35 @@ class CodexLog:
                 if reasoning_total_valid:
                     reasoning_bounds = (reasoning_total, reasoning_total)
                     reasoning_seen = True
-                elif total_ok:
+                elif primary_ok:
                     if reasoning_total is None and reasoning_bounds is not None and reasoning_step_valid:
                         reasoning_bounds = (reasoning_bounds[0] + (reasoning_last or 0),
                                             reasoning_bounds[1] + (delta[output_index] if reasoning_last is None else reasoning_last))
-                        reasoning_seen |= reasoning_last is not None
+                        reasoning_seen |= has_reasoning
                     else:
                         reasoning_bounds = (0, total[output_index])
                         reasoning_seen = False
-                        if reasoning_total is None and reasoning_last is not None and last_ok and (
+                        if reasoning_total is None and reported_last_reasoning is not None and last_ok and (
                                 previous is None or reasoning_step_valid):
                             # An unanchored last is still a subset of its cumulative snapshot.
-                            output_growth = last[output_index] if last is not None else 0
-                            if primary_continuous:
-                                output_growth = delta[output_index]
-                            upper = min(total[output_index], total[output_index] - output_growth + reasoning_last)
-                            reasoning_bounds = (reasoning_last, upper)
+                            lower, upper = codex_reasoning_subset(total, last, reported_last_reasoning)
+                            if primary_continuous and not duplicate:
+                                upper = min(upper, previous[output_index] + reported_last_reasoning)
+                            reasoning_bounds = (lower, upper)
                             reasoning_seen = True
                 else:
                     reasoning_bounds = None
                     reasoning_seen = False
+                if duplicate and primary_ok and last_ok and reported_last_reasoning is not None:
+                    lower, upper = codex_reasoning_subset(total, last, reported_last_reasoning)
+                    if reasoning_bounds is not None:
+                        overlap = max(lower, reasoning_bounds[0]), min(upper, reasoning_bounds[1])
+                        reasoning_bounds = overlap if overlap[0] <= overlap[1] else (lower, upper)
+                    reasoning_seen = True
                 baseline_bounds, window_bounds = reasoning_bounds, (0, 0)
                 diagnostic_baseline = diagnostic_current = reasoning_total if reasoning_total_valid else None
             else:
-                reasoning_seen |= reasoning_total is not None or reasoning_last is not None
+                reasoning_seen |= has_reasoning
                 known = reasoning_last
                 if known is None and primary_continuous and delta[output_index] == 0:
                     known = 0
@@ -516,6 +550,9 @@ class CodexLog:
                             reasoning_bounds = (reasoning_total, reasoning_total)
                         else:
                             reasoning_bounds = None
+                    if duplicate and last_ok and reported_last_reasoning is not None and reasoning_bounds is not None:
+                        lower, upper = codex_reasoning_subset(total, last, reported_last_reasoning)
+                        reasoning_bounds = (max(lower, reasoning_bounds[0]), min(upper, reasoning_bounds[1]))
                     reconciled = (reconcile_reasoning_ranges(baseline_bounds, reasoning_bounds, window_bounds)
                                   if baseline_bounds is not None and reasoning_bounds is not None else None)
                     if reconciled is None:
@@ -533,12 +570,12 @@ class CodexLog:
                     usage["usage_complete"] = False
                 else:
                     usage["price_allocation_complete"] &= codex_allocation_valid(previous)
-                    usage["usage_complete"] &= all(delta[i] >= 0 for i in primary)
+                    usage["usage_complete"] &= all(valid_number(delta[i]) for i in primary)
                     usage["price_allocation_complete"] &= codex_allocation_valid(delta)
-                    if last is not None:
+                    if last is not None and not duplicate:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
                         usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
-            previous = total if stamp is not None and total_ok else None
+            previous = total if stamp is not None and primary_ok else None
         if reasoning_seen:
             exact = window_bounds is not None and window_bounds[0] == window_bounds[1]
             if reasoning_valid and exact:
@@ -552,6 +589,9 @@ class CodexLog:
                 else:
                     usage["reasoning_output_tokens"] = diagnostic_window if diagnostic_complete else None
             usage["usage_complete"] &= reasoning_valid and exact
+        else:
+            usage["reasoning_output_tokens"] = 0 if self.tokens and reasoning_valid and window_bounds == (0, 0) else None
+        usage["reasoning_output_tokens_available"] = usage["reasoning_output_tokens"] is not None
         usage["price_allocation_complete"] &= usage["usage_complete"]
         usage["price_allocation_complete"] &= codex_allocation_valid(tuple(usage[key] for key in USAGE_KEYS))
         usage["price_allocation_complete"] &= not any(stamp is None or stamp >= cutoff for stamp in self.price_anomalies)
@@ -860,7 +900,9 @@ def summarize(sessions, window_hours):
     result["idle_sessions"] = len(sessions) - result["active_sessions"]
     result["usage_incomplete_sessions"] = sum(item["usage"].get("usage_complete") is not True for item in sessions)
     for key in USAGE_KEYS:
-        result[key] = known_token_total(item["usage"].get(key, 0) for item in sessions)
+        values = [item["usage"].get(key, None if key == "reasoning_output_tokens" else 0) for item in sessions]
+        result[key] = (None if key == "reasoning_output_tokens" and any(value is None for value in values)
+                       else known_token_total(values))
     result["tokens_total"] = result.pop("total_tokens")
     priced = [item for item in sessions if item.get("cost_usd_estimate") is not None]
     result["priced_sessions"] = len(priced)

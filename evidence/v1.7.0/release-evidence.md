@@ -244,6 +244,31 @@ distribution, remote checks and newly authorized review remain separate gates.
 The frozen functional backtest and earlier results retain their original bytes
 and source identities.
 
+Candidate `bee4188976b6e5745c5ec815cf88b58d4492900d` received FIX FIRST
+in its single authorized consolidated review. Its two preceding fixes were
+recognized. Six pre-existing defects were reproduced in six methods with
+13 assertion failures. The current joint correction preserves primary triples
+through optional scalar corruption, separates duplicate consumption from
+physical evidence, validates reasoning subset complements and retains optional
+enrichment. Per-observation aggregation preserves known subtotals across resets.
+Unreported reasoning remains unavailable through summaries and snapshots;
+complete Codex output pricing can proceed when that optional field was never
+reported. The additive `reasoning_output_tokens_available` field preserves that
+distinction through normalized usage validation. Empty observations remain
+unavailable. A prior sparse-reasoning control implied only a range, rather than
+an exact measurement. Its original inputs now retain incompleteness beside
+full-context positive controls. Existing window matrices also assert reasoning
+availability when no reasoning field was seen. Eight boundary methods include
+a retained 546-case independent subset matrix. References matched 547,200
+window histories, 118,560 prefixes and 99,930 representation-boundary histories,
+including duplicate consumption and enriched prefixes. Runtime changes add
+109 lines and remove 67 in one file, without a dependency. Native integration
+passed 933 tests without skips in 202.837 seconds and 54 JavaScript tests.
+SHA-256 identities for 116 code/test/workflow files matched before and after
+the native run. Final documents, manifest, distribution, remote checks and a
+newly authorized independent review remain separate gates. Earlier results
+and their source identities are preserved. No new causal ROI claim follows.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three
