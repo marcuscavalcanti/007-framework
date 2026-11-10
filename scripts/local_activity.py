@@ -407,11 +407,26 @@ class CodexLog:
         cutoff = now - timedelta(hours=lookback_hours)
         usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True,
                  "price_allocation_complete": True}
-        inside = [(total, last, total_ok, last_ok) for stamp, total, last, total_ok, last_ok, _ in self.tokens
-                  if stamp and stamp >= cutoff]
+        started = iso_datetime(self.meta["started_at"])
+        primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
+        previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
+        inside = []
+        for stamp, total, last, total_ok, last_ok, _ in self.tokens:
+            effective_last = last
+            if total_ok and total is not None and last is None and previous is not None:
+                delta = tuple(value - previous[i] for i, value in enumerate(total))
+                if all(delta[i] >= 0 for i in primary):
+                    # Optional reasoning is reconstructed separately from its presence metadata.
+                    effective_last = tuple(0 if key == "reasoning_output_tokens" else max(0, delta[i])
+                                           for i, key in enumerate(USAGE_KEYS))
+            if stamp and stamp >= cutoff:
+                inside.append((total, last, effective_last, total_ok, last_ok))
+            previous = total if stamp is not None and total_ok else None
+        has_reported_last = any(last is not None for _, last, _, _, _ in inside)
+        inside = [(total, effective if has_reported_last else last, total_ok, last_ok)
+                  for total, last, effective, total_ok, last_ok in inside]
         increments = [last for total, last, _, _ in inside if last is not None]
         snapshots = [(stamp, total, total_ok) for stamp, total, _, total_ok, _, _ in self.tokens if total is not None]
-        started = iso_datetime(self.meta["started_at"])
         if increments:
             usage.update({key: sum(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
             usage["usage_complete"] = all(total is not None and last is not None for total, last, _, _ in inside)
@@ -430,7 +445,6 @@ class CodexLog:
         usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
         usage["usage_complete"] &= coherent_window(self.token_stamps, cutoff)
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
-        primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
         allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",
                                                        "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
         output_index = USAGE_KEYS.index("output_tokens")
@@ -454,17 +468,29 @@ class CodexLog:
             elif stamp < cutoff:
                 if reasoning_total_valid:
                     reasoning_bounds = (reasoning_total, reasoning_total)
+                    reasoning_seen = True
                 elif total_ok:
                     if reasoning_total is None and reasoning_bounds is not None and reasoning_step_valid:
                         reasoning_bounds = (reasoning_bounds[0] + (reasoning_last or 0),
                                             reasoning_bounds[1] + (delta[output_index] if reasoning_last is None else reasoning_last))
+                        reasoning_seen |= reasoning_last is not None
                     else:
                         reasoning_bounds = (0, total[output_index])
+                        reasoning_seen = False
+                        if reasoning_total is None and reasoning_last is not None and last_ok and (
+                                previous is None or reasoning_step_valid):
+                            # An unanchored last is still a subset of its cumulative snapshot.
+                            output_growth = last[output_index] if last is not None else 0
+                            if primary_continuous:
+                                output_growth = delta[output_index]
+                            upper = min(total[output_index], total[output_index] - output_growth + reasoning_last)
+                            reasoning_bounds = (reasoning_last, upper)
+                            reasoning_seen = True
                 else:
                     reasoning_bounds = None
+                    reasoning_seen = False
                 baseline_bounds, window_bounds = reasoning_bounds, (0, 0)
                 diagnostic_baseline = diagnostic_current = reasoning_total if reasoning_total_valid else None
-                reasoning_seen = reasoning_total_valid
             else:
                 reasoning_seen |= reasoning_total is not None or reasoning_last is not None
                 known = reasoning_last

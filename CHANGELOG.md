@@ -76,6 +76,9 @@ Candidate prepared for independent review. Release qualification is recorded in
   discard obsolete constraints, and sparse reasoning deltas obey the output growth available from cumulative counters.
   Reporting-window results reconcile cumulative, baseline and window ranges together. Unknown baselines retain their
   output bounds, zero-capacity intervals infer exact reasoning, and dated inconsistent deltas discard older constraints.
+  Continuous pre-window omissions retain earlier reasoning evidence. Unanchored last observations constrain their own
+  cumulative reasoning within output bounds. Mixed full/sparse last objects retain every reconstructible primary increment,
+  while contradictory reported deltas remain incomplete and preserve known diagnostic totals.
 - Sparse Codex reasoning deltas obey reported cumulative bounds before deduplication, while absent optional bounds remain
   unavailable. Reliably dated Kimi/Gemini events outside the window cannot invalidate current usage because of missing counters.
 - Retained identified logs preserve timestamp fallback beside other contributing logs; a fresh observation replaces only

@@ -219,6 +219,31 @@ without skips in 236.121 seconds and 54 JavaScript tests. Final documentation,
 manifest, exact-source distribution, remote checks and a newly authorized
 independent review remain separate qualification gates for the changed tree.
 
+Candidate `f5c4941ad8e25a5a5bc544167f0e3aa94e955b1f` received FIX FIRST
+in its single authorized review. The previous four corrections, three-range
+arithmetic and cached-price invalidation were recognized within their supplied
+scope. The two remaining counterexamples concerned availability across multiple
+pre-window observations and primary aggregation across mixed full/sparse last
+objects. Both reproduced before correction. Reasoning availability now follows
+the trusted chain. Missing primary increments are reconstructed from continuous
+cumulative snapshots while reported full deltas retain their validation. A first
+unanchored last constrains its cumulative reasoning within output bounds. A
+related sparse upper-bound defect found by the enlarged oracle also reproduced
+before correction. Two earlier omitted-delta controls now assert their fully
+reconstructible total360/reasoning40; contradictory full reports remain negative.
+The 95 focal methods passed. Retained matrices include 38,848 reporting-window
+histories, 6,240 multi-observation-prefix histories, 2,800 projection cases and
+the preceding 3,456 mixed histories. Independent references matched 547,200
+window histories and 118,560 valid-prefix histories. The first prefix-oracle
+attempt remains diagnostic because it included malformed full deltas in a
+valid-prefix domain. The revised domain excludes those deltas, which retain
+their separate dated-reset controls. Runtime changes add 31 lines and remove
+5 without a dependency. Native integration passed 925 tests without skips in
+184.260 seconds and 54 JavaScript tests. Final documentation, manifest,
+distribution, remote checks and newly authorized review remain separate gates.
+The frozen functional backtest and earlier results retain their original bytes
+and source identities.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three
