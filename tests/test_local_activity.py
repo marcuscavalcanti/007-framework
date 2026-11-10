@@ -1,4 +1,5 @@
 import importlib
+import itertools
 import json
 import os
 import shutil
@@ -694,6 +695,121 @@ class LocalActivityTests(unittest.TestCase):
             self.assertEqual(result["usage"]["total_tokens"], 120)
             self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
             self.assertIsNotNone(activity.pricing_request(result))
+
+    def test_codex_reasoning_gaps_respect_known_deltas_and_remaining_output_capacity(self):
+        activity = self.module()
+        for sparse in (False, True):
+            for swap in (False, True):
+                for known in (0, 1, 20):
+                    for final in (10, 11, 30, 31, 50):
+                        with self.subTest(sparse=sparse, swap=swap, known=known,
+                                          final=final), tempfile.TemporaryDirectory() as tmp:
+                            rows = codex_rows("mixed-reasoning-capacity", tmp)[:3]
+                            deltas = (10, None, known) if swap else (10, known, None)
+                            for index, (cumulative, reasoning) in enumerate(zip((10, None, final), deltas), 1):
+                                total = {"input_tokens": index * 100, "output_tokens": index * 20,
+                                         "total_tokens": index * 120}
+                                last = {} if sparse else {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+                                if cumulative is not None:
+                                    total["reasoning_output_tokens"] = cumulative
+                                if reasoning is not None:
+                                    last["reasoning_output_tokens"] = reasoning
+                                rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(minutes=10-index)).isoformat(),
+                                             "payload": {"type": "token_count", "info": {
+                                                 "total_token_usage": total, "last_token_usage": last}}})
+                            filename = Path(tmp, "mixed-reasoning-capacity.jsonl")
+                            write_jsonl(filename, rows)
+                            result = activity.parse_codex_session(filename, NOW)
+                            complete = known <= final - 10 <= known + 20
+                            self.assertEqual(result["usage"]["usage_complete"], complete)
+                            self.assertEqual(result["usage"]["total_tokens"], 360)
+                            self.assertEqual(result["usage"]["reasoning_output_tokens"], final)
+                            self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_codex_pre_cutoff_primary_reset_discards_stale_reasoning_constraints(self):
+        activity = self.module()
+        for old in (False, True):
+            for baseline_reasoning in (None, 10):
+                for baseline_output in (10, 100):
+                    with self.subTest(old=old, reasoning=baseline_reasoning,
+                                      output=baseline_output), tempfile.TemporaryDirectory() as tmp:
+                        rows = codex_rows("old-primary-reset", tmp)[:3]
+                        rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = (NOW - timedelta(hours=48)).isoformat()
+                        observations = [(25, 10, baseline_output, baseline_reasoning, None),
+                                        (1, 110, baseline_output + 20, 15, 5)]
+                        if old:
+                            observations.insert(0, (27, 100, 100, 50, None))
+                        for hours, prompt, output, reasoning, delta in observations:
+                            total = {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output}
+                            if reasoning is not None:
+                                total["reasoning_output_tokens"] = reasoning
+                            info = {"total_token_usage": total}
+                            if delta is not None:
+                                info["last_token_usage"] = {"input_tokens": 100, "output_tokens": 20,
+                                                            "total_tokens": 120, "reasoning_output_tokens": delta}
+                            rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(hours=hours)).isoformat(),
+                                         "payload": {"type": "token_count", "info": info}})
+                        filename = Path(tmp, "old-primary-reset.jsonl")
+                        write_jsonl(filename, rows)
+                        result = activity.parse_codex_session(filename, NOW)
+                        self.assertTrue(result["usage"]["usage_complete"])
+                        self.assertEqual(result["usage"]["total_tokens"], 120)
+                        self.assertEqual(result["usage"]["reasoning_output_tokens"], 5)
+                        self.assertIsNotNone(activity.pricing_request(result))
+
+    def test_codex_sparse_reasoning_delta_fits_the_derived_output_increment(self):
+        activity = self.module()
+        for reasoning in (0, 1, 20, 21, 30):
+            with self.subTest(reasoning=reasoning), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("sparse-output-increment", tmp)[:3]
+                for index, (prompt, output, cumulative, last) in enumerate(((100, 100, 0, 0),
+                                                                          (200, 120, None, reasoning)), 1):
+                    total = {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output}
+                    if cumulative is not None:
+                        total["reasoning_output_tokens"] = cumulative
+                    rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(minutes=10-index)).isoformat(),
+                                 "payload": {"type": "token_count", "info": {
+                                     "total_token_usage": total, "last_token_usage": {"reasoning_output_tokens": last}}}})
+                filename = Path(tmp, "sparse-output-increment.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertEqual(result["usage"]["usage_complete"], reasoning <= 20)
+                self.assertEqual(result["usage"]["total_tokens"], 320)
+                self.assertEqual(activity.pricing_request(result) is not None, reasoning <= 20)
+
+    def test_codex_mixed_reasoning_matches_feasible_integer_histories(self):
+        activity = self.module()
+        for sparse in (False, True):
+            for cumulative in itertools.product((None, 0, 1), (None, 0, 2), (None, 0, 3)):
+                for deltas in itertools.product((None, 0, 1, 2), repeat=3):
+                    with self.subTest(sparse=sparse, cumulative=cumulative, deltas=deltas):
+                        possible = {0}
+                        for total, last in zip(cumulative, deltas):
+                            increments = (0, 1) if last is None else (last,) if last <= 1 else ()
+                            possible = {old + increment for old in possible for increment in increments}
+                            if total is not None:
+                                possible &= {total}
+                        optional_seen = any(value is not None for value in (*cumulative, *deltas))
+                        complete = bool(possible) and (not optional_seen or len(possible) == 1)
+                        log = activity.CodexLog()
+                        for row in codex_rows("feasible-reasoning", "/synthetic")[:3]:
+                            log.feed(row)
+                        for index, (reasoning, delta) in enumerate(zip(cumulative, deltas), 1):
+                            total = {"input_tokens": index * 10, "output_tokens": index, "total_tokens": index * 11}
+                            last = {} if sparse else {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11}
+                            if reasoning is not None:
+                                total["reasoning_output_tokens"] = reasoning
+                            if delta is not None:
+                                last["reasoning_output_tokens"] = delta
+                            log.feed({"type": "event_msg", "timestamp": (NOW - timedelta(minutes=10-index)).isoformat(),
+                                      "payload": {"type": "token_count", "info": {
+                                          "total_token_usage": total, "last_token_usage": last}}})
+                        result = log.result(NOW)
+                        self.assertEqual(result["usage"]["usage_complete"], complete)
+                        self.assertEqual(result["usage"]["total_tokens"], 33)
+                        self.assertEqual(activity.pricing_request(result) is not None, complete)
+                        if complete and optional_seen:
+                            self.assertIn(result["usage"]["reasoning_output_tokens"], possible)
 
     def test_codex_reasoning_window_keeps_optional_baselines_unknown(self):
         activity = self.module()

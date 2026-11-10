@@ -72,6 +72,8 @@ Candidate prepared for independent review. Release qualification is recorded in
   baselines retain uncertainty, known cumulative values stay visible, and dated errors outside the window preserve valid primary baselines.
   Cumulative reasoning growth fits output growth over the corresponding interval, including optional gaps. Repeated
   last-usage records validate their own reasoning/output relationship before consumption is deduplicated.
+  Mixed known and unknown reasoning deltas retain their feasible lower and upper bounds. Pre-window primary resets
+  discard obsolete constraints, and sparse reasoning deltas obey the output growth available from cumulative counters.
 - Sparse Codex reasoning deltas obey reported cumulative bounds before deduplication, while absent optional bounds remain
   unavailable. Reliably dated Kimi/Gemini events outside the window cannot invalidate current usage because of missing counters.
 - Retained identified logs preserve timestamp fallback beside other contributing logs; a fresh observation replaces only

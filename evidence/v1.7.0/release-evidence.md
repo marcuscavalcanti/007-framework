@@ -179,6 +179,24 @@ Exact-source distribution, remote checks and a newly authorized independent
 review remain required for this changed tree. The frozen retrospective backtest
 of 571728f remains scoped to its original inputs and does not qualify these bytes.
 
+Candidate `d99285b63d5032214d7ef11c86b78d2ea272545f` received FIX FIRST
+in its single authorized review. Its preceding counterexamples were recognized
+as corrected. The next pass preserves feasible lower and upper reasoning bounds
+through mixed cumulative and delta observations. Known deltas keep their exact
+contribution. Unknown deltas retain only their corresponding output capacity.
+Primary resets before the cutoff discard obsolete constraints, and a sparse
+reasoning delta also obeys available output growth derived from primary totals.
+The reproductions had 16 assertion failures before correction. A retained CI
+regression evaluates 3,456 mixed histories against independently enumerated
+integer values and reproduced 128 failures against the reviewed old runtime.
+An additional independent check matched 78,750 cases in its declared finite
+grid of full and sparse last-usage observations. The local-activity module
+passed 83 test methods. Runtime changes add 16 lines and remove seven without
+a dependency. Final native integration passed 913 tests without skips in
+206.660 seconds and 54 JavaScript tests. The final record and manifest are
+checked separately. Exact-source distribution, remote checks and a newly
+authorized independent review remain required for the changed tree.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

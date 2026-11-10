@@ -422,12 +422,23 @@ class CodexLog:
                                                        "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
         output_index = USAGE_KEYS.index("output_tokens")
         reasoning_start = reasoning_expected = 0 if started and started >= cutoff else None
-        reasoning_anchor = (0, 0) if reasoning_start is not None else None
+        reasoning_bounds = (0, 0) if reasoning_start is not None else None
         reasoning_floor = 0  # A nonnegative lower bound, never an absent cumulative baseline.
         reasoning_seen, reasoning_valid, reasoning_deltas_complete = False, True, True
         for stamp, total, last, total_ok, last_ok, (reasoning_total, reasoning_last) in self.tokens:
             reasoning_total_valid = (reasoning_total is not None and total is not None
                                      and total_ok and reasoning_total <= total[output_index])
+            delta = [value - previous[i] for i, value in enumerate(total)] if previous is not None and total is not None else None
+            primary_continuous = total_ok and delta is not None and all(delta[i] >= 0 for i in primary)
+            reasoning_step_valid = last_ok and (reasoning_last is None or not primary_continuous
+                                                or reasoning_last <= delta[output_index])
+            if reasoning_bounds is not None and primary_continuous and reasoning_step_valid:
+                # Known deltas consume their exact contribution, unknown deltas retain only their output capacity.
+                lower, upper = reasoning_bounds
+                reasoning_bounds = (lower + (reasoning_last or 0),
+                                    upper + (delta[output_index] if reasoning_last is None else reasoning_last))
+            else:
+                reasoning_bounds = None
             if stamp is None:
                 usage["usage_complete"] = False
                 usage["price_allocation_complete"] = False
@@ -444,14 +455,13 @@ class CodexLog:
                 reasoning_expected = (reasoning_expected + reasoning_last
                                       if reasoning_expected is not None and reasoning_last is not None else None)
                 reasoning_valid &= reasoning_total is None or reasoning_total_valid
-                reasoning_valid &= (reasoning_last is None or last_ok and (
+                reasoning_valid &= (reasoning_last is None or reasoning_step_valid and (
                     last is None or reasoning_last <= last[output_index]))
                 if reasoning_total is not None:
                     reasoning_valid &= reasoning_total >= reasoning_floor
                     reasoning_valid &= reasoning_expected is None or reasoning_total == reasoning_expected
-                    if reasoning_total_valid and reasoning_anchor is not None:
-                        reasoning_valid &= (0 <= reasoning_total - reasoning_anchor[0]
-                                            <= total[output_index] - reasoning_anchor[1])
+                    if reasoning_total_valid and reasoning_bounds is not None:
+                        reasoning_valid &= reasoning_bounds[0] <= reasoning_total <= reasoning_bounds[1]
                     reasoning_floor = reasoning_expected = reasoning_total
                 for observation in (total, last):
                     if observation is not None:
@@ -460,14 +470,13 @@ class CodexLog:
                     usage["usage_complete"] = False
                 else:
                     usage["price_allocation_complete"] &= codex_allocation_valid(previous)
-                    delta = [value - previous[i] for i, value in enumerate(total)]
                     usage["usage_complete"] &= all(delta[i] >= 0 for i in primary)
                     usage["price_allocation_complete"] &= codex_allocation_valid(delta)
                     if last is not None:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
                         usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
             if stamp is not None and (reasoning_total is not None or not total_ok):
-                reasoning_anchor = (reasoning_total, total[output_index]) if reasoning_total_valid else None
+                reasoning_bounds = (reasoning_total, reasoning_total) if reasoning_total_valid else None
             previous = total if stamp is not None and total_ok else None
         if reasoning_seen:
             if (reasoning_start is not None and reasoning_expected is not None
