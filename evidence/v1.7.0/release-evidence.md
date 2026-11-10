@@ -283,6 +283,33 @@ changes add 110 lines and remove 67 in one file, within the 350-line budget.
 The earlier source and its results remain preserved. Distribution, current-head
 remote checks and a newly authorized independent review remain required.
 
+The review of `1622d90c400aec4a6477634444c182306ff75f2f` ended FIX FIRST.
+It recognized the six preceding corrections and the empty-window fix, then
+identified two additional defects. Cache-allocation subsets could contradict
+their cumulative complement while retaining pricing eligibility. Aggregation
+across resets could return an unavailable primary subtotal and then add it
+before checking availability. Both controls were reproduced locally.
+
+The corrective delta validates observed subset marginals against five disjoint
+input categories. Missing subset fields retain feasible ranges. Known growth
+between trustworthy chronological snapshots also constrains sparse allocation
+reports. Primary diagnostics remain separate from allocation-dependent pricing.
+Primary operands are checked for availability before composing totals. The
+controls include unavailable input, output and total-only aggregates, alongside
+a finite reset history. The declared Python floor is 3.11, which supports the
+annotations used here.
+
+Four added methods preserve the 933 preceding method bodies. The local repair
+passed 937 native Python tests without skips and 107 focused methods. Its
+reference enumerates 26,592 duplicate/partial allocation combinations and
+15,872 sparse-growth combinations over binary atomic categories and field
+masks. These combinations describe a finite domain of synthetic accounting inputs.
+Runtime changes add 37 lines and remove two in one file, without a dependency.
+Source identities matched before and after the native run. The exact candidate,
+distribution, current-head remote checks and independent review keep their
+separate qualification records. The earlier rejected source and its evidence
+are preserved.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

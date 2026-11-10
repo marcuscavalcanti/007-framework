@@ -332,6 +332,29 @@ def codex_allocation_valid(values):
             and cached + written <= prompt and five_minute + one_hour <= written)
 
 
+def codex_subset_allocation_valid(total, last):
+    """Fit observed subset marginals into the parent's disjoint input categories."""
+    if not isinstance(last, dict) or not codex_allocation_valid(total):
+        return False
+    bounds = []
+    for key, capacity in zip(USAGE_KEYS[:5], total[:5]):
+        if key in last:
+            value = last[key]
+            if not valid_number(value) or int(value) > capacity:
+                return False
+            bounds.append((int(value), int(value)))
+        else:
+            bounds.append((0, capacity))
+    prompt, cached, written, five_minute, one_hour = bounds
+    unspecified_write = total[2] - total[3] - total[4]
+    written_low = max(written[0], five_minute[0] + one_hour[0])
+    written_high = min(written[1], five_minute[1] + one_hour[1] + unspecified_write)
+    if written_low > written_high:
+        return False
+    ordinary = total[0] - total[1] - total[2]
+    return max(prompt[0], cached[0] + written_low) <= min(prompt[1], cached[1] + written_high + ordinary)
+
+
 def iso(stamp):
     return stamp.isoformat().replace("+00:00", "Z") if stamp else None
 
@@ -416,7 +439,18 @@ class CodexLog:
                                                             for i in range(1, 5))
                     coherent_tiers = ("cache_write_input_tokens" not in last
                                       or sum(partial[3:5]) <= partial[2])
-                    valid_partial = within_total and coherent_tiers
+                    valid_partial = (within_total and coherent_tiers
+                                     and (cumulative is None or codex_subset_allocation_valid(cumulative, last)))
+                    previous_token = self.tokens[-1] if self.tokens else None
+                    if (valid_partial and primary_ok and not duplicate and previous_token is not None
+                            and previous_token.primary_ok and stamp is not None and previous_token.stamp is not None
+                            and previous_token.stamp <= stamp):
+                        previous = previous_token.total
+                        continuous = all(cumulative[USAGE_KEYS.index(key)] >= previous[USAGE_KEYS.index(key)]
+                                         for key in CODEX_PRIMARY_KEYS)
+                        if continuous:
+                            valid_partial = all(previous[i] is not None and partial[i] == cumulative[i] - previous[i]
+                                                for i, key in enumerate(USAGE_KEYS[:5]) if key in last)
                 if not valid_partial:
                     self.price_anomalies.add(stamp)
             total_ok, last_ok = codex_usage_complete(total), absent or codex_usage_complete(last)
@@ -468,7 +502,8 @@ class CodexLog:
                     increments.append(effective_last)
             previous = total if primary_ok else None
         usage.update({key: known_token_total(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
-        usage["usage_complete"] &= usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
+        usage["usage_complete"] &= (all(valid_number(usage[key]) for key in CODEX_PRIMARY_KEYS)
+                                    and usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"])
         usage["usage_complete"] &= coherent_window(self.token_stamps, cutoff)
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
         allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",

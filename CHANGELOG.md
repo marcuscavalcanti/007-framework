@@ -84,6 +84,11 @@ Candidate prepared for independent review. Release qualification is recorded in
   measurement. Duplicate consumption is identified by primary counters while every physical observation retains validation
   and optional evidence. Subset constraints include non-reasoning capacity, and resets preserve known interval subtotals.
   An empty reporting window requires a readable primary snapshot before its counters can be complete.
+- Codex cache subsets must fit the cumulative input categories and leave a feasible complement. Sparse allocation
+  reports must agree with a known chronological increment. Contradictory allocation withholds pricing while primary
+  diagnostics remain available. Omitted subset fields retain their feasible ranges.
+- Primary subtotal availability is checked before composition, including across resets whose individually finite
+  counters produce an unavailable aggregate. Finite diagnostic subtotals and explicit zero retain their values.
 - Sparse Codex reasoning deltas obey reported cumulative bounds before deduplication, while absent optional bounds remain
   unavailable. Reliably dated Kimi/Gemini events outside the window cannot invalidate current usage because of missing counters.
 - Retained identified logs preserve timestamp fallback beside other contributing logs; a fresh observation replaces only

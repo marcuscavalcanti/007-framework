@@ -14,6 +14,13 @@ def counters(prompt, output, **optional):
     return {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output, **optional}
 
 
+def allocated_counts(parts):
+    ordinary, cached, untyped, five_minute, one_hour = parts
+    return counters(sum(parts), 0, cached_input_tokens=cached,
+                    cache_write_input_tokens=untyped + five_minute + one_hour,
+                    cache_write_5m_input_tokens=five_minute, cache_write_1h_input_tokens=one_hour)
+
+
 class ContractBoundaryTests(unittest.TestCase):
     def session(self, observations, before=False):
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -34,6 +41,90 @@ class ContractBoundaryTests(unittest.TestCase):
             log.feed({"type": "event_msg", "timestamp": (NOW - timedelta(hours=hours)).isoformat(),
                       "payload": {"type": "token_count", "info": info}})
         return activity, log.result(NOW)
+
+    def test_duplicate_allocation_complements_preserve_primary_counts(self):
+        total = counters(2, 0, cached_input_tokens=2)
+        for cached, expected in ((0, False), (1, True), (None, True)):
+            subset = counters(1, 0, **({} if cached is None else {'cached_input_tokens': cached}))
+            activity, result = self.session([(0.5, total, total),
+                                             (0.4, total, subset)])
+            self.assertEqual(result['usage']['total_tokens'], 2)
+            self.assertTrue(result['usage']['usage_complete'])
+            self.assertEqual(result['usage']['price_allocation_complete'], expected)
+            self.assertEqual(activity.pricing_request(result) is not None, expected)
+
+    def test_full_and_sparse_allocation_subsets_match_independent_partitions(self):
+        optional = ('cached_input_tokens', 'cache_write_input_tokens',
+                    'cache_write_5m_input_tokens', 'cache_write_1h_input_tokens')
+        keys = ('input_tokens', *optional)
+        partitions = list(itertools.product(range(2), repeat=5))
+        cases = 0
+        for parent_parts in partitions:
+            parent = allocated_counts(parent_parts)
+            feasible = [allocated_counts(parts) for parts in itertools.product(*(range(n + 1) for n in parent_parts))]
+            for candidate_parts, mask, full in itertools.product(partitions, range(16), (False, True)):
+                candidate = allocated_counts(candidate_parts)
+                if full and candidate['input_tokens'] > parent['input_tokens']:
+                    continue
+                last = {key: candidate[key] for bit, key in enumerate(optional) if mask & (1 << bit)}
+                if full:
+                    last.update(counters(candidate['input_tokens'], 0))
+                observed = {key: last[key] for key in keys if key in last}
+                expected = any(all(values[key] == value for key, value in observed.items()) for values in feasible)
+                if full:
+                    # Retain the existing full-object allocation gate alongside subset feasibility.
+                    reads, writes = last.get('cached_input_tokens', 0), last.get('cache_write_input_tokens', 0)
+                    tiers = last.get('cache_write_5m_input_tokens', 0) + last.get('cache_write_1h_input_tokens', 0)
+                    expected &= reads + writes <= last['input_tokens'] and tiers <= writes
+                activity, result = self.session([(0.5, parent, parent), (0.4, parent, last)])
+                context = (parent_parts, candidate_parts, mask, full)
+                self.assertEqual(result['usage']['input_tokens'], parent['input_tokens'], context)
+                self.assertTrue(result['usage']['usage_complete'], context)
+                self.assertEqual(activity.pricing_request(result) is not None, expected, context)
+                cases += 1
+        self.assertEqual(cases, 26592)
+
+    def test_sparse_allocation_reports_match_known_primary_growth(self):
+        optional = ('cached_input_tokens', 'cache_write_input_tokens',
+                    'cache_write_5m_input_tokens', 'cache_write_1h_input_tokens')
+        parent_parts = (1, 1, 1, 1, 1)
+        parent = allocated_counts(parent_parts)
+        partitions = list(itertools.product(range(2), repeat=5))
+        cases = 0
+        for step_parts in partitions:
+            if not any(step_parts):
+                continue
+            step = allocated_counts(step_parts)
+            total = allocated_counts(tuple(a + b for a, b in zip(parent_parts, step_parts)))
+            for candidate_parts, mask in itertools.product(partitions, range(16)):
+                candidate = allocated_counts(candidate_parts)
+                last = {key: candidate[key] for bit, key in enumerate(optional) if mask & (1 << bit)}
+                expected = all(value == step[key] for key, value in last.items())
+                activity, result = self.session([(0.5, parent, parent), (0.4, total, last)])
+                context = (step_parts, candidate_parts, mask)
+                self.assertEqual(result['usage']['input_tokens'], total['input_tokens'], context)
+                self.assertTrue(result['usage']['usage_complete'], context)
+                self.assertEqual(activity.pricing_request(result) is not None, expected, context)
+                cases += 1
+        self.assertEqual(cases, 15872)
+
+    def test_aggregate_overflow_retains_unavailable_primary_scalars(self):
+        huge = 10 ** 308
+        scenarios = [(huge, 0, None, 0, None), (0, huge, 0, None, None),
+                     (huge // 2, huge // 2, huge, huge, None), (1, 0, 2, 0, 2)]
+        for prompt, output, expected_input, expected_output, expected_total in scenarios:
+            try:
+                activity, result = self.session([(0.5, counters(prompt, output), None),
+                                                 (0.4, counters(0, 0), None),
+                                                 (0.3, counters(prompt, output), None)])
+            except TypeError:
+                self.fail('Accepted finite counters must preserve unavailable aggregates without a TypeError')
+            self.assertEqual(result['usage']['input_tokens'], expected_input)
+            self.assertEqual(result['usage']['output_tokens'], expected_output)
+            self.assertEqual(result['usage']['total_tokens'], expected_total)
+            self.assertFalse(result['usage']['usage_complete'])
+            self.assertIsNone(activity.pricing_request(result))
+            self.assertEqual(activity.summarize([result], 24)['tokens_total'], expected_total)
 
     def test_optional_corruption_preserves_known_primary_diagnostics(self):
         for optional in ({"reasoning_output_tokens": "unknown"}, {"reasoning_output_tokens": -1},
