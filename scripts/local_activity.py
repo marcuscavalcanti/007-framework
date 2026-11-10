@@ -449,7 +449,8 @@ class CodexLog:
         primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
         previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
         increments = []
-        usage["usage_complete"] = bool(self.tokens)
+        has_snapshot = any(token.primary_ok for token in self.tokens)
+        usage["usage_complete"] = has_snapshot
         for stamp, total, last, total_ok, last_ok, _, duplicate, primary_ok in self.tokens:
             effective_last = (0,) * len(USAGE_KEYS) if duplicate else last
             if primary_ok and last is None and previous is not None and not duplicate:
@@ -590,7 +591,7 @@ class CodexLog:
                     usage["reasoning_output_tokens"] = diagnostic_window if diagnostic_complete else None
             usage["usage_complete"] &= reasoning_valid and exact
         else:
-            usage["reasoning_output_tokens"] = 0 if self.tokens and reasoning_valid and window_bounds == (0, 0) else None
+            usage["reasoning_output_tokens"] = 0 if has_snapshot and reasoning_valid and window_bounds == (0, 0) else None
         usage["reasoning_output_tokens_available"] = usage["reasoning_output_tokens"] is not None
         usage["price_allocation_complete"] &= usage["usage_complete"]
         usage["price_allocation_complete"] &= codex_allocation_valid(tuple(usage[key] for key in USAGE_KEYS))

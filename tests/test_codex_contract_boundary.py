@@ -52,6 +52,17 @@ class ContractBoundaryTests(unittest.TestCase):
         self.assertIsNone(empty["usage"]["reasoning_output_tokens"])
         self.assertFalse(empty["usage"]["usage_complete"])
         self.assertIsNone(activity.pricing_request(empty))
+        for unreadable in (None, {}, {"input_tokens": False, "output_tokens": 20, "total_tokens": 20},
+                           {"input_tokens": 100, "output_tokens": 20, "total_tokens": 119}):
+            with self.subTest(unreadable_baseline=unreadable):
+                activity, result = self.session([(25, unreadable, None)], before=True)
+                self.assertFalse(result["usage"]["usage_complete"])
+                self.assertIsNone(result["usage"]["reasoning_output_tokens"])
+                self.assertIsNone(activity.pricing_request(result))
+        activity, result = self.session([(25, counters(100, 20), None)], before=True)
+        self.assertTrue(result["usage"]["usage_complete"])
+        self.assertEqual(result["usage"]["reasoning_output_tokens"], 0)
+        self.assertIsNotNone(activity.pricing_request(result))
         for optional, expected in (({}, None), ({"reasoning_output_tokens": 0}, 0)):
             with self.subTest(optional=optional):
                 activity, result = self.session([(0.5, counters(100, 20, **optional), None)])

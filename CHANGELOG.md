@@ -83,6 +83,7 @@ Candidate prepared for independent review. Release qualification is recorded in
   and snapshots, with an explicit availability flag; Codex output pricing can use complete primary usage without that optional
   measurement. Duplicate consumption is identified by primary counters while every physical observation retains validation
   and optional evidence. Subset constraints include non-reasoning capacity, and resets preserve known interval subtotals.
+  An empty reporting window requires a readable primary snapshot before its counters can be complete.
 - Sparse Codex reasoning deltas obey reported cumulative bounds before deduplication, while absent optional bounds remain
   unavailable. Reliably dated Kimi/Gemini events outside the window cannot invalidate current usage because of missing counters.
 - Retained identified logs preserve timestamp fallback beside other contributing logs; a fresh observation replaces only

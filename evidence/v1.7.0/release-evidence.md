@@ -269,6 +269,20 @@ the native run. Final documents, manifest, distribution, remote checks and a
 newly authorized independent review remain separate gates. Earlier results
 and their source identities are preserved. No new causal ROI claim follows.
 
+The local candidate `1e81c7d9f98861091e223b9bd2d522769230a683` passed its
+recorded checks before a compatibility audit found an introduced empty-window
+regression. Histories containing only unusable old counters could appear as
+complete zero consumption. Four cases reproduced in RED, with a readable
+baseline retained as a positive control. The correction requires a readable
+primary snapshot before an empty window can qualify. The new source passed
+933 native tests without skips in 186.860 seconds. The 116 code/test/workflow
+identities matched before and after execution. References were executed again
+and matched all 765,690 cases in their declared domains. JavaScript 54 and
+post-document contracts are checked separately. Relative to bee4188, runtime
+changes add 110 lines and remove 67 in one file, within the 350-line budget.
+The earlier source and its results remain preserved. Distribution, current-head
+remote checks and a newly authorized independent review remain required.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three
