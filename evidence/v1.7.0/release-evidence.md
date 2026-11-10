@@ -135,6 +135,19 @@ the integrated native run passed 898 tests without skips in 174.338 seconds.
 JavaScript, final record, manifest, distribution, remote checks and fresh
 independent review are qualified separately.
 
+Candidate `3767a786c526263a19d7237dbe61ab8b0bd6db6e` received FIX FIRST
+in its single authorized review. The four historical counterexamples were
+recognized as corrected. Two new counterexamples were reproduced before a
+shared native-reader correction. Present sparse reasoning counters now obey
+available cumulative bounds before duplicate suppression. A reliably dated
+event outside the reporting window is excluded before payload completeness
+checks, while an unknown timestamp retains uncertainty. Coherent sparse records,
+absent optional bounds, the inclusive cutoff and explicit zeros remain supported.
+The final native integration passed 901 tests without skips in 172.583 seconds.
+The final record and manifest are checked separately. Exact-source distribution,
+remote checks and a newly authorized independent review remain required for
+this changed tree.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

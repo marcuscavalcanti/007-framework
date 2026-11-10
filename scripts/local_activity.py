@@ -365,10 +365,10 @@ class CodexLog:
                 if not valid_partial:
                     self.price_anomalies.add(stamp)
             total_ok, last_ok = codex_usage_complete(total), absent or codex_usage_complete(last)
-            if total_ok and last_ok and not absent:
-                last_ok = all(last[key] <= total[key] for key in (
+            if total_ok and last_ok and isinstance(last, dict):
+                last_ok = all(valid_number(last[key]) and (key not in total or last[key] <= total[key]) for key in (
                     "input_tokens", "output_tokens", "total_tokens", "reasoning_output_tokens")
-                    if key in last and key in total)
+                    if key in last)
             if total and total == self.previous:
                 if not total_ok or not last_ok:
                     self.tokens.append((stamp, None, None, False, False))
@@ -604,13 +604,13 @@ def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
             raw = row.get("usage")
             if row.get("type") != "usage.record":
                 continue
-            if not isinstance(raw, dict):
-                usage["usage_complete"] = False
-                continue
             if not valid_number(stamp):
                 usage["usage_complete"] = False
                 continue
             if stamp < cutoff_ms:
+                continue
+            if not isinstance(raw, dict):
+                usage["usage_complete"] = False
                 continue
             model = row.get("model") or model
             usage["usage_complete"] &= all(key not in raw or valid_number(raw[key]) for key in (
@@ -660,15 +660,15 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
         raw = row.get("tokens")
         if row.get("type") != "gemini":
             continue
-        if not isinstance(raw, dict):
-            usage["usage_complete"] = False
-            usage["price_allocation_complete"] = False
-            continue
         if not stamp:
             usage["usage_complete"] = False
             usage["price_allocation_complete"] = False
             continue
         if stamp < cutoff:
+            continue
+        if not isinstance(raw, dict):
+            usage["usage_complete"] = False
+            usage["price_allocation_complete"] = False
             continue
         model = row.get("model") or model
         valid_counts = all(key not in raw or valid_number(raw[key]) for key in (

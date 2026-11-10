@@ -508,6 +508,46 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertEqual(result["usage"]["total_tokens"], 120)
                 self.assertIsNone(activity.pricing_request(result))
 
+    def test_sparse_duplicate_reasoning_obeys_cumulative_bounds(self):
+        activity = self.module()
+        cases = (({}, True), ({"reasoning_output_tokens": 0}, True),
+                 ({"reasoning_output_tokens": 5}, True), ({"reasoning_output_tokens": 10}, True),
+                 ({"reasoning_output_tokens": 11}, False), ({"reasoning_output_tokens": -1}, False),
+                 ({"reasoning_output_tokens": True}, False), ({"reasoning_output_tokens": "11"}, False),
+                 ({"reasoning_output_tokens": float("inf")}, False), ({"reasoning_output_tokens": None}, False))
+        for last, complete in cases:
+            with self.subTest(last=last), tempfile.TemporaryDirectory() as tmp:
+                total = {"input_tokens": 100, "output_tokens": 20,
+                         "reasoning_output_tokens": 10, "total_tokens": 120}
+                rows = codex_rows("sparse-reasoning", tmp)[:3]
+                for stamp, delta in (("2026-08-30T14:05:00Z", total), ("2026-08-30T14:06:00Z", last)):
+                    rows.append({"type": "event_msg", "timestamp": stamp, "payload": {
+                        "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": delta}}})
+                filename = Path(tmp, "sparse-reasoning.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertEqual(result["usage"]["usage_complete"], complete)
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
+                self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_sparse_reasoning_does_not_assume_an_absent_cumulative_bound_is_zero(self):
+        activity = self.module()
+        for reasoning in (0, 5, 11):
+            with self.subTest(reasoning=reasoning), tempfile.TemporaryDirectory() as tmp:
+                total = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+                rows = codex_rows("unreported-reasoning", tmp)[:3]
+                for stamp, delta in (("2026-08-30T14:05:00Z", total),
+                                     ("2026-08-30T14:06:00Z", {"reasoning_output_tokens": reasoning})):
+                    rows.append({"type": "event_msg", "timestamp": stamp, "payload": {
+                        "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": delta}}})
+                filename = Path(tmp, "unreported-reasoning.jsonl")
+                write_jsonl(filename, rows)
+                result = activity.parse_codex_session(filename, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertIsNotNone(activity.pricing_request(result))
+
     def test_gemini_primary_composition_is_validated_before_aggregation(self):
         activity = self.module()
         cases = [([{"input": 100, "output": 20, "total": 0}], False),
@@ -596,6 +636,44 @@ class LocalActivityTests(unittest.TestCase):
                     self.assertEqual(result["usage"]["usage_complete"], complete)
                     self.assertEqual(result["usage"]["total_tokens"], total)
                     self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_native_counter_payload_validation_respects_window_membership(self):
+        activity = self.module()
+        before = NOW - timedelta(hours=25)
+        cutoff = NOW - timedelta(hours=24)
+        cases = ((before, None, True), (before, [], True), (before, {}, True),
+                 (before, {"output": "invalid"}, True), (cutoff, None, False),
+                 (NOW - timedelta(hours=1), None, False), (None, None, False), (None, {}, False))
+        for source in ("kimi", "gemini"):
+            for stamp, raw, complete in cases:
+                for reverse in (False, True):
+                    with self.subTest(source=source, stamp=stamp, raw=raw, reverse=reverse), tempfile.TemporaryDirectory() as tmp:
+                        if source == "kimi":
+                            filename = Path(tmp, "state.json")
+                            write_json(filename, {"id": "window", "cwd": tmp,
+                                                 "createdAt": int(before.timestamp() * 1000),
+                                                 "updatedAt": int(NOW.timestamp() * 1000)})
+                            old = {"type": "usage.record", "usage": raw}
+                            if stamp is not None:
+                                old["time"] = int(stamp.timestamp() * 1000)
+                            current = {"type": "usage.record", "time": int(NOW.timestamp() * 1000),
+                                       "model": "kimi-test", "usage": {"inputOther": 10, "output": 2}}
+                            rows = [current, old] if reverse else [old, current]
+                            write_jsonl(Path(tmp, "agents/main/wire.jsonl"), rows)
+                            result = activity.parse_kimi_session(filename, NOW)
+                        else:
+                            filename = Path(tmp, "session.jsonl")
+                            old = {"type": "gemini", "tokens": raw}
+                            if stamp is not None:
+                                old["timestamp"] = stamp.isoformat()
+                            current = {"type": "gemini", "timestamp": NOW.isoformat(),
+                                       "model": "gemini-test", "tokens": {"input": 10, "output": 2, "total": 12}}
+                            rows = [current, old] if reverse else [old, current]
+                            write_jsonl(filename, [{"sessionId": "window", "startTime": before.isoformat()}, *rows])
+                            result = activity.parse_gemini_session(filename, tmp, NOW)
+                        self.assertEqual(result["usage"]["usage_complete"], complete)
+                        self.assertEqual(result["usage"]["total_tokens"], 12)
+                        self.assertEqual(activity.pricing_request(result) is not None, complete)
 
     def test_activity_token_totals_preserve_known_subtotals_without_overflow(self):
         activity = self.module()
