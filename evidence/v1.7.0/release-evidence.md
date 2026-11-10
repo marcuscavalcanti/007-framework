@@ -310,6 +310,29 @@ distribution, current-head remote checks and independent review keep their
 separate qualification records. The earlier rejected source and its evidence
 are preserved.
 
+The review of `440a00eb07a7705c3fc35597c0aa24b66a1be138` recognized those
+corrections and found two pre-existing downstream cases. A full primary last
+object still treated omitted allocation fields as normalized zeros during
+aggregation and comparison. Reasoning availability could remain true after
+normalization made the diagnostic subtotal unavailable.
+
+The subsequent repair carries four allocation-presence flags in the existing
+normalized event. Aggregation reconstructs omitted allocation increments from
+known cumulative differences. Physical subset validation continues to use the
+reported fields, and chronological comparisons check explicit values. The
+shared normalization boundary synchronizes reasoning availability with the
+returned value.
+
+One earlier reference method had added a default-zero full-object constraint
+on top of its independent subset enumeration. That constraint was removed
+because it rejected feasible observations with omitted aggregate write fields.
+Explicit contradictions retain their negative controls. Three additional
+methods include a single 41,824-case generator crossing growth and duplicate
+transitions, complete and sparse last objects, optional-field masks and known
+pre-window baselines. It also checks reconstructed allocation values for
+admitted histories. The local boundary suite passed all 15 methods. The frozen
+earlier source, expectation and evidence retain their original scope.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

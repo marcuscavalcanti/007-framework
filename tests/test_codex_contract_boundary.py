@@ -42,6 +42,92 @@ class ContractBoundaryTests(unittest.TestCase):
                       "payload": {"type": "token_count", "info": info}})
         return activity, log.result(NOW)
 
+    def test_growing_full_last_reconstructs_only_omitted_allocation_fields(self):
+        optional = ('cached_input_tokens', 'cache_write_input_tokens',
+                    'cache_write_5m_input_tokens', 'cache_write_1h_input_tokens')
+        first = allocated_counts((1, 1, 1, 1, 1))
+        total = allocated_counts((2, 2, 2, 2, 2))
+        for before, full, mask in itertools.product((False, True), (False, True), range(16)):
+            last = {key: first[key] for bit, key in enumerate(optional) if mask & (1 << bit)}
+            if full:
+                last.update(counters(first['input_tokens'], 0))
+            observations = [(25 if before else 0.5, first, first), (0.4, total, last)]
+            activity, result = self.session(observations, before=before)
+            expected = first if before else total
+            context = (before, full, mask)
+            for key in ('input_tokens', 'total_tokens', *optional):
+                self.assertEqual(result['usage'][key], expected[key], (context, key))
+            self.assertTrue(result['usage']['usage_complete'], context)
+            self.assertIsNotNone(activity.pricing_request(result), context)
+        for key in optional:
+            for reported in (first[key] - 1, first[key] + 1):
+                last = counters(first['input_tokens'], 0, **{key: reported})
+                activity, result = self.session([(0.5, first, first), (0.4, total, last)])
+                self.assertEqual(result['usage']['input_tokens'], total['input_tokens'])
+                self.assertIsNone(activity.pricing_request(result), (key, reported))
+        activity, result = self.session([(0.5, total, counters(total['input_tokens'], 0))])
+        self.assertEqual(result['usage']['cached_input_tokens'], total['cached_input_tokens'])
+        self.assertIsNotNone(activity.pricing_request(result))
+        activity, result = self.session([(0.5, first, first), (0.4, total, None)])
+        self.assertEqual(result['usage']['cached_input_tokens'], total['cached_input_tokens'])
+        self.assertIsNotNone(activity.pricing_request(result))
+
+    def test_allocation_presence_crosses_growth_duplicates_and_window_baselines(self):
+        optional = ('cached_input_tokens', 'cache_write_input_tokens',
+                    'cache_write_5m_input_tokens', 'cache_write_1h_input_tokens')
+        partitions = list(itertools.product(range(2), repeat=5))
+        first = allocated_counts((1, 1, 1, 1, 1))
+        feasible_subsets = [allocated_counts(parts) for parts in partitions]
+        cases = 0
+        for step_parts, candidate_parts, mask, full, before in itertools.product(
+                partitions, partitions, range(16), (False, True), (False, True)):
+            duplicate = not any(step_parts)
+            step = allocated_counts(step_parts)
+            candidate = allocated_counts(candidate_parts)
+            if full and not duplicate and candidate['input_tokens'] != step['input_tokens']:
+                continue
+            total = allocated_counts(tuple(1 + value for value in step_parts))
+            last = {key: candidate[key] for bit, key in enumerate(optional) if mask & (1 << bit)}
+            if full:
+                last.update(counters(candidate['input_tokens'], 0))
+            if duplicate:
+                expected = any(all(values[key] == value for key, value in last.items())
+                               for values in feasible_subsets)
+            else:
+                expected = all(step[key] == value for key, value in last.items())
+            activity, result = self.session([(25 if before else 0.5, first, first),
+                                             (0.4, total, last)], before=before)
+            context = (step_parts, candidate_parts, mask, full, before)
+            expected_usage = step if before else total
+            self.assertEqual(result['usage']['input_tokens'], expected_usage['input_tokens'], context)
+            self.assertTrue(result['usage']['usage_complete'], context)
+            self.assertEqual(activity.pricing_request(result) is not None, expected, context)
+            if expected:
+                for key in optional:
+                    self.assertEqual(result['usage'][key], expected_usage[key], (context, key))
+            cases += 1
+        self.assertEqual(cases, 41824)
+
+    def test_reasoning_availability_matches_normalized_diagnostic_value(self):
+        huge = 10 ** 308
+        for amount, expected, complete in ((huge, None, False), (1, 2, True), (2, 4, False)):
+            first = counters(0, 1, reasoning_output_tokens=amount)
+            activity, result = self.session([(0.5, first, first),
+                                             (0.4, counters(0, 2),
+                                              counters(0, 1, reasoning_output_tokens=amount))])
+            self.assertEqual(result['usage']['total_tokens'], 2)
+            self.assertEqual(result['usage']['reasoning_output_tokens'], expected)
+            self.assertEqual(result['usage']['reasoning_output_tokens_available'], expected is not None)
+            self.assertEqual(result['usage']['usage_complete'], complete)
+            self.assertEqual(activity.pricing_request(result) is not None, complete)
+        for value in (None, float('inf'), float('nan'), True, -1, 'unknown', huge * 2):
+            usage = {**activity.empty_usage(), 'usage_complete': True,
+                     'reasoning_output_tokens': value, 'reasoning_output_tokens_available': True}
+            normalized = activity.checked_usage(usage)
+            self.assertIsNone(normalized['reasoning_output_tokens'])
+            self.assertFalse(normalized['reasoning_output_tokens_available'])
+            self.assertFalse(normalized['usage_complete'])
+
     def test_duplicate_allocation_complements_preserve_primary_counts(self):
         total = counters(2, 0, cached_input_tokens=2)
         for cached, expected in ((0, False), (1, True), (None, True)):
@@ -71,11 +157,6 @@ class ContractBoundaryTests(unittest.TestCase):
                     last.update(counters(candidate['input_tokens'], 0))
                 observed = {key: last[key] for key in keys if key in last}
                 expected = any(all(values[key] == value for key, value in observed.items()) for values in feasible)
-                if full:
-                    # Retain the existing full-object allocation gate alongside subset feasibility.
-                    reads, writes = last.get('cached_input_tokens', 0), last.get('cache_write_input_tokens', 0)
-                    tiers = last.get('cache_write_5m_input_tokens', 0) + last.get('cache_write_1h_input_tokens', 0)
-                    expected &= reads + writes <= last['input_tokens'] and tiers <= writes
                 activity, result = self.session([(0.5, parent, parent), (0.4, parent, last)])
                 context = (parent_parts, candidate_parts, mask, full)
                 self.assertEqual(result['usage']['input_tokens'], parent['input_tokens'], context)

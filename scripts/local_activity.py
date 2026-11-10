@@ -62,6 +62,8 @@ def checked_usage(usage):
         if key in usage and not valid_number(usage[key]):
             usage[key] = None
             usage["usage_complete"] = False
+    if "reasoning_output_tokens_available" in usage:
+        usage["reasoning_output_tokens_available"] = usage.get("reasoning_output_tokens") is not None
     return usage
 
 
@@ -389,6 +391,7 @@ class CodexToken(NamedTuple):
     reasoning: tuple
     duplicate: bool
     primary_ok: bool
+    allocation_present: tuple
 
 
 class CodexLog:
@@ -418,7 +421,8 @@ class CodexLog:
             self.token_stamps.append(stamp)  # Duplicate counters still carry temporal evidence.
             info = payload.get("info")
             if not isinstance(info, dict):
-                self.tokens.append(CodexToken(stamp, None, None, False, False, (None, None), False, False))
+                self.tokens.append(CodexToken(stamp, None, None, False, False, (None, None), False, False,
+                                              (False,) * 4))
                 return
             total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else None
             last = info.get("last_token_usage")
@@ -469,8 +473,9 @@ class CodexLog:
                 lower, upper = codex_reasoning_subset(codex_counts(total), codex_counts(last), reasoning[1])
                 last_ok = lower <= reasoning[0] <= upper
             self.previous = total
+            allocation_present = tuple(isinstance(last, dict) and key in last for key in USAGE_KEYS[1:5])
             self.tokens.append(CodexToken(stamp, codex_counts(total), codex_counts(last),
-                                         total_ok, last_ok, reasoning, duplicate, primary_ok))
+                                         total_ok, last_ok, reasoning, duplicate, primary_ok, allocation_present))
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         if not self.meta:
@@ -485,15 +490,22 @@ class CodexLog:
         increments = []
         has_snapshot = any(token.primary_ok for token in self.tokens)
         usage["usage_complete"] = has_snapshot
-        for stamp, total, last, total_ok, last_ok, _, duplicate, primary_ok in self.tokens:
+        for stamp, total, last, total_ok, last_ok, _, duplicate, primary_ok, allocation_present in self.tokens:
             effective_last = (0,) * len(USAGE_KEYS) if duplicate else last
-            if primary_ok and last is None and previous is not None and not duplicate:
+            if primary_ok and previous is not None and not duplicate:
                 delta = tuple(value - previous[i] if value is not None and previous[i] is not None else None
                               for i, value in enumerate(total))
                 if all(valid_number(delta[i]) for i in primary):
                     # Optional reasoning is reconstructed separately from its presence metadata.
-                    effective_last = [max(0, value) if value is not None else None for value in delta]
-                    effective_last[USAGE_KEYS.index("reasoning_output_tokens")] = 0
+                    reconstructed = [max(0, value) if value is not None else None for value in delta]
+                    reconstructed[USAGE_KEYS.index("reasoning_output_tokens")] = 0
+                    if last is None:
+                        effective_last = reconstructed
+                    else:
+                        effective_last = list(last)
+                        for i, present in enumerate(allocation_present, 1):
+                            if not present:
+                                effective_last[i] = reconstructed[i]
             if stamp is None and effective_last is None and not duplicate:
                 effective_last = total
             if stamp is None or stamp >= cutoff:
@@ -514,7 +526,7 @@ class CodexLog:
         diagnostic_baseline = diagnostic_current = 0 if reasoning_bounds is not None else None
         diagnostic_window, diagnostic_complete = 0, True
         reasoning_seen, reasoning_valid = False, True
-        for stamp, total, last, total_ok, last_ok, reasoning, duplicate, primary_ok in self.tokens:
+        for stamp, total, last, total_ok, last_ok, reasoning, duplicate, primary_ok, allocation_present in self.tokens:
             reasoning_total, reported_last_reasoning = reasoning
             reasoning_last = 0 if duplicate else reported_last_reasoning
             has_reasoning = any(value is not None for value in reasoning)
@@ -599,9 +611,9 @@ class CodexLog:
                 else:
                     reasoning_bounds = window_bounds = None
                     reasoning_valid = False
-                for observation in (total, last):
-                    if observation is not None:
-                        usage["price_allocation_complete"] &= codex_allocation_valid(observation)
+                if total is not None:
+                    usage["price_allocation_complete"] &= codex_allocation_valid(total)
+                # feed() validates the last subset using its physically reported allocation fields.
                 if previous is None or total is None:
                     usage["usage_complete"] = False
                 else:
@@ -610,7 +622,9 @@ class CodexLog:
                     usage["price_allocation_complete"] &= codex_allocation_valid(delta)
                     if last is not None and not duplicate:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
-                        usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
+                        usage["price_allocation_complete"] &= all(last[i] == delta[i]
+                                                                  for i, present in zip(allocation, allocation_present)
+                                                                  if present)
             previous = total if stamp is not None and primary_ok else None
         if reasoning_seen:
             exact = window_bounds is not None and window_bounds[0] == window_bounds[1]
