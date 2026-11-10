@@ -369,7 +369,9 @@ class CodexLog:
                 last_ok = all(valid_number(last[key]) and (key not in total or last[key] <= total[key]) for key in (
                     "input_tokens", "output_tokens", "total_tokens", "reasoning_output_tokens")
                     if key in last) and ("reasoning_output_tokens" not in last
-                                         or last["reasoning_output_tokens"] <= total["output_tokens"])
+                                         or last["reasoning_output_tokens"] <= total["output_tokens"] and (
+                                             "output_tokens" not in last
+                                             or last["reasoning_output_tokens"] <= last["output_tokens"]))
             # Optional-counter presence is lost in the normalized default-zero tuples.
             reasoning = tuple(int(raw["reasoning_output_tokens"])
                               if isinstance(raw, dict) and valid_number(raw.get("reasoning_output_tokens")) else None
@@ -420,6 +422,7 @@ class CodexLog:
                                                        "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
         output_index = USAGE_KEYS.index("output_tokens")
         reasoning_start = reasoning_expected = 0 if started and started >= cutoff else None
+        reasoning_anchor = (0, 0) if reasoning_start is not None else None
         reasoning_floor = 0  # A nonnegative lower bound, never an absent cumulative baseline.
         reasoning_seen, reasoning_valid, reasoning_deltas_complete = False, True, True
         for stamp, total, last, total_ok, last_ok, (reasoning_total, reasoning_last) in self.tokens:
@@ -446,6 +449,9 @@ class CodexLog:
                 if reasoning_total is not None:
                     reasoning_valid &= reasoning_total >= reasoning_floor
                     reasoning_valid &= reasoning_expected is None or reasoning_total == reasoning_expected
+                    if reasoning_total_valid and reasoning_anchor is not None:
+                        reasoning_valid &= (0 <= reasoning_total - reasoning_anchor[0]
+                                            <= total[output_index] - reasoning_anchor[1])
                     reasoning_floor = reasoning_expected = reasoning_total
                 for observation in (total, last):
                     if observation is not None:
@@ -460,6 +466,8 @@ class CodexLog:
                     if last is not None:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
                         usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
+            if stamp is not None and (reasoning_total is not None or not total_ok):
+                reasoning_anchor = (reasoning_total, total[output_index]) if reasoning_total_valid else None
             previous = total if stamp is not None and total_ok else None
         if reasoning_seen:
             if (reasoning_start is not None and reasoning_expected is not None

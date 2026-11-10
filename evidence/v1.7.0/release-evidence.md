@@ -162,6 +162,23 @@ The connected matrix passed 163 Python checks. Final native integration passed
 checked separately. Exact-source distribution, remote checks and a newly
 authorized independent review remain required for this changed tree.
 
+Candidate `571728f6790dc986de65f7910cf737d70ded99ac` received FIX FIRST
+in its single authorized review. Its preceding reasoning counterexamples were
+recognized as corrected. The next pass bounds cumulative reasoning growth by
+output growth across corresponding snapshots, preserving valid anchors through
+absent optional fields. Invalid old anchors are discarded so valid current
+usage remains readable. A repeated last-usage object validates its own
+reasoning/output bound before duplicate suppression. Known diagnostic counters,
+explicit zeros and coherent repeats remain supported. The original reproductions
+had 20 assertion failures. A preservation regression in the initial correction
+had one failure and was corrected. The local activity module passed 79 tests.
+An arithmetic feasibility matrix matched all 642 synthetic cases. Final native
+integration passed 909 tests without skips in 177.659 seconds and the frontend
+passed 54 JavaScript tests. The final record and manifest are checked separately.
+Exact-source distribution, remote checks and a newly authorized independent
+review remain required for this changed tree. The frozen retrospective backtest
+of 571728f remains scoped to its original inputs and does not qualify these bytes.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

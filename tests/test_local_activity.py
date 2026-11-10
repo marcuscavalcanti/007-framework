@@ -589,6 +589,112 @@ class LocalActivityTests(unittest.TestCase):
                 self.assertEqual(result["usage"]["reasoning_output_tokens"], expected)
                 self.assertEqual(activity.pricing_request(result) is not None, complete)
 
+    def test_codex_cumulative_reasoning_growth_fits_the_corresponding_output_interval(self):
+        activity = self.module()
+        for before_cutoff in (False, True):
+            for optional_gap in (False, True):
+                for baseline in (0, 10):
+                    for growth in (0, 1, 19, 20, 21, 30):
+                        with self.subTest(before=before_cutoff, gap=optional_gap, baseline=baseline,
+                                          growth=growth), tempfile.TemporaryDirectory() as tmp:
+                            rows = codex_rows("reasoning-output-growth", tmp)[:3]
+                            if before_cutoff:
+                                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T14:00:00Z"
+                            first_stamp = NOW - timedelta(hours=25 if before_cutoff else 1)
+                            observations = [(first_stamp, 100, 20, baseline)]
+                            if optional_gap:
+                                observations.append((NOW - timedelta(minutes=30), 150, 30, None))
+                            observations.append((NOW - timedelta(minutes=10), 200, 40, baseline + growth))
+                            for stamp, prompt, output, reasoning in observations:
+                                total = {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output}
+                                if reasoning is not None:
+                                    total["reasoning_output_tokens"] = reasoning
+                                rows.append({"type": "event_msg", "timestamp": stamp.isoformat(), "payload": {
+                                    "type": "token_count", "info": {"total_token_usage": total}}})
+                            filename = Path(tmp, "reasoning-output-growth.jsonl")
+                            write_jsonl(filename, rows)
+                            result = activity.parse_codex_session(filename, NOW)
+                            complete = growth <= 20
+                            self.assertEqual(result["usage"]["usage_complete"], complete)
+                            self.assertEqual(result["usage"]["price_allocation_complete"], complete)
+                            self.assertEqual(result["usage"]["total_tokens"], 120 if before_cutoff else 240)
+                            self.assertEqual(result["usage"]["output_tokens"], 20 if before_cutoff else 40)
+                            self.assertEqual(result["usage"]["reasoning_output_tokens"],
+                                             growth if before_cutoff else baseline + growth)
+                            self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_codex_duplicate_reasoning_fits_its_own_last_output_before_deduplication(self):
+        activity = self.module()
+        for reported_total in (False, True):
+            for exact_repeat, reasoning in ((True, 10), (False, 0), (False, 5), (False, 6), (False, 10)):
+                with self.subTest(reported_total=reported_total, exact=exact_repeat,
+                                  reasoning=reasoning), tempfile.TemporaryDirectory() as tmp:
+                    total = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+                    if reported_total:
+                        total["reasoning_output_tokens"] = 10
+                    first = {**total, "reasoning_output_tokens": 10}
+                    last = first if exact_repeat else {"input_tokens": 50, "output_tokens": 5,
+                                                       "total_tokens": 55, "reasoning_output_tokens": reasoning}
+                    rows = codex_rows("duplicate-last-output", tmp)[:3]
+                    for stamp, delta in ((NOW - timedelta(minutes=20), first), (NOW - timedelta(minutes=10), last)):
+                        rows.append({"type": "event_msg", "timestamp": stamp.isoformat(), "payload": {
+                            "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": delta}}})
+                    filename = Path(tmp, "duplicate-last-output.jsonl")
+                    write_jsonl(filename, rows)
+                    result = activity.parse_codex_session(filename, NOW)
+                    complete = exact_repeat or reasoning <= 5
+                    self.assertEqual(result["usage"]["usage_complete"], complete)
+                    self.assertEqual(result["usage"]["price_allocation_complete"], complete)
+                    self.assertEqual(result["usage"]["total_tokens"], 120)
+                    if reported_total:
+                        self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
+                    self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_codex_old_duplicate_reasoning_error_preserves_the_current_window(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("old-duplicate-last-output", tmp)[:3]
+            rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T14:00:00Z"
+            total = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 10}
+            observations = ((NOW - timedelta(hours=26), total, total),
+                            (NOW - timedelta(hours=25), total, {"input_tokens": 50, "output_tokens": 5,
+                                                               "total_tokens": 55, "reasoning_output_tokens": 10}),
+                            (NOW - timedelta(hours=1), {"input_tokens": 200, "output_tokens": 40,
+                                                       "total_tokens": 240, "reasoning_output_tokens": 20}, total))
+            for stamp, cumulative, last in observations:
+                rows.append({"type": "event_msg", "timestamp": stamp.isoformat(), "payload": {
+                    "type": "token_count", "info": {"total_token_usage": cumulative, "last_token_usage": last}}})
+            filename = Path(tmp, "old-duplicate-last-output.jsonl")
+            write_jsonl(filename, rows)
+            result = activity.parse_codex_session(filename, NOW)
+            self.assertTrue(result["usage"]["usage_complete"])
+            self.assertEqual(result["usage"]["total_tokens"], 120)
+            self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
+            self.assertIsNotNone(activity.pricing_request(result))
+
+    def test_codex_old_invalid_reasoning_clears_an_earlier_interval_anchor(self):
+        activity = self.module()
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = codex_rows("old-invalid-reasoning-anchor", tmp)[:3]
+            rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = "2026-08-28T14:00:00Z"
+            for hours, prompt, output, reasoning, last_reasoning in ((26, 100, 20, 10, 10),
+                                                                    (25, 100, 20, 30, 30),
+                                                                    (1, 200, 40, 40, 10)):
+                total = {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output,
+                         "reasoning_output_tokens": reasoning}
+                last = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+                        "reasoning_output_tokens": last_reasoning}
+                rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(hours=hours)).isoformat(),
+                             "payload": {"type": "token_count", "info": {
+                                 "total_token_usage": total, "last_token_usage": last}}})
+            filename = Path(tmp, "old-invalid-reasoning-anchor.jsonl")
+            write_jsonl(filename, rows)
+            result = activity.parse_codex_session(filename, NOW)
+            self.assertTrue(result["usage"]["usage_complete"])
+            self.assertEqual(result["usage"]["total_tokens"], 120)
+            self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
+            self.assertIsNotNone(activity.pricing_request(result))
+
     def test_codex_reasoning_window_keeps_optional_baselines_unknown(self):
         activity = self.module()
         cases = ((20, 50, 30, 30, True), (None, 20, 10, 10, True),
