@@ -174,7 +174,8 @@ class NativeTelemetry:
                 values["reasoning_output_tokens"] = thinking
         if any(type(value) is not int or not 0 <= value <= 2**53 - 1 for value in values.values()):
             raise ValueError("invalid-usage")
-        if self.provider == "codex" and values["cached_input_tokens"] > values["input_tokens"]:
+        if (self.provider == "codex"
+                and values["cached_input_tokens"] + values["cache_write_input_tokens"] > values["input_tokens"]):
             raise ValueError("invalid-cache")
         if values["reasoning_output_tokens"] > values["output_tokens"]:
             raise ValueError("invalid-reasoning")

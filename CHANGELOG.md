@@ -90,6 +90,8 @@ Candidate prepared for independent review. Release qualification is recorded in
 - Full primary last-usage objects preserve optional allocation presence through aggregation. Known cumulative
   increments reconstruct omitted allocation fields, and explicit contradictory values still withhold pricing.
 - Reasoning availability reflects the normalized diagnostic value, including aggregates outside the numeric envelope.
+- Fresh-command Codex telemetry validates cache reads plus cache writes against inclusive input before accumulation
+  and receipt enrichment. Claude retains its separate additive input/cache accounting.
 - Primary subtotal availability is checked before composition, including across resets whose individually finite
   counters produce an unavailable aggregate. Finite diagnostic subtotals and explicit zero retain their values.
 - Sparse Codex reasoning deltas obey reported cumulative bounds before deduplication, while absent optional bounds remain

@@ -333,6 +333,23 @@ pre-window baselines. It also checks reconstructed allocation values for
 admitted histories. The local boundary suite passed all 15 methods. The frozen
 earlier source, expectation and evidence retain their original scope.
 
+The review of `508b1a6198e01d4356b4020a4c6b5167e8637330` recognized those
+two corrections and found a pre-existing defect in the separate fresh-command
+producer. `NativeTelemetry.add_usage()` bounded Codex cache reads individually
+but accepted combined cache reads and writes above inclusive input. The
+producer could classify that accounting complete and propagate it through
+receipt enrichment.
+
+The subsequent correction checks the combined disjoint allocation before
+accumulation. Two new regression methods first failed by assertion on the
+preceding source, with zero execution errors. Their controls include 1,500
+combinations of input, output, cache reads/writes and optional-field presence,
+receipt enrichment admission, integer boundaries and retention of an earlier
+valid turn when a later one is rejected. Claude's additive input/cache
+semantics retain their positive controls. The fresh-command module passed all
+36 methods locally. Passive-log parsing and the fresh-command producer retain
+their respective telemetry and identity contracts.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

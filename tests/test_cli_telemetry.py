@@ -1,4 +1,5 @@
 import importlib
+import itertools
 import json
 import os
 import subprocess
@@ -88,6 +89,61 @@ class NativeTelemetryTests(unittest.TestCase):
         ])
         self.assertEqual(result["status"], "incomplete")
         self.assertEqual(result["usage"]["total_tokens"], 12)
+
+    def test_codex_cache_partition_admission_and_receipt_enrichment(self):
+        cases = 0
+        for prompt, cached, written, output, mask in itertools.product(range(5), range(5), range(5), range(3), range(4)):
+            usage = {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output}
+            if mask & 1:
+                usage["cached_input_tokens"] = cached
+            if mask & 2:
+                usage["cache_write_input_tokens"] = written
+            expected = usage.get("cached_input_tokens", 0) + usage.get("cache_write_input_tokens", 0) <= prompt
+            result = self.parse("codex", [{"type": "thread.started", "thread_id": "synthetic-allocation"},
+                                           {"type": "turn.started"},
+                                           {"type": "turn.completed", "usage": usage}])
+            context = (prompt, cached, written, output, mask)
+            self.assertEqual(result["status"] == "complete", expected, context)
+            if expected:
+                receipt = self.module().enrich({}, {**result, "wall_s": 0})
+                self.assertEqual(receipt["usage"], usage, context)
+                self.assertEqual(receipt["tokens"], prompt + output, context)
+            else:
+                with self.assertRaisesRegex(ValueError, "incomplete native telemetry"):
+                    self.module().enrich({}, {**result, "wall_s": 0})
+            cases += 1
+        self.assertEqual(cases, 1500)
+
+    def test_native_cache_contract_preserves_provider_semantics_and_prior_turns(self):
+        for prompt, cached, written in ((1, 1, 0), (1, 0, 1), (2, 1, 1), (1, 1, 1), (1, 0, 2),
+                                        (2**53 - 1, 2**53 - 1, 0), (2**53 - 1, 2**53 - 1, 1)):
+            codex = self.parse("codex", [{"type": "thread.started", "thread_id": "synthetic"},
+                                          {"type": "turn.started"},
+                                          {"type": "turn.completed", "usage": {
+                                              "input_tokens": prompt, "output_tokens": 0,
+                                              "cached_input_tokens": cached, "cache_write_input_tokens": written}}])
+            self.assertEqual(codex["status"] == "complete", cached + written <= prompt)
+            claude = self.parse("claude", [{"type": "system", "subtype": "init", "session_id": "synthetic"},
+                                            {"type": "result", "subtype": "success", "session_id": "synthetic",
+                                             "is_error": False, "num_turns": 1, "usage": {
+                                                 "input_tokens": prompt, "output_tokens": 0,
+                                                 "cache_read_input_tokens": cached,
+                                                 "cache_creation_input_tokens": written}}])
+            self.assertEqual(claude["status"], "complete")
+            self.assertEqual(claude["usage"]["total_tokens"], prompt + cached + written)
+        result = self.parse("codex", [{"type": "thread.started", "thread_id": "synthetic"},
+                                       {"type": "turn.started"},
+                                       {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 0,
+                                                                              "cached_input_tokens": 1,
+                                                                              "cache_write_input_tokens": 0}},
+                                       {"type": "turn.started"},
+                                       {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 0,
+                                                                              "cached_input_tokens": 1,
+                                                                              "cache_write_input_tokens": 1}}])
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(result["completed_turns"], 1)
+        self.assertEqual(result["usage"]["total_tokens"], 1)
+        self.assertEqual(result["usage"]["cache_write_input_tokens"], 0)
 
     def test_absent_optional_counters_remain_unknown_not_zero(self):
         result = self.parse("codex", [
