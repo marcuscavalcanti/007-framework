@@ -148,6 +148,20 @@ The final record and manifest are checked separately. Exact-source distribution,
 remote checks and a newly authorized independent review remain required for
 this changed tree.
 
+Candidate `4e84c926c9f48264eff23ce820993fb43439bde2` received FIX FIRST
+in its single authorized review. The preceding two findings were recognized
+as corrected. A shared follow-up preserves optional reasoning-counter presence
+beside normalized counters, checks available output bounds and reconciles
+reported deltas with cumulative observations. Missing baselines remain unknown.
+Known cumulative values remain visible with incomplete flags when observations
+contradict them. Valid primary baselines remain usable when a dated optional
+counter defect falls outside the window. Regressions cover numeric bounds,
+gaps, absent optional fields, explicit zeros, duplicates and temporal scope.
+The connected matrix passed 163 Python checks. Final native integration passed
+905 tests without skips in 161.780 seconds. The final record and manifest are
+checked separately. Exact-source distribution, remote checks and a newly
+authorized independent review remain required for this changed tree.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

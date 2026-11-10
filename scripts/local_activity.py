@@ -348,7 +348,7 @@ class CodexLog:
             self.token_stamps.append(stamp)  # Duplicate counters still carry temporal evidence.
             info = payload.get("info")
             if not isinstance(info, dict):
-                self.tokens.append((stamp, None, None, False, False))
+                self.tokens.append((stamp, None, None, False, False, (None, None)))
                 return
             total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else None
             last = info.get("last_token_usage")
@@ -368,17 +368,22 @@ class CodexLog:
             if total_ok and last_ok and isinstance(last, dict):
                 last_ok = all(valid_number(last[key]) and (key not in total or last[key] <= total[key]) for key in (
                     "input_tokens", "output_tokens", "total_tokens", "reasoning_output_tokens")
-                    if key in last)
+                    if key in last) and ("reasoning_output_tokens" not in last
+                                         or last["reasoning_output_tokens"] <= total["output_tokens"])
+            # Optional-counter presence is lost in the normalized default-zero tuples.
+            reasoning = tuple(int(raw["reasoning_output_tokens"])
+                              if isinstance(raw, dict) and valid_number(raw.get("reasoning_output_tokens")) else None
+                              for raw in (total, last))
             if total and total == self.previous:
                 if not total_ok or not last_ok:
-                    self.tokens.append((stamp, None, None, False, False))
+                    self.tokens.append((stamp, codex_counts(total), None, total_ok, last_ok, reasoning))
                 elif (not codex_allocation_valid(codex_counts(total))
                       or not absent and not codex_allocation_valid(codex_counts(last))):
                     self.price_anomalies.add(stamp)
                 return
             self.previous = total
             self.tokens.append((stamp, codex_counts(total), codex_counts(last),
-                                total_ok, last_ok))
+                                total_ok, last_ok, reasoning))
 
     def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
         if not self.meta:
@@ -387,10 +392,10 @@ class CodexLog:
         cutoff = now - timedelta(hours=lookback_hours)
         usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True,
                  "price_allocation_complete": True}
-        inside = [(total, last, total_ok, last_ok) for stamp, total, last, total_ok, last_ok in self.tokens
+        inside = [(total, last, total_ok, last_ok) for stamp, total, last, total_ok, last_ok, _ in self.tokens
                   if stamp and stamp >= cutoff]
         increments = [last for total, last, _, _ in inside if last is not None]
-        snapshots = [(stamp, total, total_ok) for stamp, total, _, total_ok, _ in self.tokens if total is not None]
+        snapshots = [(stamp, total, total_ok) for stamp, total, _, total_ok, _, _ in self.tokens if total is not None]
         started = iso_datetime(self.meta["started_at"])
         if increments:
             usage.update({key: sum(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
@@ -413,11 +418,35 @@ class CodexLog:
         primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
         allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",
                                                        "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
-        for stamp, total, last, total_ok, _ in self.tokens:
+        output_index = USAGE_KEYS.index("output_tokens")
+        reasoning_start = reasoning_expected = 0 if started and started >= cutoff else None
+        reasoning_floor = 0  # A nonnegative lower bound, never an absent cumulative baseline.
+        reasoning_seen, reasoning_valid, reasoning_deltas_complete = False, True, True
+        for stamp, total, last, total_ok, last_ok, (reasoning_total, reasoning_last) in self.tokens:
+            reasoning_total_valid = (reasoning_total is not None and total is not None
+                                     and total_ok and reasoning_total <= total[output_index])
             if stamp is None:
                 usage["usage_complete"] = False
                 usage["price_allocation_complete"] = False
-            elif stamp >= cutoff:
+                reasoning_valid = False
+            elif stamp < cutoff:
+                reasoning_start = reasoning_expected = reasoning_total if reasoning_total_valid else None
+                reasoning_floor = reasoning_start if reasoning_start is not None else 0
+                reasoning_seen = reasoning_start is not None
+            else:
+                reasoning_seen |= reasoning_total is not None or reasoning_last is not None
+                reasoning_deltas_complete &= reasoning_last is not None and last is not None
+                if reasoning_last is not None:
+                    reasoning_floor += reasoning_last
+                reasoning_expected = (reasoning_expected + reasoning_last
+                                      if reasoning_expected is not None and reasoning_last is not None else None)
+                reasoning_valid &= reasoning_total is None or reasoning_total_valid
+                reasoning_valid &= (reasoning_last is None or last_ok and (
+                    last is None or reasoning_last <= last[output_index]))
+                if reasoning_total is not None:
+                    reasoning_valid &= reasoning_total >= reasoning_floor
+                    reasoning_valid &= reasoning_expected is None or reasoning_total == reasoning_expected
+                    reasoning_floor = reasoning_expected = reasoning_total
                 for observation in (total, last):
                     if observation is not None:
                         usage["price_allocation_complete"] &= codex_allocation_valid(observation)
@@ -432,6 +461,14 @@ class CodexLog:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
                         usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
             previous = total if stamp is not None and total_ok else None
+        if reasoning_seen:
+            if (reasoning_start is not None and reasoning_expected is not None
+                    and reasoning_expected >= reasoning_start):
+                usage["reasoning_output_tokens"] = reasoning_expected - reasoning_start
+            elif not reasoning_deltas_complete or not reasoning_valid:
+                usage["reasoning_output_tokens"] = None
+                usage["usage_complete"] = False
+            usage["usage_complete"] &= reasoning_valid
         usage["price_allocation_complete"] &= usage["usage_complete"]
         usage["price_allocation_complete"] &= codex_allocation_valid(tuple(usage[key] for key in USAGE_KEYS))
         usage["price_allocation_complete"] &= not any(stamp is None or stamp >= cutoff for stamp in self.price_anomalies)
