@@ -197,6 +197,28 @@ a dependency. Final native integration passed 913 tests without skips in
 checked separately. Exact-source distribution, remote checks and a newly
 authorized independent review remain required for the changed tree.
 
+Candidate `e075ee2e0e71435c9d7b5f6ddb712c024f6692d6` received FIX FIRST
+in its single authorized focused review. The interval transition was recognized
+as correct on a trusted continuous chain. Four boundary counterexamples were
+reproduced before correction. Reporting-window reconstruction now maintains
+cumulative = baseline + window with feasible ranges for all three values.
+Unknown optional baselines retain their known output bounds. Full deltas agree
+with primary increments before establishing an exact reasoning transition.
+Dated invalid transitions discard older constraints. Singleton window ranges
+retain exact results from zero output growth and sparse reasoning deltas.
+Reported diagnostic values remain separate from feasibility. Two older positive
+fixtures implied reasoning beyond baseline output. Their exact inputs now stay
+as negative controls beside feasible controls, with primary totals and reported
+diagnostics retained. The capture module and a synthetic price/cache recovery
+check passed 91 methods. The retained checks include 19,424 temporal/zero-growth
+histories and 2,800 exact range-projection cases, alongside the prior 3,456-case
+matrix. An independent reference matched 273,600 histories in its declared
+variable-growth and reporting-window domain. Runtime changes add 77 lines and
+remove 37 without a dependency. Final native integration passed 921 tests
+without skips in 236.121 seconds and 54 JavaScript tests. Final documentation,
+manifest, exact-source distribution, remote checks and a newly authorized
+independent review remain separate qualification gates for the changed tree.
+
 The pre-version candidate `6aaff4456c47690260f296619ef6aa9defa1eb6f` passed
 811 native Python tests without skips. Its exact push and pull-request CI each
 passed five jobs, including installed-wheel checks. Hosted macOS skipped three

@@ -321,6 +321,19 @@ def iso(stamp):
     return stamp.isoformat().replace("+00:00", "Z") if stamp else None
 
 
+def reconcile_reasoning_ranges(baseline, cumulative, window):
+    """Project cumulative = baseline + window onto its three feasible integer ranges."""
+    baseline_low, baseline_high = baseline
+    cumulative_low, cumulative_high = cumulative
+    window_low, window_high = window
+    ranges = (
+        (max(baseline_low, cumulative_low - window_high), min(baseline_high, cumulative_high - window_low)),
+        (max(cumulative_low, baseline_low + window_low), min(cumulative_high, baseline_high + window_high)),
+        (max(window_low, cumulative_low - baseline_high), min(window_high, cumulative_high - baseline_low)),
+    )
+    return ranges if all(lower <= upper for lower, upper in ranges) else None
+
+
 class CodexLog:
     """Metadata of one Codex rollout, fed row by row (never retained content). A thread another thread spawned
     (subagent, guardian review) reports its root session's id, as a Claude subagent log does, with its own id as log_id."""
@@ -421,48 +434,72 @@ class CodexLog:
         allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",
                                                        "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
         output_index = USAGE_KEYS.index("output_tokens")
-        reasoning_start = reasoning_expected = 0 if started and started >= cutoff else None
-        reasoning_bounds = (0, 0) if reasoning_start is not None else None
-        reasoning_floor = 0  # A nonnegative lower bound, never an absent cumulative baseline.
-        reasoning_seen, reasoning_valid, reasoning_deltas_complete = False, True, True
+        reasoning_bounds = (0, 0) if started and started >= cutoff else None
+        baseline_bounds, window_bounds = reasoning_bounds, (0, 0)
+        diagnostic_baseline = diagnostic_current = 0 if reasoning_bounds is not None else None
+        diagnostic_window, diagnostic_complete = 0, True
+        reasoning_seen, reasoning_valid = False, True
         for stamp, total, last, total_ok, last_ok, (reasoning_total, reasoning_last) in self.tokens:
             reasoning_total_valid = (reasoning_total is not None and total is not None
                                      and total_ok and reasoning_total <= total[output_index])
             delta = [value - previous[i] for i, value in enumerate(total)] if previous is not None and total is not None else None
             primary_continuous = total_ok and delta is not None and all(delta[i] >= 0 for i in primary)
-            reasoning_step_valid = last_ok and (reasoning_last is None or not primary_continuous
-                                                or reasoning_last <= delta[output_index])
-            if reasoning_bounds is not None and primary_continuous and reasoning_step_valid:
-                # Known deltas consume their exact contribution, unknown deltas retain only their output capacity.
-                lower, upper = reasoning_bounds
-                reasoning_bounds = (lower + (reasoning_last or 0),
-                                    upper + (delta[output_index] if reasoning_last is None else reasoning_last))
-            else:
-                reasoning_bounds = None
+            last_matches = last is None or delta is not None and all(last[i] == delta[i] for i in primary)
+            reasoning_step_valid = (last_ok and last_matches and primary_continuous
+                                    and (reasoning_last is None or reasoning_last <= delta[output_index]))
             if stamp is None:
                 usage["usage_complete"] = False
                 usage["price_allocation_complete"] = False
                 reasoning_valid = False
             elif stamp < cutoff:
-                reasoning_start = reasoning_expected = reasoning_total if reasoning_total_valid else None
-                reasoning_floor = reasoning_start if reasoning_start is not None else 0
-                reasoning_seen = reasoning_start is not None
+                if reasoning_total_valid:
+                    reasoning_bounds = (reasoning_total, reasoning_total)
+                elif total_ok:
+                    if reasoning_total is None and reasoning_bounds is not None and reasoning_step_valid:
+                        reasoning_bounds = (reasoning_bounds[0] + (reasoning_last or 0),
+                                            reasoning_bounds[1] + (delta[output_index] if reasoning_last is None else reasoning_last))
+                    else:
+                        reasoning_bounds = (0, total[output_index])
+                else:
+                    reasoning_bounds = None
+                baseline_bounds, window_bounds = reasoning_bounds, (0, 0)
+                diagnostic_baseline = diagnostic_current = reasoning_total if reasoning_total_valid else None
+                reasoning_seen = reasoning_total_valid
             else:
                 reasoning_seen |= reasoning_total is not None or reasoning_last is not None
-                reasoning_deltas_complete &= reasoning_last is not None and last is not None
-                if reasoning_last is not None:
-                    reasoning_floor += reasoning_last
-                reasoning_expected = (reasoning_expected + reasoning_last
-                                      if reasoning_expected is not None and reasoning_last is not None else None)
-                reasoning_valid &= reasoning_total is None or reasoning_total_valid
-                reasoning_valid &= (reasoning_last is None or reasoning_step_valid and (
-                    last is None or reasoning_last <= last[output_index]))
+                known = reasoning_last
+                if known is None and primary_continuous and delta[output_index] == 0:
+                    known = 0
+                diagnostic_complete &= known is not None
+                diagnostic_window += known or 0
                 if reasoning_total is not None:
-                    reasoning_valid &= reasoning_total >= reasoning_floor
-                    reasoning_valid &= reasoning_expected is None or reasoning_total == reasoning_expected
-                    if reasoning_total_valid and reasoning_bounds is not None:
-                        reasoning_valid &= reasoning_bounds[0] <= reasoning_total <= reasoning_bounds[1]
-                    reasoning_floor = reasoning_expected = reasoning_total
+                    diagnostic_current = reasoning_total
+                elif diagnostic_current is not None and known is not None:
+                    diagnostic_current += known
+                else:
+                    diagnostic_current = None
+                reasoning_valid &= reasoning_total is None or reasoning_total_valid
+                reasoning_valid &= reasoning_last is None or reasoning_step_valid
+                if reasoning_bounds is not None and window_bounds is not None and primary_continuous:
+                    increment = ((reasoning_last, reasoning_last) if reasoning_step_valid and reasoning_last is not None
+                                 else (0, delta[output_index]))
+                    reasoning_bounds = (reasoning_bounds[0] + increment[0], reasoning_bounds[1] + increment[1])
+                    window_bounds = (window_bounds[0] + increment[0], window_bounds[1] + increment[1])
+                    if reasoning_total is not None:
+                        if reasoning_total_valid and reasoning_bounds[0] <= reasoning_total <= reasoning_bounds[1]:
+                            reasoning_bounds = (reasoning_total, reasoning_total)
+                        else:
+                            reasoning_bounds = None
+                    reconciled = (reconcile_reasoning_ranges(baseline_bounds, reasoning_bounds, window_bounds)
+                                  if baseline_bounds is not None and reasoning_bounds is not None else None)
+                    if reconciled is None:
+                        reasoning_bounds = window_bounds = None
+                        reasoning_valid = False
+                    else:
+                        baseline_bounds, reasoning_bounds, window_bounds = reconciled
+                else:
+                    reasoning_bounds = window_bounds = None
+                    reasoning_valid = False
                 for observation in (total, last):
                     if observation is not None:
                         usage["price_allocation_complete"] &= codex_allocation_valid(observation)
@@ -475,17 +512,20 @@ class CodexLog:
                     if last is not None:
                         usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
                         usage["price_allocation_complete"] &= all(last[i] == delta[i] for i in allocation)
-            if stamp is not None and (reasoning_total is not None or not total_ok):
-                reasoning_bounds = (reasoning_total, reasoning_total) if reasoning_total_valid else None
             previous = total if stamp is not None and total_ok else None
         if reasoning_seen:
-            if (reasoning_start is not None and reasoning_expected is not None
-                    and reasoning_expected >= reasoning_start):
-                usage["reasoning_output_tokens"] = reasoning_expected - reasoning_start
-            elif not reasoning_deltas_complete or not reasoning_valid:
-                usage["reasoning_output_tokens"] = None
+            exact = window_bounds is not None and window_bounds[0] == window_bounds[1]
+            if reasoning_valid and exact:
+                usage["reasoning_output_tokens"] = window_bounds[0]
+            else:
                 usage["usage_complete"] = False
-            usage["usage_complete"] &= reasoning_valid
+                # Retain reported diagnostic values independently of feasibility.
+                if (diagnostic_baseline is not None and diagnostic_current is not None
+                        and diagnostic_current >= diagnostic_baseline):
+                    usage["reasoning_output_tokens"] = diagnostic_current - diagnostic_baseline
+                else:
+                    usage["reasoning_output_tokens"] = diagnostic_window if diagnostic_complete else None
+            usage["usage_complete"] &= reasoning_valid and exact
         usage["price_allocation_complete"] &= usage["usage_complete"]
         usage["price_allocation_complete"] &= codex_allocation_valid(tuple(usage[key] for key in USAGE_KEYS))
         usage["price_allocation_complete"] &= not any(stamp is None or stamp >= cutoff for stamp in self.price_anomalies)

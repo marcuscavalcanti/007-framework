@@ -689,12 +689,15 @@ class LocalActivityTests(unittest.TestCase):
                              "payload": {"type": "token_count", "info": {
                                  "total_token_usage": total, "last_token_usage": last}}})
             filename = Path(tmp, "old-invalid-reasoning-anchor.jsonl")
-            write_jsonl(filename, rows)
-            result = activity.parse_codex_session(filename, NOW)
-            self.assertTrue(result["usage"]["usage_complete"])
-            self.assertEqual(result["usage"]["total_tokens"], 120)
-            self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
-            self.assertIsNotNone(activity.pricing_request(result))
+            for current, complete in ((30, True), (40, False)):
+                with self.subTest(current=current):
+                    rows[-1]["payload"]["info"]["total_token_usage"]["reasoning_output_tokens"] = current
+                    write_jsonl(filename, rows)
+                    result = activity.parse_codex_session(filename, NOW)
+                    self.assertEqual(result["usage"]["usage_complete"], complete)
+                    self.assertEqual(result["usage"]["total_tokens"], 120)
+                    self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
+                    self.assertEqual(activity.pricing_request(result) is not None, complete)
 
     def test_codex_reasoning_gaps_respect_known_deltas_and_remaining_output_capacity(self):
         activity = self.module()
@@ -811,6 +814,206 @@ class LocalActivityTests(unittest.TestCase):
                         if complete and optional_seen:
                             self.assertIn(result["usage"]["reasoning_output_tokens"], possible)
 
+    def test_codex_unknown_reasoning_baseline_keeps_its_output_upper_bound(self):
+        activity = self.module()
+        for cumulative, complete in ((15, True), (16, False)):
+            with self.subTest(cumulative=cumulative), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("bounded-unknown-baseline", tmp)[:3]
+                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = (NOW - timedelta(hours=48)).isoformat()
+                for hours, total, last in ((25, {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}, None),
+                                           (1, {"input_tokens": 110, "output_tokens": 30, "total_tokens": 140,
+                                                "reasoning_output_tokens": cumulative},
+                                            {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+                                             "reasoning_output_tokens": 5})):
+                    info = {"total_token_usage": total}
+                    if last is not None:
+                        info["last_token_usage"] = last
+                    rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(hours=hours)).isoformat(),
+                                 "payload": {"type": "token_count", "info": info}})
+                path = Path(tmp, "bounded-unknown-baseline.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["usage_complete"], complete)
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertEqual(result["usage"]["reasoning_output_tokens"], 5)
+                self.assertEqual(activity.pricing_request(result) is not None, complete)
+
+    def test_codex_old_mismatched_primary_delta_cannot_constrain_current_reasoning(self):
+        activity = self.module()
+        for inside in (False, True):
+            for omit in (False, True):
+                for baseline_reasoning in (None, 20):
+                    with self.subTest(inside=inside, omit=omit, baseline=baseline_reasoning), tempfile.TemporaryDirectory() as tmp:
+                        rows = codex_rows("old-delta-mismatch", tmp)[:3]
+                        if not inside:
+                            rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = (NOW - timedelta(hours=48)).isoformat()
+                        first = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 10}
+                        baseline = {"input_tokens": 200, "output_tokens": 40, "total_tokens": 240}
+                        if baseline_reasoning is not None:
+                            baseline["reasoning_output_tokens"] = baseline_reasoning
+                        observations = ((27, first, first),
+                                        (25, baseline, None if omit else {"input_tokens": 50, "output_tokens": 10,
+                                                                         "total_tokens": 60, "reasoning_output_tokens": 0}),
+                                        (1, {"input_tokens": 300, "output_tokens": 60, "total_tokens": 360,
+                                             "reasoning_output_tokens": 40},
+                                         {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+                                          "reasoning_output_tokens": 20}))
+                        for index, (hours, total, last) in enumerate(observations):
+                            info = {"total_token_usage": total}
+                            if last is not None:
+                                info["last_token_usage"] = last
+                            stamp = NOW - timedelta(minutes=10-index) if inside else NOW - timedelta(hours=hours)
+                            rows.append({"type": "event_msg", "timestamp": stamp.isoformat(),
+                                         "payload": {"type": "token_count", "info": info}})
+                        path = Path(tmp, "old-delta-mismatch.jsonl")
+                        write_jsonl(path, rows)
+                        result = activity.parse_codex_session(path, NOW)
+                        self.assertEqual(result["usage"]["usage_complete"], not inside)
+                        self.assertEqual(activity.pricing_request(result) is not None, not inside)
+                        if not inside:
+                            self.assertEqual(result["usage"]["total_tokens"], 120)
+                            self.assertEqual(result["usage"]["reasoning_output_tokens"], 20)
+
+    def test_codex_zero_output_growth_determines_an_unreported_reasoning_delta(self):
+        activity = self.module()
+        for reported in ("neither", "delta", "cumulative"):
+            with self.subTest(reported=reported), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("zero-reasoning-capacity", tmp)[:3]
+                first = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 10}
+                total = {"input_tokens": 200, "output_tokens": 20, "total_tokens": 220}
+                last = {"input_tokens": 100, "output_tokens": 0, "total_tokens": 100}
+                if reported == "delta":
+                    last["reasoning_output_tokens"] = 0
+                if reported == "cumulative":
+                    total["reasoning_output_tokens"] = 10
+                for index, (cumulative, delta) in enumerate(((first, first), (total, last))):
+                    rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(minutes=10-index)).isoformat(),
+                                 "payload": {"type": "token_count", "info": {
+                                     "total_token_usage": cumulative, "last_token_usage": delta}}})
+                path = Path(tmp, "zero-reasoning-capacity.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertTrue(result["usage"]["usage_complete"])
+                self.assertEqual(result["usage"]["total_tokens"], 220)
+                self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
+                self.assertIsNotNone(activity.pricing_request(result))
+
+    def test_codex_sparse_reasoning_delta_survives_an_unknown_window_baseline(self):
+        activity = self.module()
+        for full in (False, True):
+            for baseline_reasoning in (None, 10):
+                with self.subTest(full=full, baseline=baseline_reasoning), tempfile.TemporaryDirectory() as tmp:
+                    rows = codex_rows("sparse-window-reasoning", tmp)[:3]
+                    rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = (NOW - timedelta(hours=48)).isoformat()
+                    baseline = {"input_tokens": 10, "output_tokens": 10, "total_tokens": 20}
+                    if baseline_reasoning is not None:
+                        baseline["reasoning_output_tokens"] = baseline_reasoning
+                    current = {"input_tokens": 110, "output_tokens": 30, "total_tokens": 140, "reasoning_output_tokens": 15}
+                    last = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120} if full else {}
+                    last["reasoning_output_tokens"] = 5
+                    for hours, info in ((25, {"total_token_usage": baseline}),
+                                        (1, {"total_token_usage": current, "last_token_usage": last})):
+                        rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(hours=hours)).isoformat(),
+                                     "payload": {"type": "token_count", "info": info}})
+                    path = Path(tmp, "sparse-window-reasoning.jsonl")
+                    write_jsonl(path, rows)
+                    result = activity.parse_codex_session(path, NOW)
+                    self.assertTrue(result["usage"]["usage_complete"])
+                    self.assertEqual(result["usage"]["total_tokens"], 120)
+                    self.assertEqual(result["usage"]["reasoning_output_tokens"], 5)
+                    self.assertIsNotNone(activity.pricing_request(result))
+
+    def test_codex_window_reasoning_matches_feasible_histories_with_unknown_baselines_and_zero_growth(self):
+        activity = self.module()
+        baselines = [(False, 0, 0)] + [(True, output, reasoning) for output in range(3)
+                                      for reasoning in (None, *range(output + 1))]
+        for before, baseline_output, baseline_reasoning in baselines:
+            for growth in itertools.product((0, 1), repeat=2):
+                outputs = (baseline_output + growth[0], baseline_output + sum(growth))
+                choices = [tuple(dict.fromkeys((None, 0, output, output + 1))) for output in outputs]
+                for cumulative in itertools.product(*choices):
+                    for deltas in itertools.product((None, 0, 1, 2), repeat=2):
+                        for sparse in (False, True):
+                            with self.subTest(before=before, baseline=(baseline_output, baseline_reasoning),
+                                              growth=growth, cumulative=cumulative, deltas=deltas, sparse=sparse):
+                                possible_baselines = range(baseline_output + 1) if baseline_reasoning is None else (baseline_reasoning,)
+                                states = {(baseline, baseline) for baseline in possible_baselines}
+                                for output, total, last in zip(growth, cumulative, deltas):
+                                    states = {(baseline, current + increment) for baseline, current in states
+                                              for increment in range(output + 1) if last is None or increment == last}
+                                    if total is not None:
+                                        states = {(baseline, current) for baseline, current in states if current == total}
+                                window_values = {current - baseline for baseline, current in states}
+                                seen = before and baseline_reasoning is not None or any(
+                                    value is not None for value in (*cumulative, *deltas))
+                                complete = bool(states) and (not seen or len(window_values) == 1)
+                                rows = codex_rows("window-feasibility", "/synthetic")[:3]
+                                if before:
+                                    rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = (NOW - timedelta(hours=48)).isoformat()
+                                    total = {"input_tokens": 10, "output_tokens": baseline_output, "total_tokens": 10 + baseline_output}
+                                    if baseline_reasoning is not None:
+                                        total["reasoning_output_tokens"] = baseline_reasoning
+                                    rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(hours=25)).isoformat(),
+                                                 "payload": {"type": "token_count", "info": {"total_token_usage": total}}})
+                                log = activity.CodexLog()
+                                for row in rows:
+                                    log.feed(row)
+                                for index, (output, step, reasoning, last_reasoning) in enumerate(zip(outputs, growth, cumulative, deltas), 1):
+                                    prompt = (10 if before else 0) + index * 10
+                                    total = {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output}
+                                    last = {} if sparse else {"input_tokens": 10, "output_tokens": step, "total_tokens": 10 + step}
+                                    if reasoning is not None:
+                                        total["reasoning_output_tokens"] = reasoning
+                                    if last_reasoning is not None:
+                                        last["reasoning_output_tokens"] = last_reasoning
+                                    log.feed({"type": "event_msg", "timestamp": (NOW - timedelta(minutes=10-index)).isoformat(),
+                                              "payload": {"type": "token_count", "info": {
+                                                  "total_token_usage": total, "last_token_usage": last}}})
+                                result = log.result(NOW)
+                                self.assertEqual(result["usage"]["usage_complete"], complete)
+                                self.assertEqual(result["usage"]["total_tokens"], 20 + sum(growth))
+                                self.assertEqual(activity.pricing_request(result) is not None, complete)
+                                if complete and seen:
+                                    self.assertIn(result["usage"]["reasoning_output_tokens"], window_values)
+
+    def test_codex_dated_bad_transition_discards_the_older_reasoning_chain(self):
+        activity = self.module()
+        bad_deltas = [None, {"input_tokens": 50, "output_tokens": 10, "total_tokens": 60, "reasoning_output_tokens": 0},
+                      {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 21},
+                      {"reasoning_output_tokens": 21}, {"reasoning_output_tokens": "unknown"}]
+        for last in bad_deltas:
+            with self.subTest(last=last), tempfile.TemporaryDirectory() as tmp:
+                rows = codex_rows("dated-bad-transition", tmp)[:3]
+                rows[0]["timestamp"] = rows[0]["payload"]["timestamp"] = (NOW - timedelta(hours=48)).isoformat()
+                observations = ((27, {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 10}, None),
+                                (25, {"input_tokens": 200, "output_tokens": 40, "total_tokens": 240}, last),
+                                (1, {"input_tokens": 300, "output_tokens": 60, "total_tokens": 360, "reasoning_output_tokens": 51},
+                                 {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 20}))
+                for hours, total, delta in observations:
+                    info = {"total_token_usage": total}
+                    if delta is not None:
+                        info["last_token_usage"] = delta
+                    rows.append({"type": "event_msg", "timestamp": (NOW - timedelta(hours=hours)).isoformat(),
+                                 "payload": {"type": "token_count", "info": info}})
+                path = Path(tmp, "dated-bad-transition.jsonl")
+                write_jsonl(path, rows)
+                result = activity.parse_codex_session(path, NOW)
+                self.assertEqual(result["usage"]["usage_complete"], last is not None)
+                self.assertEqual(result["usage"]["total_tokens"], 120)
+                self.assertEqual(result["usage"]["reasoning_output_tokens"], 20)
+                self.assertEqual(activity.pricing_request(result) is not None, last is not None)
+
+    def test_reasoning_range_projection_matches_exact_integer_solutions(self):
+        activity = self.module()
+        small = [(lower, upper) for lower in range(4) for upper in range(lower, 4)]
+        cumulative = [(lower, upper) for lower in range(7) for upper in range(lower, 7)]
+        for baseline, current, window in itertools.product(small, cumulative, small):
+            with self.subTest(baseline=baseline, cumulative=current, window=window):
+                solutions = [(b, b + w, w) for b in range(baseline[0], baseline[1] + 1)
+                             for w in range(window[0], window[1] + 1) if current[0] <= b + w <= current[1]]
+                expected = tuple((min(values), max(values)) for values in zip(*solutions)) if solutions else None
+                self.assertEqual(activity.reconcile_reasoning_ranges(baseline, current, window), expected)
+
     def test_codex_reasoning_window_keeps_optional_baselines_unknown(self):
         activity = self.module()
         cases = ((20, 50, 30, 30, True), (None, 20, 10, 10, True),
@@ -875,12 +1078,15 @@ class LocalActivityTests(unittest.TestCase):
                 rows.append({"type": "event_msg", "timestamp": stamp.isoformat(), "payload": {
                     "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": last}}})
             filename = Path(tmp, "old-reasoning-error.jsonl")
-            write_jsonl(filename, rows)
-            result = activity.parse_codex_session(filename, NOW)
-            self.assertTrue(result["usage"]["usage_complete"])
-            self.assertEqual(result["usage"]["total_tokens"], 120)
-            self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
-            self.assertIsNotNone(activity.pricing_request(result))
+            for current, complete in ((30, True), (40, False)):
+                with self.subTest(current=current):
+                    rows[-1]["payload"]["info"]["total_token_usage"]["reasoning_output_tokens"] = current
+                    write_jsonl(filename, rows)
+                    result = activity.parse_codex_session(filename, NOW)
+                    self.assertEqual(result["usage"]["usage_complete"], complete)
+                    self.assertEqual(result["usage"]["total_tokens"], 120)
+                    self.assertEqual(result["usage"]["reasoning_output_tokens"], 10)
+                    self.assertEqual(activity.pricing_request(result) is not None, complete)
 
     def test_gemini_primary_composition_is_validated_before_aggregation(self):
         activity = self.module()
@@ -1851,6 +2057,44 @@ class LocalActivityTests(unittest.TestCase):
 
         self.assertEqual(result["projects"]["p"]["sessions"], 2)
         self.assertEqual({item["source"] for item in result["projects"]["p"]["recent_sessions"]}, {"kimi", "gemini"})
+
+    def test_collector_replaces_cached_price_when_usage_becomes_incomplete_and_recovers(self):
+        activity = self.module()
+        calls = []
+
+        def price(requests):
+            calls.append(len(requests))
+            return [{"cost_usd": 1, "pricing_source": "synthetic"} for _ in requests]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            rows = codex_rows("price-completeness", repo)[:3]
+            total = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "reasoning_output_tokens": 10}
+            rows.append({"type": "event_msg", "timestamp": "2026-08-30T14:05:00Z", "payload": {
+                "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": total}}})
+            path = root / "codex/session.jsonl"
+            write_jsonl(path, rows)
+            collector = activity.ActivityCollector(codex_root=path.parent, claude_root=root / "claude",
+                kimi_root=root / "kimi", gemini_root=root / "gemini", pricer=activity.HeadroomPricer(runner=price))
+            entries = [{"project_id": "p", "path": str(repo)}]
+            first = collector.collect(entries, NOW)["projects"]["p"]
+            self.assertEqual(first["cost_usd_estimate"], 1)
+            invalid = {"type": "event_msg", "timestamp": "2026-08-30T14:06:00Z", "payload": {
+                "type": "token_count", "info": {"total_token_usage": total, "last_token_usage": {
+                    "input_tokens": 50, "output_tokens": 5, "total_tokens": 55, "reasoning_output_tokens": 10}}}}
+            write_jsonl(path, rows + [invalid])
+            second = collector.collect(entries, NOW)["projects"]["p"]
+            self.assertIsNone(second["cost_usd_estimate"])
+            self.assertEqual(second["priced_sessions"], 0)
+            self.assertEqual(second["usage_incomplete_sessions"], 1)
+            self.assertIsNone(second["recent_sessions"][0]["cost_usd_estimate"])
+            write_jsonl(path, rows)
+            recovered = collector.collect(entries, NOW)["projects"]["p"]
+            self.assertEqual(recovered["cost_usd_estimate"], 1)
+            self.assertEqual(recovered["usage_incomplete_sessions"], 0)
+            self.assertEqual(calls, [1])
 
     def test_headroom_pricer_is_batch_cached_and_unknown_model_is_unpriced(self):
         activity = self.module()
