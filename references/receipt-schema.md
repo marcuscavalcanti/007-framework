@@ -180,6 +180,15 @@ nesting, oversized control events and envelopes exceeding 1 MiB after compaction
 invalidate telemetry. Text compaction writes no payload to disk. Fatal accounting
 errors freeze accepted counters at the same byte prefix for every chunk layout.
 Service errors continue scanning to retain a later, more severe service class.
+An error item's model-observation message must remain inspectable. A compacted
+message invalidates telemetry with `invalid-model-observation`, including a
+reroute whose reason exceeds the string-body limit.
+
+The replay helper `scripts/native_runner.py` drains stdout and stderr concurrently
+through bounded in-memory reads. Its receipt retains the existing `stderr_bytes`
+count and adds `streams_closed`. Both pipes must reach EOF for `valid` to be true.
+An unconfirmed pipe retains observed prefix diagnostics with
+`stream-closure-unconfirmed`; its stderr count covers bytes consumed so far.
 
 Claude's native cache and thinking aliases are validated whenever present.
 Canonical counters remain supported, and simultaneous native/canonical values

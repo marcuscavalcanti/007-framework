@@ -217,7 +217,10 @@ class NativeTelemetry:
                 self.completed += 1
                 self.started = False
             if self.provider == "codex" and kind == "item.completed" and isinstance(row.get("item"), dict) and row["item"].get("type") == "error":
-                rerouted = CODEX_REROUTE.fullmatch(str(row["item"].get("message", "")))
+                message = row["item"].get("message")
+                if not isinstance(message, str):
+                    raise ValueError("invalid-model-observation")
+                rerouted = CODEX_REROUTE.fullmatch(message)
                 if rerouted:  # the served model differs from the request: the runner then fails it as served-model-mismatch
                     self.models[rerouted.group(1)] = {}
             if self.provider == "codex" and kind in ("error", "turn.failed"):
@@ -307,45 +310,56 @@ class NativeTelemetry:
         }
 
 
-def drain(process, reader, wait=False, echo=True):
+def drain(process, reader, wait=False, echo=True, stderr_state=None):
     """Never wait for descendants to close the pipe after the direct child exits."""
-    fd = process.stdout.fileno()
-    os.set_blocking(fd, False)
-    eof = False
-    def take():
+    stdout_fd = process.stdout.fileno()
+    descriptors = [stdout_fd]
+    if stderr_state is not None:
+        descriptors.append(process.stderr.fileno())
+    remaining = set(descriptors)
+    for fd in descriptors:
+        os.set_blocking(fd, False)
+
+    def take(fd):
         try:
             chunk = os.read(fd, 65536)
         except BlockingIOError:
-            return False
+            return None
         if chunk:
-            reader.feed(chunk)
-            if echo and sys.stdout is not None:
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.buffer.flush()
+            if fd == stdout_fd:
+                reader.feed(chunk)
+                if echo and sys.stdout is not None:
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.buffer.flush()
+            else:
+                stderr_state["bytes"] += len(chunk)
         return chunk
+
     with selectors.DefaultSelector() as selector:
-        selector.register(fd, selectors.EVENT_READ)
-        while not wait or process.poll() is None:
-            if not selector.select(0.1 if wait else 0):
-                if not wait:
-                    break
-                continue
-            chunk = take()
-            if chunk == b"":
-                eof = True
+        for fd in descriptors:
+            selector.register(fd, selectors.EVENT_READ)
+
+        def read_ready(timeout):
+            progressed = False
+            for key, _ in selector.select(timeout):
+                chunk = take(key.fd)
+                progressed |= chunk is not None
+                if chunk == b"":
+                    remaining.remove(key.fd)
+                    selector.unregister(key.fd)
+            return progressed
+
+        while remaining and (not wait or process.poll() is None):
+            if not read_ready(0.1 if wait else 0) and not wait:
                 break
         if wait:
             process.wait()
             # review r40 T1: the child is gone, so all it wrote is already in the pipe; read it now without waiting on descendants.
             # review r42 T1: bounded in time, so a descendant that keeps writing cannot hold the runner (ponytail: 2 s, raise if needed)
             deadline = time.monotonic() + 2.0
-            while not eof and time.monotonic() < deadline and selector.select(0):
-                chunk = take()
-                if chunk == b"":
-                    eof = True
-                elif not chunk:
-                    break
-    return eof
+            while remaining and time.monotonic() < deadline and read_ready(0):
+                pass
+    return not remaining
 
 
 def enrich(value, telemetry):

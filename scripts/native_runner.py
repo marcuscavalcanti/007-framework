@@ -14,7 +14,6 @@ from decimal import Decimal
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 
 from cli_telemetry import NativeTelemetry, drain, validate_command
 import harness_report
@@ -158,11 +157,14 @@ def main(argv=None):
         print(f"native-runner refused: {error}", file=sys.stderr)
         return 2
     telemetry = NativeTelemetry(args.cli)
-    with tempfile.TemporaryFile() as stderr:  # review R5: native stderr is counted, never echoed or kept
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr)  # same process group: replay_eval kills it with us
-        drain(process, telemetry, wait=True, echo=False)
-        stderr_bytes = stderr.seek(0, 2)
+    stderr_state = {"bytes": 0}
+    # Same process group: replay_eval owns cleanup. Both pipes are counted in memory.
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        streams_closed = drain(process, telemetry, wait=True, echo=False, stderr_state=stderr_state)
     result = telemetry.finish()
+    if not streams_closed:
+        result["status"] = "incomplete"
+        result["problem"] = result["problem"] or "stream-closure-unconfirmed"
     # review r40 T2: keep every reported model; the requested one is "served" only if present, auxiliary models stay recorded
     models = sorted(result["model_usage"])
     served_model = None if not models else (args.model if args.model in models else ",".join(models))
@@ -175,7 +177,8 @@ def main(argv=None):
              "served": {"provider": None, "model": served_model, "effort": None}, "served_models": models,
              "identity_source": f"{args.cli}-cli-json-stream", "source_sha256": result["stream_sha256"],
              "usage": result["usage"], "cost_usd": cost, "cost_source": source,
-             "cost_status": "provisional" if cost is not None else "unavailable", "stderr_bytes": stderr_bytes,
+             "cost_status": "provisional" if cost is not None else "unavailable", "stderr_bytes": stderr_state["bytes"],
+             "streams_closed": streams_closed,
              "problem": result["problem"], "settings_sha256": settings_digest}  # pilot cell 3: fixed telemetry code (e.g. native-error), never stream content
     if digest is not None:
         value["price_table_sha256"] = digest

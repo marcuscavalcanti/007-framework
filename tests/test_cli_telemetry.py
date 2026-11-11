@@ -14,6 +14,33 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class NativeTelemetryTests(unittest.TestCase):
+    def test_compacted_identity_messages_cannot_become_silent_model_agreement(self):
+        module = self.module()
+        message = "model rerouted: requested -> other (" + "r" * (module.MAX_ROW_BYTES // 16 + 1) + ")"
+        for padded, first_key in itertools.product((False, True), ("type", "item")):
+            row = {"type": "item.completed", "item": {"type": "error", "message": message}}
+            if first_key == "item":
+                row = {"item": row["item"], "type": row["type"]}
+            if padded:
+                row["padding"] = "x" * (module.MAX_ROW_BYTES + 1)
+            data = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                    + json.dumps(row).encode() + b'\n'
+                    + b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n')
+            for width in (65521, len(data)):
+                with self.subTest(padded=padded, first_key=first_key, width=width):
+                    reader = module.NativeTelemetry("codex")
+                    for offset in range(0, len(data), width):
+                        reader.feed(data[offset:offset + width])
+                    result = reader.finish()
+                    if padded:
+                        self.assertEqual(result["status"], "incomplete")
+                        self.assertEqual(result["problem"], "invalid-model-observation")
+                    else:
+                        self.assertEqual(result["status"], "complete")
+                        self.assertEqual(result["model_usage"], {"other": {}})
+                    with self.assertRaises(ValueError):
+                        module.enrich({"served_model": "requested"}, result)
+
     def test_claude_alias_presence_type_and_conflict_are_validated(self):
         aliases = (("cache_read_input_tokens", "cached_input_tokens"),
                    ("cache_creation_input_tokens", "cache_write_input_tokens"),

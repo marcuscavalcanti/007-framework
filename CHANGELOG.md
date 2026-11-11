@@ -115,6 +115,9 @@ Candidate prepared for independent review. Release qualification is recorded in
   errors freeze the accepted prefix independently of read chunking, including aggregate limits and EOF.
   Oversized content retains its parsed identity envelope through bounded in-memory string compaction,
   with UTF-8 and escape validation throughout the discarded text.
+- Compacted Codex identity messages invalidate native observation when their model evidence becomes unavailable.
+  The replay runner requires confirmed output-stream closure, retains accepted prefix diagnostics, and concurrently
+  counts stderr in memory. Its receipt adds `streams_closed` beside the existing stderr byte count.
 - Activity, route and lab-report totals expose unavailable aggregates when they cannot be represented.
   Reservation comparisons handle large integer operands. Execution and acceptance timeout limits are
   checked before launch within the portable subprocess wait range.
