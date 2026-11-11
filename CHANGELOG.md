@@ -6,6 +6,13 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Changed
+
+- Amendment 2 to the Codex 5-point pilot pre-registration (`evidence/codex-5pp-20261108/AMENDMENT-2.md`), published before
+  the corrected gate re-run and any pilot attempt. It pins the pilot to the v1.7.0 code, keeps the evaluator embedded in the mined
+  tasks, re-runs the corrected planted-defect gate, fixes a blind rule for tasks whose reference fails, uses the floor as written
+  and adds a dry run with no model. The original pre-registration, Amendment 1 and their scripts are unchanged.
+
 ## [1.7.0] - 2026-11-09
 
 Candidate prepared for independent review. Release qualification is recorded in
