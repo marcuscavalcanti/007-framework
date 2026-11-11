@@ -61,10 +61,9 @@ reuse the existing query path, and stop after integrated proof.
 
 ## Install
 
-The installable CLI is part of the 1.7.0 source tree. Select a published tag from GitHub Releases
-for a stable installation. The example below targets v1.7.0 when its release entry is available.
-Main is the development source. [GitHub
-Releases](https://github.com/marcuscavalcanti/007-framework/releases)
+Install the stable CLI from a published tag. The example uses v1.7.0. The release page includes
+the source archive, SHA-256 checksums and build provenance details.
+[007 Framework 1.7.0](https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.7.0)
 
 ```bash
 release_tag=v1.7.0
@@ -74,7 +73,7 @@ pipx install .
 pipx ensurepath
 ```
 
-Open a new shell after the PATH update, then run `007 --help`. From an existing checkout, `pipx
+Open a new shell after the PATH update, then run `007 --version` and `007 --help`. From an existing checkout, `pipx
 install .` installs that source version. Building the wheel uses setuptools. The installed runtime
 uses the Python standard library and includes its scripts, dashboard assets and default public
 evidence. Version metadata comes from `SKILL.md`.
@@ -190,9 +189,11 @@ before resuming changed plain logs. Parent/child ownership preserves project sco
 routes use contributing activity. Overlapping routes and unresolved historical observations retain
 uncertainty. Attribution remains observational.
 
-The dashboard separates terminal accounting, diagnostic price estimates and spend caused by
-configured 007 laboratory experiments. Missing amounts and receipts are unpriced. Incomplete totals
-expose lower bounds. Task coverage uses observed starts with matching receipts as its denominator.
+The dashboard separates terminal accounting, diagnostic price estimates and laboratory spend.
+Open **Full evidence and operations → Spend and cost → What each 007 experiment cost** to see
+the attempts and estimated spend for each experiment configured in `observatory.lab_ledger`.
+Missing amounts and receipts are unpriced. Incomplete totals expose lower bounds. Task coverage
+uses observed starts with matching receipts as its denominator.
 Work outside that lifecycle remains outside complete receipt coverage.
 
 Operational panels expose accepted outcomes, repairs, costs, authority events and data quality. The
