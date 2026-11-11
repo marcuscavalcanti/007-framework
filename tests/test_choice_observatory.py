@@ -40,6 +40,9 @@ class ChoiceObservatoryTests(unittest.TestCase):
         return {"session_id": sid, "source": "codex", "cwd": str(self.repo), "model": "m", "effort": "low",
                 "started_at": start, "updated_at": end, **extra}
 
+    def owner(self, sid):
+        return "codex", None, sid
+
     def test_commits_attach_to_the_one_session_whose_window_holds_them_never_to_a_guess(self):
         base = commit(self.repo, T0, "base.txt", "base\n", "base")
         inside_a = commit(self.repo, T0 + 1000, "a.txt", "a\n", "a")
@@ -47,8 +50,8 @@ class ChoiceObservatoryTests(unittest.TestCase):
         outside = commit(self.repo, T0 + 50000, "c.txt", "c\n", "c")
         sessions = [self.session("A", T0 + 500, T0 + 6000), self.session("B", T0 + 4500, T0 + 9000)]
         result = self.obs.attribute(self.repo, sessions, slack_s=0)
-        self.assertEqual(result["sessions"]["A"], [inside_a])
-        self.assertEqual(result["sessions"]["B"], [])
+        self.assertEqual(result["sessions"][self.owner("A")], [inside_a])
+        self.assertEqual(result["sessions"][self.owner("B")], [])
         self.assertEqual(result["unattributed"], {overlap: "ambiguous", outside: "no-session", base: "no-session"})
 
     def test_durability_counts_lines_still_alive_at_the_window_and_waits_until_it_is_mature(self):
@@ -102,9 +105,30 @@ class ChoiceObservatoryTests(unittest.TestCase):
     def test_ambiguous_commits_are_listed_on_every_session_that_claims_them_and_owned_by_none(self):
         overlap = commit(self.repo, T0 + 5000, "ab.txt", "ab\n", "ab")
         sessions = [self.session("A", T0 + 500, T0 + 6000), self.session("B", T0 + 4500, T0 + 9000)]
-        self.assertEqual(self.obs.attribute(self.repo, sessions, slack_s=0)["ambiguous"], {"A": [overlap], "B": [overlap]})
+        self.assertEqual(self.obs.attribute(self.repo, sessions, slack_s=0)["ambiguous"], {self.owner("A"): [overlap], self.owner("B"): [overlap]})
         rows = {r["session_id"]: r for r in self.obs.observe(self.repo, sessions, now=T0 + 40 * DAY, slack_s=0)}
         self.assertEqual((rows["A"]["commits"], rows["A"]["ambiguous_commits"]), ([], [overlap]))
+
+    def test_rows_of_one_session_never_compete_for_a_commit(self):
+        # a Codex subagent or auto-review thread carries its root session id, as a Claude subagent log does
+        sha = commit(self.repo, T0 + 5000, "c.txt", "c\n", "c")
+        rows = [self.session("root", T0, T0 + 9000, active_intervals=[[T0, T0 + 600]]),
+                self.session("root", T0, T0 + 9000, subagent=True, active_intervals=[[T0 + 4900, T0 + 5100]]),
+                self.session("root", T0, T0 + 9000, subagent=True, active_intervals=[[T0 + 4950, T0 + 5050]])]
+        result = self.obs.attribute(self.repo, rows, slack_s=0)
+        self.assertEqual((result["sessions"][self.owner("root")], result["unattributed"]), ([sha], {}))
+
+    def test_each_attributed_commit_carries_the_model_and_effort_in_force_when_it_was_made(self):
+        first = commit(self.repo, T0 + 100, "a.txt", "a\n", "a")
+        second = commit(self.repo, T0 + 5000, "b.txt", "b\n", "b")
+        third = commit(self.repo, T0 + 55_000, "c.txt", "c\n", "c")
+        mixed = self.session("A", T0, T0 + 9000, model="mixed", effort="mixed",
+                             effort_segments=[[T0 + 50, "m", "high"], [T0 + 4000, "m2", "xhigh"]])
+        rows = {r["session_id"]: r for r in self.obs.observe(self.repo, [mixed, self.session("B", T0 + 50_000, T0 + 60_000)],
+                                                             now=T0 + DAY, slack_s=60)}
+        self.assertEqual(rows["A"]["commit_efforts"], {first: {"model": "m", "effort": "high"},
+                                                       second: {"model": "m2", "effort": "xhigh"}})
+        self.assertEqual(rows["B"]["commit_efforts"], {third: {"model": "m", "effort": "low"}})
 
     def test_each_session_states_its_evidence_level(self):
         sha = commit(self.repo, T0 + 100, "g.txt", "g\n", "work")
@@ -125,14 +149,14 @@ class ChoiceObservatoryTests(unittest.TestCase):
         short_b = self.session("B", T0 + 5000, T0 + 6000, active_intervals=[[T0 + 5000, T0 + 6000]])
         no_intervals = self.session("C", T0 + 94_000, T0 + 96_000)
         result = self.obs.attribute(self.repo, [long_a, short_b, no_intervals], slack_s=60)
-        self.assertEqual((result["sessions"]["A"], result["sessions"]["B"], result["sessions"]["C"]), ([early], [during_b], []))
+        self.assertEqual(tuple(result["sessions"][self.owner(sid)] for sid in ("A", "B", "C")), ([early], [during_b], []))
         self.assertEqual(result["unattributed"], {in_a_pause: "no-session", both: "ambiguous"})
-        self.assertEqual(result["ambiguous"], {"A": [both], "B": [], "C": [both]})
+        self.assertEqual(result["ambiguous"], {self.owner("A"): [both], self.owner("B"): [], self.owner("C"): [both]})
         old_rule = self.obs.attribute(self.repo, [{**s, "active_intervals": None} for s in (long_a, short_b)], slack_s=60)
         self.assertEqual(old_rule["unattributed"][during_b], "ambiguous")
         # slack applies around each interval
         self.assertEqual(self.obs.attribute(self.repo, [{**short_b, "active_intervals": [[T0 + 5600, T0 + 6000]]}], slack_s=100)
-                         ["sessions"]["B"], [during_b])
+                         ["sessions"][self.owner("B")], [during_b])
 
     def git_at(self, when, *args, cwd=None):
         env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
@@ -155,7 +179,7 @@ class ChoiceObservatoryTests(unittest.TestCase):
         (self.repo / "m.txt").write_text("dirty\n")
         self.git_at(T0 + 60, "stash", "-q")
         sessions = [self.session("A", T0, T0 + 100)]
-        self.assertEqual(sorted(self.obs.attribute(self.repo, sessions, slack_s=0)["sessions"]["A"]), sorted([main, side, detached]))
+        self.assertEqual(sorted(self.obs.attribute(self.repo, sessions, slack_s=0)["sessions"][self.owner("A")]), sorted([main, side, detached]))
 
     def test_a_commit_off_head_is_not_integrated_neither_surviving_nor_reworked(self):
         on_head = commit(self.repo, T0 + 100, "f.txt", "".join(f"l{i}\n" for i in range(4)), "merged work")

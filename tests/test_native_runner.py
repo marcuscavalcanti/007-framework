@@ -50,6 +50,68 @@ CLI = {"codex": ["exec", "--json", "--ephemeral", "--ignore-user-config", "-m", 
 
 
 class NativeRunnerTests(unittest.TestCase):
+    def test_runner_rejects_a_complete_prefix_with_an_unclosed_output_pipe(self):
+        import signal
+        for held_fd in (1, 2):
+            path = self.bin / "codex"
+            pid_path = self.root / f"descendant-{held_fd}.txt"
+            wire = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                    b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n')
+            program = (f"#!{sys.executable}\nimport os,time,pathlib\n"
+                       "pid=os.fork()\n"
+                       "if pid==0:\n"
+                       f" os.close({2 if held_fd == 1 else 1})\n"
+                       " time.sleep(20)\n os._exit(0)\n"
+                       f"pathlib.Path({str(pid_path)!r}).write_text(str(pid))\n"
+                       f"os.write(1,{wire!r})\n")
+            path.write_text(program)
+            receipt = self.root / f"open-{held_fd}.json"
+            try:
+                result = self.runner("codex", receipt)
+                self.assertEqual(result.returncode, 0)
+                value = json.loads(receipt.read_text())
+                self.assertFalse(value["valid"])
+                self.assertEqual(value["problem"], "stream-closure-unconfirmed")
+                self.assertEqual(value["usage"]["total_tokens"], 1)
+            finally:
+                if pid_path.exists():
+                    os.kill(int(pid_path.read_text()), signal.SIGKILL)
+
+    def test_runner_counts_and_discards_stderr_without_a_temporary_spool(self):
+        from unittest.mock import patch
+        native = importlib.import_module("native_runner")
+        import tempfile as temporary_module
+        receipt = self.root / "no-spool.json"
+        argv = ["--cli", "codex", "--receipt", str(receipt), "--provider", "openai",
+                "--model", "m", "--effort", "medium", "--", str(self.bin / "codex"), *CLI["codex"]]
+        (self.bin / "codex").write_text(f"#!{sys.executable}\n" + FAKE.replace("prompt = sys.stdin.read()", "prompt = ''"))
+        previous = Path.cwd()
+        try:
+            os.chdir(self.root)
+            with patch.object(temporary_module, "TemporaryFile", side_effect=AssertionError("raw stderr spooling")):
+                self.assertEqual(native.main(argv), 0)
+        finally:
+            os.chdir(previous)
+        value = json.loads(receipt.read_text())
+        self.assertTrue(value["valid"])
+        self.assertEqual(value["stderr_bytes"], len(b"PRIVATE-SENTINEL on stderr\n"))
+        self.assertNotIn("PRIVATE-SENTINEL", receipt.read_text())
+
+    def test_stderr_backpressure_is_drained_without_losing_stdout_or_counts(self):
+        size = 2 * 1024 * 1024
+        program = FAKE.replace('sys.stderr.write("PRIVATE-SENTINEL on stderr\\n")',
+                               f'import signal; signal.alarm(10); os.write(2, b"x" * {size})')
+        self.assertNotEqual(program, FAKE)
+        (self.bin / "codex").write_text(f"#!{sys.executable}\n" + program)
+        receipt = self.root / "stderr-pressure.json"
+        result = self.runner("codex", receipt)
+        self.assertEqual(result.returncode, 0)
+        value = json.loads(receipt.read_text())
+        self.assertTrue(value["valid"])
+        self.assertEqual(value["stderr_bytes"], size)
+        self.assertEqual(value["usage"]["total_tokens"], 12)
+        self.assertNotIn("xxx", receipt.read_text())
+
     def setUp(self):
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
@@ -155,7 +217,8 @@ class NativeRunnerTests(unittest.TestCase):
         work = self.root / "bad-tables"
         work.mkdir()
         bad = [self.price_table({"m": {"input": -1, "cached_input": 0, "output": 1}}), self.price_table({"m": {"input": 1}}),
-               self.price_table(schema="other"), self.price_table(currency="BRL"), self.price_table({"m": {"input": True, "cached_input": 0, "output": 1}})]
+               self.price_table(schema="other"), self.price_table(currency="BRL"), self.price_table({"m": {"input": True, "cached_input": 0, "output": 1}}),
+               self.price_table({"m": {"input": 10 ** 400, "cached_input": 0, "output": 1}})]
         for index, table in enumerate(bad):
             with self.subTest(table=index):
                 receipt = self.root / f"bad-{index}.json"
@@ -273,6 +336,16 @@ class NativeRunnerTests(unittest.TestCase):
             with self.subTest(accepted=index):
                 receipt = self.root / f"r2-ok-{index}.json"
                 self.assertEqual(self.runner(cli, receipt, *argv, cwd=work).returncode, 0)
+
+    def test_rate_card_avoids_intermediate_overflow_and_withholds_unrepresentable_cost(self):
+        native = importlib.import_module("native_runner")
+        usage = {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 0}
+        table = {"models": {"m": {"input": 1e308, "cached_input": 0, "output": 0}}, "per_tokens": 1_000_000}
+        self.assertEqual(native.rate_card_cost(table, "m", usage), 1e304)
+        table["per_tokens"] = 1
+        self.assertIsNone(native.rate_card_cost(table, "m", usage))
+        table["models"]["m"]["input"] = 0
+        self.assertEqual(native.rate_card_cost(table, "m", usage), 0)
 
     def test_native_error_events_keep_a_rate_limit_apart_from_a_transient_stream_error(self):
         # Review r40 D2: the pilot's rate-limit stop needs an observable class; only fixed codes reach the receipt.

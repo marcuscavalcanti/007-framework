@@ -22,6 +22,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageContractTests(unittest.TestCase):
+    def test_readme_states_native_capture_and_compressed_log_requirements(self):
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("decodes native log rows", readme)
+        self.assertIn("Python 3.14+", readme)
+        self.assertIn("`zstd`", readme)
+        self.assertNotIn("reads only sanitized session metadata", readme)
+        self.assertNotIn("shows sessions, active state, served route", readme)
+
     def test_release_manifest_keeps_spaces_and_preserves_old_output_on_read_failure(self):
         recipe = (ROOT / "RELEASING.md").read_text().split("python3 - <<'PY'\n", 1)[1].split("\n   PY", 1)[0]
         with tempfile.TemporaryDirectory() as temporary:
@@ -118,10 +126,10 @@ class PackageContractTests(unittest.TestCase):
     def test_skill_identity_and_version(self):
         skill = (ROOT / "SKILL.md").read_text()
         self.assertRegex(skill, r"(?m)^name: 007-framework$")
-        self.assertRegex(skill, r"(?m)^  version: 1\.6\.2$")
-        self.assertIn('VERSION = "1.6.2"', (ROOT / "scripts/dashboard.py").read_text())
+        self.assertRegex(skill, r"(?m)^  version: 1\.7\.0$")
+        self.assertIn('VERSION = "1.7.0"', (ROOT / "scripts/dashboard.py").read_text())
         shown = subprocess.run([sys.executable, str(ROOT / "bin/007"), "--version"], capture_output=True, text=True, check=True).stdout
-        self.assertEqual(shown.strip(), "007 1.6.2")
+        self.assertEqual(shown.strip(), "007 1.7.0")
 
     def test_agent_rule_copies_match(self):
         self.assertEqual((ROOT / ".github/copilot-instructions.md").read_bytes(), (ROOT / "AGENTS.md").read_bytes())
@@ -133,6 +141,8 @@ class PackageContractTests(unittest.TestCase):
         missing = []
         for source in markdown:
             for target in re.findall(r"\[[^]]+\]\(([^)]+\.md(?:#[^)]+)?)\)", source.read_text()):
+                if target.startswith(("https://", "http://")):
+                    continue
                 path = target.split("#", 1)[0]
                 if not (source.parent / path).resolve().exists():
                     missing.append(f"{source.relative_to(ROOT)} -> {target}")

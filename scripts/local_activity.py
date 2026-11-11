@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read sanitized local coding-agent usage for the 007 dashboard."""
 
+import hashlib
 import json
 import math
 import os
@@ -8,9 +9,12 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
+import harness_report
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +24,7 @@ USAGE_KEYS = (
     "cache_write_5m_input_tokens", "cache_write_1h_input_tokens",
     "output_tokens", "reasoning_output_tokens", "total_tokens",
 )
+CODEX_PRIMARY_KEYS = ("input_tokens", "output_tokens", "total_tokens")
 GAP_S = 1800  # observatory.activity_gap_minutes default
 MAX_INTERVALS = 500
 
@@ -33,30 +38,71 @@ def iso_datetime(value):
         return None
 
 
+def valid_number(value):
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
 def safe_number(value):
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else 0
+    return value if valid_number(value) else 0
 
 
 def empty_usage():
     return {key: 0 for key in USAGE_KEYS}
 
 
+def checked_usage(usage):
+    """Keep unrepresentable normalized counters unavailable, including after aggregation."""
+    for key in USAGE_KEYS:
+        if (key == "reasoning_output_tokens" and usage.get(key) is None
+                and usage.get("reasoning_output_tokens_available") is False):
+            continue
+        if key in usage and not valid_number(usage[key]):
+            usage[key] = None
+            usage["usage_complete"] = False
+    if "reasoning_output_tokens_available" in usage:
+        usage["reasoning_output_tokens_available"] = usage.get("reasoning_output_tokens") is not None
+    return usage
+
+
+def known_token_total(values):
+    """Preserve known integer subtotals, with an unavailable result for an unusable aggregate."""
+    values = list(values)
+    known = [int(value) for value in values if valid_number(value)]
+    if values and not known:
+        return None
+    total = sum(known)
+    return total if valid_number(total) else None
+
+
 def pricing_request(session):
     usage = session.get("usage", {})
-    if usage.get("usage_complete") is False:
+    unavailable_reasoning = (session.get("source") == "codex" and usage.get("reasoning_output_tokens") is None
+                             and usage.get("reasoning_output_tokens_available") is False
+                             and usage.get("output_includes_reasoning", True))
+    if (usage.get("usage_complete") is False or usage.get("cache_write_tiers_complete") is False
+            or usage.get("price_allocation_complete") is False
+            or any(key in usage and not valid_number(usage[key]) for key in USAGE_KEYS
+                   if key != "reasoning_output_tokens" or not unavailable_reasoning)):
         return None
     cached = int(safe_number(usage.get("cached_input_tokens")))
     cache_write = int(safe_number(usage.get("cache_write_input_tokens")))
     prompt = int(safe_number(usage.get("input_tokens")))
     if usage.get("input_includes_cache"):
-        prompt = max(0, prompt - cached - cache_write)
+        prompt -= cached + cache_write
+        if prompt < 0:
+            return None
+    completion = known_token_total((usage.get("output_tokens", 0),
+                                   0 if usage.get("output_includes_reasoning", True)
+                                   else usage.get("reasoning_output_tokens", 0)))
+    if completion is None:
+        return None
     return {
         "model": session.get("model"),
         "prompt_tokens": prompt,
-        "completion_tokens": int(safe_number(usage.get("output_tokens"))) + (
-            0 if usage.get("output_includes_reasoning", True)
-            else int(safe_number(usage.get("reasoning_output_tokens")))
-        ),
+        "completion_tokens": completion,
         "cache_read_input_tokens": cached,
         "cache_creation_input_tokens": cache_write,
         "cache_creation_1h_input_tokens": int(safe_number(usage.get("cache_write_1h_input_tokens"))),
@@ -127,23 +173,87 @@ class HeadroomPricer:
         ]
 
 
-def json_rows(path, max_bytes=None, from_tail=False):
+try:
+    from compression import zstd as ZSTD  # Python 3.14+
+except ImportError:
+    ZSTD = None
+
+
+class UnreadableLog(OSError):
+    """A *.jsonl.zst log on a machine with neither compression.zstd (Python 3.14+) nor the zstd binary."""
+
+
+def log_lines(path, offset=0):
+    """Raw lines of a log from byte `offset`; a *.jsonl.zst log (Codex archives) is decompressed and always read from its start."""
     path = Path(path)
-    with path.open("rb") as handle:
-        if max_bytes and from_tail and path.stat().st_size > max_bytes:
-            handle.seek(-max_bytes, os.SEEK_END)
-            handle.readline()
-        read = 0
-        for raw in handle:
-            read += len(raw)
-            if max_bytes and not from_tail and read > max_bytes:
+    if path.suffix != ".zst":
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            yield from handle
+        return
+    if ZSTD is not None:
+        try:
+            with ZSTD.open(path, "rb") as handle:
+                yield from handle
+        except (ZSTD.ZstdError, EOFError) as exc:
+            raise OSError(f"{path.name}: {exc}") from None
+        return
+    binary = shutil.which("zstd")
+    if not binary:
+        raise UnreadableLog(f"{path.name}: no zstd decoder")
+    process = subprocess.Popen([binary, "-dcq", "--", str(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        yield from process.stdout
+    finally:
+        process.stdout.close()
+        code = process.wait()
+    if code:
+        raise OSError(f"{path.name}: zstd exited with {code}")
+
+
+def json_rows(path, max_bytes=None):
+    read = 0
+    for raw in log_lines(path):
+        read += len(raw)
+        if max_bytes and read > max_bytes:
+            break
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            yield value
+
+
+def read_log(path, parser, offset=0, digest=None):
+    """Feeds `parser` every row of `path` after byte `offset` and returns the offset after the last whole row: a torn last row (still
+    being written) waits for the next read. Consumed JSON is decoded once per generation, with memory bounded by metadata."""
+    for raw in log_lines(path, offset):
+        try:
+            row = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if not raw.endswith(b"\n"):
                 break
-            try:
-                value = json.loads(raw)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if isinstance(value, dict):
-                yield value
+            row = None
+        offset += len(raw)
+        if digest is not None:
+            digest.update(raw)
+        if isinstance(row, dict):
+            parser.feed(row)
+    return offset
+
+
+def unchanged_prefix(path, length, digest):
+    """Verify all consumed bytes before reusing a changed plain log's incremental parser."""
+    observed = hashlib.sha256()
+    with path.open("rb") as handle:
+        while length:
+            chunk = handle.read(min(length, 1024 * 1024))
+            if not chunk:
+                return False
+            observed.update(chunk)
+            length -= len(chunk)
+    return observed.digest() == digest.digest()
 
 
 def active_intervals(stamps, gap_s=GAP_S, cap=MAX_INTERVALS):
@@ -157,15 +267,6 @@ def active_intervals(stamps, gap_s=GAP_S, cap=MAX_INTERVALS):
     return [[points[a], points[b - 1]] for a, b in zip(bounds, bounds[1:])] if points else []
 
 
-def clipped_intervals(stamps, gap_s, started):
-    """Intervals of a log read only from its tail: the unread head (start .. first tail stamp) counts as active, so a clipped log
-    can add ambiguity, never a single owner by guess."""
-    intervals = active_intervals(stamps, gap_s)
-    if intervals and started:
-        intervals[0][0] = min(intervals[0][0], int(started.timestamp()))
-    return intervals
-
-
 def first_matching(path, predicate, max_bytes=262_144):
     for row in json_rows(path, max_bytes=max_bytes):
         if predicate(row):
@@ -173,178 +274,525 @@ def first_matching(path, predicate, max_bytes=262_144):
     return None
 
 
-def parse_codex_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
-    now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=lookback_hours)
-    meta = first_matching(path, lambda row: row.get("type") == "session_meta")
-    if not meta:
+def add_segment(segments, stamp, model, effort):
+    """Appends [start epoch, model, effort] when the route changes; a value a turn leaves out keeps the previous one."""
+    last = segments[-1] if segments else [None, None, None]
+    model = model if isinstance(model, str) and model else last[1]
+    effort = effort if isinstance(effort, str) and effort else last[2]
+    if (model, effort) != (last[1], last[2]):
+        segments.append([int(stamp.timestamp()) if stamp else None, model, effort])
+
+
+def labels(segments):
+    """The session's model and effort: its one value, "mixed" when its segments differ, "unmeasured" without any."""
+    def label(values):
+        found = {value for value in values if value}
+        return found.pop() if len(found) == 1 else "mixed" if found else "unmeasured"
+    return label(s[1] for s in segments), label(s[2] for s in segments)
+
+
+def counts(raw, keys):
+    """The token counters `keys` of one usage record (an absent one is 0), or None when one is present but not a non-negative
+    finite number: an invalid counter is unknown, never zero."""
+    if any(key in raw and not valid_number(raw[key]) for key in keys):
         return None
-    payload = meta.get("payload", {})
-    session_id, cwd = payload.get("id"), payload.get("cwd")
-    if not isinstance(session_id, str) or not isinstance(cwd, str):
+    return tuple(int(raw.get(key, 0)) for key in keys)
+
+
+def codex_counts(raw):
+    if (not isinstance(raw, dict) or not any(key in raw for key in CODEX_PRIMARY_KEYS)
+            or any(key in raw and not valid_number(raw[key]) for key in CODEX_PRIMARY_KEYS)):
         return None
-    model = effort = None
-    usage = empty_usage()
-    usage_limit = 4 * 1024 * 1024
-    usage["usage_complete"] = Path(path).stat().st_size <= usage_limit
-    usage["input_includes_cache"] = True
-    updated = iso_datetime(meta.get("timestamp") or payload.get("timestamp"))
-    last_task_event = None
-    snapshots = []
-    increments = []
-    increment_missing = False
-    previous_total = None
-    stamps = []
-    for row in json_rows(path, max_bytes=usage_limit, from_tail=True):
+    # An optional scalar cannot erase independently readable primary counters.
+    return tuple(int(raw.get(key, 0)) if valid_number(raw.get(key, 0)) else None for key in USAGE_KEYS)
+
+
+def codex_primary_complete(raw):
+    return (isinstance(raw, dict) and all(valid_number(raw.get(key)) for key in CODEX_PRIMARY_KEYS)
+            and raw["total_tokens"] == raw["input_tokens"] + raw["output_tokens"])
+
+
+def codex_usage_complete(raw):
+    return (codex_primary_complete(raw) and counts(raw, USAGE_KEYS) is not None
+            and ("reasoning_output_tokens" not in raw or raw["reasoning_output_tokens"] <= raw["output_tokens"]))
+
+
+def coherent_window(stamps, cutoff):
+    previous = None
+    for stamp in stamps:
+        if stamp is None or previous is not None and stamp < previous and previous >= cutoff:
+            return False
+        previous = stamp
+    return True
+
+
+def codex_allocation_valid(values):
+    if values is None or not all(valid_number(value) for value in values[:5]):
+        return False
+    prompt, cached, written, five_minute, one_hour = values[:5]
+    return (min(prompt, cached, written, five_minute, one_hour) >= 0
+            and cached + written <= prompt and five_minute + one_hour <= written)
+
+
+def codex_subset_allocation_valid(total, last):
+    """Fit observed subset marginals into the parent's disjoint input categories."""
+    if not isinstance(last, dict) or not codex_allocation_valid(total):
+        return False
+    bounds = []
+    for key, capacity in zip(USAGE_KEYS[:5], total[:5]):
+        if key in last:
+            value = last[key]
+            if not valid_number(value) or int(value) > capacity:
+                return False
+            bounds.append((int(value), int(value)))
+        else:
+            bounds.append((0, capacity))
+    prompt, cached, written, five_minute, one_hour = bounds
+    unspecified_write = total[2] - total[3] - total[4]
+    written_low = max(written[0], five_minute[0] + one_hour[0])
+    written_high = min(written[1], five_minute[1] + one_hour[1] + unspecified_write)
+    if written_low > written_high:
+        return False
+    ordinary = total[0] - total[1] - total[2]
+    return max(prompt[0], cached[0] + written_low) <= min(prompt[1], cached[1] + written_high + ordinary)
+
+
+def iso(stamp):
+    return stamp.isoformat().replace("+00:00", "Z") if stamp else None
+
+
+def reconcile_reasoning_ranges(baseline, cumulative, window):
+    """Project cumulative = baseline + window onto its three feasible integer ranges."""
+    baseline_low, baseline_high = baseline
+    cumulative_low, cumulative_high = cumulative
+    window_low, window_high = window
+    ranges = (
+        (max(baseline_low, cumulative_low - window_high), min(baseline_high, cumulative_high - window_low)),
+        (max(cumulative_low, baseline_low + window_low), min(cumulative_high, baseline_high + window_high)),
+        (max(window_low, cumulative_low - baseline_high), min(window_high, cumulative_high - baseline_low)),
+    )
+    return ranges if all(lower <= upper for lower, upper in ranges) else None
+
+
+def codex_reasoning_subset(total, last, reasoning):
+    """Bounds on cumulative reasoning imposed by one last-usage subset."""
+    upper = total[USAGE_KEYS.index("output_tokens")]
+    if last is not None:
+        upper -= last[USAGE_KEYS.index("output_tokens")] - reasoning
+    return reasoning, min(total[USAGE_KEYS.index("output_tokens")], upper)
+
+
+class CodexToken(NamedTuple):
+    stamp: datetime | None
+    total: tuple | None
+    last: tuple | None
+    total_ok: bool
+    last_ok: bool
+    reasoning: tuple
+    duplicate: bool
+    primary_ok: bool
+    allocation_present: tuple
+
+
+class CodexLog:
+    """Metadata of one Codex rollout, fed row by row (never retained content). A thread another thread spawned
+    (subagent, guardian review) reports its root session's id, as a Claude subagent log does, with its own id as log_id."""
+
+    def __init__(self, path=None):
+        self.meta, self.updated, self.last_task, self.previous = None, None, None, None
+        self.stamps, self.segments, self.tokens = set(), [], []
+        self.token_stamps = []
+        self.price_anomalies = set()
+
+    def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
         if stamp:
-            stamps.append(stamp.timestamp())
-        if stamp and (updated is None or stamp > updated):
-            updated = stamp
-        if row.get("type") == "turn_context":
-            context = row.get("payload", {})
-            model = context.get("model") or model
-            effort = context.get("effort") or effort
-        event = row.get("payload", {}) if row.get("type") == "event_msg" else {}
-        if event.get("type") in ("task_started", "task_complete"):
-            last_task_event = event.get("type")
-        if event.get("type") == "token_count":
-            info = event.get("info")
+            self.stamps.add(int(stamp.timestamp()))
+            self.updated = max(self.updated or stamp, stamp)
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        kind = row.get("type")
+        if kind == "session_meta" and self.meta is None:
+            self.meta = codex_identity(row, payload) or {}
+        elif kind == "turn_context":
+            add_segment(self.segments, stamp, payload.get("model"), payload.get("effort"))
+        elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete"):
+            self.last_task = payload["type"]
+        elif kind == "event_msg" and payload.get("type") == "token_count":
+            self.token_stamps.append(stamp)  # Duplicate counters still carry temporal evidence.
+            info = payload.get("info")
             if not isinstance(info, dict):
-                increment_missing |= bool(stamp and stamp >= cutoff)
-                continue
-            total = info.get("total_token_usage", {})
-            if total and total == previous_total:
-                continue
-            previous_total = total
-            snapshots.append((stamp, {
-                "input_tokens": int(safe_number(total.get("input_tokens"))),
-                "cached_input_tokens": int(safe_number(total.get("cached_input_tokens"))),
-                "cache_write_input_tokens": int(safe_number(total.get("cache_write_input_tokens"))),
-                "output_tokens": int(safe_number(total.get("output_tokens"))),
-                "reasoning_output_tokens": int(safe_number(total.get("reasoning_output_tokens"))),
-                "total_tokens": int(safe_number(total.get("total_tokens"))),
-            }))
-            if stamp and stamp >= cutoff:
-                last = info.get("last_token_usage")
-                if isinstance(last, dict):
-                    increments.append({key: int(safe_number(last.get(key))) for key in USAGE_KEYS})
+                self.tokens.append(CodexToken(stamp, None, None, False, False, (None, None), False, False,
+                                              (False,) * 4))
+                return
+            total = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else None
+            last = info.get("last_token_usage")
+            primary_ok = codex_primary_complete(total)
+            duplicate = (primary_ok and codex_primary_complete(self.previous)
+                         and all(total[key] == self.previous[key] for key in CODEX_PRIMARY_KEYS))
+            if duplicate:
+                # An omitted allocation on unchanged consumption preserves its earlier evidence.
+                total = {**{key: value for key, value in self.previous.items()
+                            if key in USAGE_KEYS[1:5] and valid_number(value)}, **total}
+            absent = last is None or (isinstance(last, dict) and not any(
+                key in last for key in ("input_tokens", "output_tokens", "total_tokens")))
+            if isinstance(last, dict):
+                partial, cumulative = counts(last, USAGE_KEYS), codex_counts(total)
+                valid_partial = partial is not None
+                if valid_partial:
+                    within_total = cumulative is None or all(cumulative[i] is not None and partial[i] <= cumulative[i]
+                                                            for i in range(1, 5))
+                    coherent_tiers = ("cache_write_input_tokens" not in last
+                                      or sum(partial[3:5]) <= partial[2])
+                    valid_partial = (within_total and coherent_tiers
+                                     and (cumulative is None or codex_subset_allocation_valid(cumulative, last)))
+                    previous_token = self.tokens[-1] if self.tokens else None
+                    if (valid_partial and primary_ok and not duplicate and previous_token is not None
+                            and previous_token.primary_ok and stamp is not None and previous_token.stamp is not None
+                            and previous_token.stamp <= stamp):
+                        previous = previous_token.total
+                        continuous = all(cumulative[USAGE_KEYS.index(key)] >= previous[USAGE_KEYS.index(key)]
+                                         for key in CODEX_PRIMARY_KEYS)
+                        if continuous:
+                            valid_partial = all(previous[i] is not None and partial[i] == cumulative[i] - previous[i]
+                                                for i, key in enumerate(USAGE_KEYS[:5]) if key in last)
+                if not valid_partial:
+                    self.price_anomalies.add(stamp)
+            total_ok, last_ok = codex_usage_complete(total), absent or codex_usage_complete(last)
+            if total_ok and last_ok and isinstance(last, dict):
+                last_ok = all(valid_number(last[key]) and (key not in total or last[key] <= total[key]) for key in (
+                    "input_tokens", "output_tokens", "total_tokens", "reasoning_output_tokens")
+                    if key in last) and ("reasoning_output_tokens" not in last
+                                         or last["reasoning_output_tokens"] <= total["output_tokens"] and (
+                                             "output_tokens" not in last
+                                             or last["reasoning_output_tokens"] <= last["output_tokens"]))
+            # Optional-counter presence is lost in the normalized default-zero tuples.
+            reasoning = tuple(int(raw["reasoning_output_tokens"])
+                              if isinstance(raw, dict) and valid_number(raw.get("reasoning_output_tokens")) else None
+                              for raw in (total, last))
+            if primary_ok and last_ok and reasoning[0] is not None and reasoning[1] is not None:
+                lower, upper = codex_reasoning_subset(codex_counts(total), codex_counts(last), reasoning[1])
+                last_ok = lower <= reasoning[0] <= upper
+            self.previous = total
+            allocation_present = tuple(isinstance(last, dict) and key in last for key in USAGE_KEYS[1:5])
+            self.tokens.append(CodexToken(stamp, codex_counts(total), codex_counts(last),
+                                         total_ok, last_ok, reasoning, duplicate, primary_ok, allocation_present))
+
+    def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
+        if not self.meta:
+            return None
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=lookback_hours)
+        usage = {**empty_usage(), "usage_complete": True, "input_includes_cache": True,
+                 "price_allocation_complete": True}
+        started = iso_datetime(self.meta["started_at"])
+        primary = [USAGE_KEYS.index(key) for key in ("input_tokens", "output_tokens", "total_tokens")]
+        previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
+        increments = []
+        has_snapshot = any(token.primary_ok for token in self.tokens)
+        usage["usage_complete"] = has_snapshot
+        for stamp, total, last, total_ok, last_ok, _, duplicate, primary_ok, allocation_present in self.tokens:
+            effective_last = (0,) * len(USAGE_KEYS) if duplicate else last
+            if primary_ok and previous is not None and not duplicate:
+                delta = tuple(value - previous[i] if value is not None and previous[i] is not None else None
+                              for i, value in enumerate(total))
+                if all(valid_number(delta[i]) for i in primary):
+                    # Optional reasoning is reconstructed separately from its presence metadata.
+                    reconstructed = [max(0, value) if value is not None else None for value in delta]
+                    reconstructed[USAGE_KEYS.index("reasoning_output_tokens")] = 0
+                    if last is None:
+                        effective_last = reconstructed
+                    else:
+                        effective_last = list(last)
+                        for i, present in enumerate(allocation_present, 1):
+                            if not present:
+                                effective_last[i] = reconstructed[i]
+            if stamp is None and effective_last is None and not duplicate:
+                effective_last = total
+            if stamp is None or stamp >= cutoff:
+                usage["usage_complete"] &= stamp is not None and total_ok and last_ok and effective_last is not None
+                if effective_last is not None:
+                    increments.append(effective_last)
+            previous = total if primary_ok else None
+        usage.update({key: known_token_total(value[i] for value in increments) for i, key in enumerate(USAGE_KEYS)})
+        usage["usage_complete"] &= (all(valid_number(usage[key]) for key in CODEX_PRIMARY_KEYS)
+                                    and usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"])
+        usage["usage_complete"] &= coherent_window(self.token_stamps, cutoff)
+        previous = (0,) * len(USAGE_KEYS) if started and started >= cutoff else None
+        allocation = [USAGE_KEYS.index(key) for key in ("cached_input_tokens", "cache_write_input_tokens",
+                                                       "cache_write_5m_input_tokens", "cache_write_1h_input_tokens")]
+        output_index = USAGE_KEYS.index("output_tokens")
+        reasoning_bounds = (0, 0) if started and started >= cutoff else None
+        baseline_bounds, window_bounds = reasoning_bounds, (0, 0)
+        diagnostic_baseline = diagnostic_current = 0 if reasoning_bounds is not None else None
+        diagnostic_window, diagnostic_complete = 0, True
+        reasoning_seen, reasoning_valid = False, True
+        for stamp, total, last, total_ok, last_ok, reasoning, duplicate, primary_ok, allocation_present in self.tokens:
+            reasoning_total, reported_last_reasoning = reasoning
+            reasoning_last = 0 if duplicate else reported_last_reasoning
+            has_reasoning = any(value is not None for value in reasoning)
+            reasoning_total_valid = (reasoning_total is not None and total is not None
+                                     and primary_ok and reasoning_total <= total[output_index])
+            delta = ([value - previous[i] if value is not None and previous[i] is not None else None
+                      for i, value in enumerate(total)] if previous is not None and total is not None else None)
+            primary_continuous = primary_ok and delta is not None and all(valid_number(delta[i]) for i in primary)
+            last_matches = duplicate or last is None or delta is not None and all(last[i] == delta[i] for i in primary)
+            reasoning_step_valid = (last_ok and last_matches and primary_continuous
+                                    and (reasoning_last is None or reasoning_last <= delta[output_index]))
+            if stamp is None:
+                usage["usage_complete"] = False
+                usage["price_allocation_complete"] = False
+                reasoning_valid = False
+            elif stamp < cutoff:
+                if reasoning_total_valid:
+                    reasoning_bounds = (reasoning_total, reasoning_total)
+                    reasoning_seen = True
+                elif primary_ok:
+                    if reasoning_total is None and reasoning_bounds is not None and reasoning_step_valid:
+                        reasoning_bounds = (reasoning_bounds[0] + (reasoning_last or 0),
+                                            reasoning_bounds[1] + (delta[output_index] if reasoning_last is None else reasoning_last))
+                        reasoning_seen |= has_reasoning
+                    else:
+                        reasoning_bounds = (0, total[output_index])
+                        reasoning_seen = False
+                        if reasoning_total is None and reported_last_reasoning is not None and last_ok and (
+                                previous is None or reasoning_step_valid):
+                            # An unanchored last is still a subset of its cumulative snapshot.
+                            lower, upper = codex_reasoning_subset(total, last, reported_last_reasoning)
+                            if primary_continuous and not duplicate:
+                                upper = min(upper, previous[output_index] + reported_last_reasoning)
+                            reasoning_bounds = (lower, upper)
+                            reasoning_seen = True
                 else:
-                    increment_missing = True
-    started = iso_datetime(payload.get("timestamp") or meta.get("timestamp"))
-    if increments:
-        for key in USAGE_KEYS:
-            usage[key] = sum(value.get(key, 0) for value in increments)
-        usage["usage_complete"] &= not increment_missing
-    elif snapshots:
-        latest = snapshots[-1][1]
-        baseline = None
-        if started and started < cutoff:
-            before = [value for stamp, value in snapshots if stamp and stamp <= cutoff]
-            if before:
-                baseline = before[-1]
+                    reasoning_bounds = None
+                    reasoning_seen = False
+                if duplicate and primary_ok and last_ok and reported_last_reasoning is not None:
+                    lower, upper = codex_reasoning_subset(total, last, reported_last_reasoning)
+                    if reasoning_bounds is not None:
+                        overlap = max(lower, reasoning_bounds[0]), min(upper, reasoning_bounds[1])
+                        reasoning_bounds = overlap if overlap[0] <= overlap[1] else (lower, upper)
+                    reasoning_seen = True
+                baseline_bounds, window_bounds = reasoning_bounds, (0, 0)
+                diagnostic_baseline = diagnostic_current = reasoning_total if reasoning_total_valid else None
             else:
-                inside = [value for stamp, value in snapshots if stamp and stamp > cutoff]
-                if inside:
-                    baseline = inside[0]
+                reasoning_seen |= has_reasoning
+                known = reasoning_last
+                if known is None and primary_continuous and delta[output_index] == 0:
+                    known = 0
+                diagnostic_complete &= known is not None
+                diagnostic_window += known or 0
+                if reasoning_total is not None:
+                    diagnostic_current = reasoning_total
+                elif diagnostic_current is not None and known is not None:
+                    diagnostic_current += known
+                else:
+                    diagnostic_current = None
+                reasoning_valid &= reasoning_total is None or reasoning_total_valid
+                reasoning_valid &= reasoning_last is None or reasoning_step_valid
+                if reasoning_bounds is not None and window_bounds is not None and primary_continuous:
+                    increment = ((reasoning_last, reasoning_last) if reasoning_step_valid and reasoning_last is not None
+                                 else (0, delta[output_index]))
+                    reasoning_bounds = (reasoning_bounds[0] + increment[0], reasoning_bounds[1] + increment[1])
+                    window_bounds = (window_bounds[0] + increment[0], window_bounds[1] + increment[1])
+                    if reasoning_total is not None:
+                        if reasoning_total_valid and reasoning_bounds[0] <= reasoning_total <= reasoning_bounds[1]:
+                            reasoning_bounds = (reasoning_total, reasoning_total)
+                        else:
+                            reasoning_bounds = None
+                    if duplicate and last_ok and reported_last_reasoning is not None and reasoning_bounds is not None:
+                        lower, upper = codex_reasoning_subset(total, last, reported_last_reasoning)
+                        reasoning_bounds = (max(lower, reasoning_bounds[0]), min(upper, reasoning_bounds[1]))
+                    reconciled = (reconcile_reasoning_ranges(baseline_bounds, reasoning_bounds, window_bounds)
+                                  if baseline_bounds is not None and reasoning_bounds is not None else None)
+                    if reconciled is None:
+                        reasoning_bounds = window_bounds = None
+                        reasoning_valid = False
+                    else:
+                        baseline_bounds, reasoning_bounds, window_bounds = reconciled
+                else:
+                    reasoning_bounds = window_bounds = None
+                    reasoning_valid = False
+                if total is not None:
+                    usage["price_allocation_complete"] &= codex_allocation_valid(total)
+                # feed() validates the last subset using its physically reported allocation fields.
+                if previous is None or total is None:
                     usage["usage_complete"] = False
-        for key in USAGE_KEYS:
-            usage[key] = max(0, latest.get(key, 0) - (baseline or {}).get(key, 0))
-    else:
-        usage["usage_complete"] = False
-    # shortcut: clipped tails stay partial; qualify a window cursor before pricing them.
-    clipped = Path(path).stat().st_size > usage_limit
-    usage["usage_complete"] &= not clipped
-    return {
-        "session_id": session_id,
-        "source": "codex",
-        "runtime_provider": payload.get("model_provider") or "openai",
-        "cwd": cwd,
-        "started_at": payload.get("timestamp") or meta.get("timestamp"),
-        "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
-        "status": "active" if last_task_event == "task_started" else "idle",
-        "model": model or "unmeasured",
-        "effort": effort or "unmeasured",
-        "usage": usage,
-        "active_intervals": clipped_intervals(stamps, gap_s, started) if clipped else active_intervals(stamps, gap_s),
-    }
+                else:
+                    usage["price_allocation_complete"] &= codex_allocation_valid(previous)
+                    usage["usage_complete"] &= all(valid_number(delta[i]) for i in primary)
+                    usage["price_allocation_complete"] &= codex_allocation_valid(delta)
+                    if last is not None and not duplicate:
+                        usage["usage_complete"] &= all(last[i] == delta[i] for i in primary)
+                        usage["price_allocation_complete"] &= all(last[i] == delta[i]
+                                                                  for i, present in zip(allocation, allocation_present)
+                                                                  if present)
+            previous = total if stamp is not None and primary_ok else None
+        if reasoning_seen:
+            exact = window_bounds is not None and window_bounds[0] == window_bounds[1]
+            if reasoning_valid and exact:
+                usage["reasoning_output_tokens"] = window_bounds[0]
+            else:
+                usage["usage_complete"] = False
+                # Retain reported diagnostic values independently of feasibility.
+                if (diagnostic_baseline is not None and diagnostic_current is not None
+                        and diagnostic_current >= diagnostic_baseline):
+                    usage["reasoning_output_tokens"] = diagnostic_current - diagnostic_baseline
+                else:
+                    usage["reasoning_output_tokens"] = diagnostic_window if diagnostic_complete else None
+            usage["usage_complete"] &= reasoning_valid and exact
+        else:
+            usage["reasoning_output_tokens"] = 0 if has_snapshot and reasoning_valid and window_bounds == (0, 0) else None
+        usage["reasoning_output_tokens_available"] = usage["reasoning_output_tokens"] is not None
+        usage["price_allocation_complete"] &= usage["usage_complete"]
+        usage["price_allocation_complete"] &= codex_allocation_valid(tuple(usage[key] for key in USAGE_KEYS))
+        usage["price_allocation_complete"] &= not any(stamp is None or stamp >= cutoff for stamp in self.price_anomalies)
+        model, effort = labels(self.segments)
+        return {
+            **{key: self.meta[key] for key in ("session_id", "log_id", "cwd", "started_at", "subagent")},
+            "source": "codex",
+            "runtime_provider": self.meta["provider"] or "openai",
+            "updated_at": iso(self.updated or started),
+            "status": "active" if self.last_task == "task_started" else "idle",
+            "model": model,
+            "effort": effort,
+            "effort_segments": list(self.segments),
+            "usage": checked_usage(usage),
+            "active_intervals": active_intervals(self.stamps, gap_s),
+        }
 
 
-def parse_claude_session(path, now=None, max_usage_bytes=64 * 1024 * 1024, lookback_hours=24, gap_s=GAP_S):
-    now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=lookback_hours)
-    meta = first_matching(path, lambda row: row.get("type") in ("user", "assistant"), max_bytes=1024 * 1024)
-    if not meta:
+def codex_identity(row, payload):
+    """Session fields of a rollout's first session_meta. A child carries `parent_thread_id` (also under
+    source.subagent.thread_spawn) and Codex's `session_id` names its root; reviews are thread_source "guardian_review"."""
+    thread, cwd = payload.get("id"), payload.get("cwd")
+    if not isinstance(thread, str) or not isinstance(cwd, str):
         return None
-    session_id, cwd = meta.get("sessionId"), meta.get("cwd")
-    if not isinstance(session_id, str) or not isinstance(cwd, str):
-        return None
-    usage = empty_usage()
-    complete = Path(path).stat().st_size <= max_usage_bytes
-    usage["usage_complete"] = complete
-    usage["input_includes_cache"] = False
-    model = effort = None
-    cost_baseline = 0 if iso_datetime(meta.get("timestamp")) and iso_datetime(meta["timestamp"]) >= cutoff else None
-    latest_cost, cost_inside, cost_valid = None, False, complete
-    updated = iso_datetime(meta.get("timestamp"))
-    rows = json_rows(path) if complete else json_rows(path, max_bytes=4 * 1024 * 1024, from_tail=True)
-    stamps = []
-    for row in rows:
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    sub = source.get("subagent") if isinstance(source.get("subagent"), dict) else {}
+    spawn = sub.get("thread_spawn") if isinstance(sub.get("thread_spawn"), dict) else {}
+    parent = payload.get("parent_thread_id") or spawn.get("parent_thread_id")
+    child = bool(parent or sub or "subagent" in source or payload.get("thread_source") in ("subagent", "guardian_review"))
+    root = payload.get("session_id") if child and isinstance(payload.get("session_id"), str) else None
+    root = root if root and root != thread else parent if child and isinstance(parent, str) else thread
+    return {"session_id": root, "log_id": thread, "cwd": cwd, "subagent": child,
+            "started_at": payload.get("timestamp") or row.get("timestamp"), "provider": payload.get("model_provider")}
+
+
+def parse_codex_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
+    log = CodexLog()
+    read_log(path, log)
+    return log.result(now, lookback_hours, gap_s)
+
+
+CLAUDE_USAGE = ("input_tokens", "cache_read_input_tokens", "ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens",
+                "cache_creation_input_tokens", "output_tokens", "thinking_tokens")
+
+
+class ClaudeLog:
+    """Metadata of one Claude Code log, fed row by row. Every cwd the rows carry is kept in order (`cwds`): a session opened
+    outside a repository and moved into one maps to that repository."""
+
+    def __init__(self, path):
+        # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
+        self.in_subagents, self.log_id = "subagents" in Path(path).parts, Path(path).stem
+        self.meta, self.updated = None, None
+        self.stamps, self.segments, self.cwds, self.messages, self.costs = set(), [], [], {}, []
+
+    def feed(self, row):
         stamp = iso_datetime(row.get("timestamp"))
         if stamp:
-            stamps.append(stamp.timestamp())
+            self.stamps.add(int(stamp.timestamp()))
+            self.updated = max(self.updated or stamp, stamp)
+        kind = row.get("type")
+        if self.meta is None and kind in ("user", "assistant"):
+            self.meta = {"session_id": row.get("sessionId"), "cwd": row.get("cwd"), "started_at": row.get("timestamp"),
+                         "sidechain": row.get("isSidechain") is True}
+        if isinstance(row.get("cwd"), str) and row["cwd"] not in self.cwds:
+            self.cwds.append(row["cwd"])
         cost = row.get("total_cost_usd")
-        if row.get("type") == "result" and stamp:
-            if type(cost) not in (int, float) or not math.isfinite(cost) or cost < 0:
-                cost_valid = False
-            else:
-                cost_valid &= latest_cost is None or cost >= latest_cost
-                latest_cost = float(cost)
-                if stamp <= cutoff:
-                    cost_baseline = latest_cost
-                else:
-                    cost_inside = True
-        if stamp and (updated is None or stamp > updated):
-            updated = stamp
-        message = row.get("message") if row.get("type") == "assistant" else None
+        if kind == "result":
+            valid = valid_number(cost)
+            self.costs.append((stamp, float(cost) if valid else None))
+        message = row.get("message") if kind == "assistant" else None
         if not isinstance(message, dict):
-            continue
-        model = message.get("model") or model
-        effort = row.get("effort") or effort
-        if not complete or not stamp or stamp < cutoff or not isinstance(message.get("usage"), dict):
-            continue
-        raw = message["usage"]
+            return
+        model = message.get("model")
+        add_segment(self.segments, stamp, None if isinstance(model, str) and model.startswith("<") else model, row.get("effort"))
+        raw = message.get("usage")
+        key = message.get("id") if isinstance(message.get("id"), str) and message["id"] else object()
+        if not isinstance(raw, dict):
+            if not (isinstance(model, str) and model.startswith("<")):
+                self.messages.setdefault(key, (stamp, None, False))
+            return
         cache = raw.get("cache_creation") if isinstance(raw.get("cache_creation"), dict) else {}
-        usage["input_tokens"] += int(safe_number(raw.get("input_tokens")))
-        usage["cached_input_tokens"] += int(safe_number(raw.get("cache_read_input_tokens")))
-        usage["cache_write_5m_input_tokens"] += int(safe_number(cache.get("ephemeral_5m_input_tokens")))
-        usage["cache_write_1h_input_tokens"] += int(safe_number(cache.get("ephemeral_1h_input_tokens")))
-        usage["output_tokens"] += int(safe_number(raw.get("output_tokens")))
         details = raw.get("output_tokens_details") if isinstance(raw.get("output_tokens_details"), dict) else {}
-        usage["reasoning_output_tokens"] += int(safe_number(details.get("thinking_tokens")))
-    usage["cache_write_input_tokens"] = usage["cache_write_5m_input_tokens"] + usage["cache_write_1h_input_tokens"]
-    usage["total_tokens"] = (
-        usage["input_tokens"] + usage["cached_input_tokens"]
-        + usage["cache_write_input_tokens"] + usage["output_tokens"]
-    ) if complete else 0
-    active = bool(updated and (now - updated).total_seconds() <= 120)
-    return {
-        "session_id": session_id,
-        "source": "claude",
-        "runtime_provider": "anthropic",
-        "cwd": cwd,
-        "started_at": meta.get("timestamp"),
-        "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
-        "status": "active" if active else "idle",
-        "model": model or "unmeasured",
-        "effort": effort or "unmeasured",
-        "usage": usage,
-        "cost_usd_reported": latest_cost - cost_baseline if cost_valid and cost_inside and cost_baseline is not None else None,
-        "active_intervals": active_intervals(stamps, gap_s) if complete else
-        clipped_intervals(stamps, gap_s, iso_datetime(meta.get("timestamp"))),
-        # a subagent log carries the parent's sessionId; it must never speak for the session's model, effort or start
-        "subagent": "subagents" in Path(path).parts or meta.get("isSidechain") is True,
-    }
+        # Claude Code repeats usage per content block; the last observation of a message is authoritative.
+        required = all(valid_number(raw.get(name)) for name in ("input_tokens", "output_tokens"))
+        normalized = {**details, **cache, **raw}
+        tiers = ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+        tier_sum = sum(safe_number(normalized.get(name)) for name in tiers)
+        aggregate = raw.get("cache_creation_input_tokens", tier_sum)
+        aliases_match = all(name not in raw or name not in cache
+                            or valid_number(cache[name]) and raw[name] == cache[name] for name in tiers)
+        value = counts({**normalized, "cache_creation_input_tokens": aggregate}, CLAUDE_USAGE) if required else None
+        self.messages[key] = (stamp, value, value is not None and aggregate == tier_sum and aliases_match)
+
+    def result(self, now=None, lookback_hours=24, gap_s=GAP_S):
+        meta = self.meta
+        if not meta or not isinstance(meta["session_id"], str) or not isinstance(meta["cwd"], str):
+            return None
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=lookback_hours)
+        observed = [(value, tiers) for stamp, value, tiers in self.messages.values() if stamp is None or stamp >= cutoff]
+        window = [value for value, _ in observed]
+        usage = {**empty_usage(), "usage_complete": None not in window, "input_includes_cache": False}
+        usage["usage_complete"] &= all(stamp is not None for stamp, _, _ in self.messages.values())
+        usage["cache_write_tiers_complete"] = all(tiers for _, tiers in observed)
+        sums = [sum(column) for column in zip(*(value for value in window if value is not None))] or [0] * 7
+        (usage["input_tokens"], usage["cached_input_tokens"], usage["cache_write_5m_input_tokens"],
+         usage["cache_write_1h_input_tokens"], usage["cache_write_input_tokens"], usage["output_tokens"],
+         usage["reasoning_output_tokens"]) = sums
+        usage["total_tokens"] = usage["input_tokens"] + usage["cached_input_tokens"] + usage["cache_write_input_tokens"] + usage["output_tokens"]
+        started = iso_datetime(meta["started_at"])
+        baseline = 0 if started and started >= cutoff else None
+        latest, inside, valid = None, False, coherent_window((row[0] for row in self.costs), cutoff)
+        for stamp, cost in self.costs:
+            if stamp is None or cost is None:
+                valid = False
+                continue
+            valid &= latest is None or cost >= latest
+            latest = cost
+            if stamp < cutoff:
+                baseline = latest
+            else:
+                inside = True
+        model, effort = labels(self.segments)
+        return {
+            "session_id": meta["session_id"],
+            "log_id": self.log_id,
+            "source": "claude",
+            "runtime_provider": "anthropic",
+            "cwd": meta["cwd"],
+            "cwds": list(self.cwds),
+            "started_at": meta["started_at"],
+            "updated_at": iso(self.updated),
+            "status": "active" if self.updated and (now - self.updated).total_seconds() <= 120 else "idle",
+            "model": model,
+            "effort": effort,
+            "effort_segments": list(self.segments),
+            "usage": checked_usage(usage),
+            "cost_usd_reported": latest - baseline if valid and inside and baseline is not None else None,
+            "active_intervals": active_intervals(self.stamps, gap_s),
+            "subagent": self.in_subagents or meta["sidechain"],
+        }
+
+
+def parse_claude_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
+    log = ClaudeLog(path)
+    read_log(path, log)
+    return log.result(now, lookback_hours, gap_s)
+
+
+LOGS = {"codex": CodexLog, "claude": ClaudeLog}
 
 
 def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
@@ -360,12 +808,23 @@ def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
     stamps = []
     for wire in Path(path).parent.glob("agents/*/wire.jsonl"):
         for row in json_rows(wire):
-            if safe_number(row.get("time")):
-                stamps.append(row["time"] / 1000)
+            stamp = row.get("time")
+            if safe_number(stamp):
+                stamps.append(stamp / 1000)
             raw = row.get("usage")
-            if row.get("type") != "usage.record" or row.get("time", 0) < cutoff_ms or not isinstance(raw, dict):
+            if row.get("type") != "usage.record":
+                continue
+            if not valid_number(stamp):
+                usage["usage_complete"] = False
+                continue
+            if stamp < cutoff_ms:
+                continue
+            if not isinstance(raw, dict):
+                usage["usage_complete"] = False
                 continue
             model = row.get("model") or model
+            usage["usage_complete"] &= all(key not in raw or valid_number(raw[key]) for key in (
+                "inputOther", "inputCacheRead", "inputCacheCreation", "output"))
             usage["input_tokens"] += int(safe_number(raw.get("inputOther")))
             usage["cached_input_tokens"] += int(safe_number(raw.get("inputCacheRead")))
             usage["cache_write_input_tokens"] += int(safe_number(raw.get("inputCacheCreation")))
@@ -383,7 +842,7 @@ def parse_kimi_session(path, now=None, lookback_hours=24, gap_s=GAP_S):
         "started_at": datetime.fromtimestamp(started_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z") if started_ms else None,
         "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
         "status": "active" if active else "idle", "model": model or "unmeasured",
-        "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
+        "effort": "unmeasured", "usage": checked_usage(usage), "cost_usd_reported": None,
         "active_intervals": active_intervals(stamps, gap_s),
     }
 
@@ -397,7 +856,8 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
     if not meta:
         return None
     usage = empty_usage()
-    usage.update({"usage_complete": True, "input_includes_cache": True, "output_includes_reasoning": False})
+    usage.update({"usage_complete": True, "input_includes_cache": True, "output_includes_reasoning": False,
+                  "price_allocation_complete": True})
     model = None
     updated = iso_datetime(meta.get("startTime"))
     stamps = [updated.timestamp()] if updated else []
@@ -408,21 +868,41 @@ def parse_gemini_session(path, cwd, now=None, lookback_hours=24, gap_s=GAP_S):
         if stamp and (updated is None or stamp > updated):
             updated = stamp
         raw = row.get("tokens")
-        if row.get("type") != "gemini" or not stamp or stamp < cutoff or not isinstance(raw, dict):
+        if row.get("type") != "gemini":
+            continue
+        if not stamp:
+            usage["usage_complete"] = False
+            usage["price_allocation_complete"] = False
+            continue
+        if stamp < cutoff:
+            continue
+        if not isinstance(raw, dict):
+            usage["usage_complete"] = False
+            usage["price_allocation_complete"] = False
             continue
         model = row.get("model") or model
-        usage["input_tokens"] += int(safe_number(raw.get("input"))) + int(safe_number(raw.get("tool")))
-        usage["cached_input_tokens"] += int(safe_number(raw.get("cached")))
-        usage["output_tokens"] += int(safe_number(raw.get("output")))
-        usage["reasoning_output_tokens"] += int(safe_number(raw.get("thoughts")))
-        usage["total_tokens"] += int(safe_number(raw.get("total")))
+        valid_counts = all(key not in raw or valid_number(raw[key]) for key in (
+            "input", "tool", "cached", "output", "thoughts", "total"))
+        input_tokens = int(safe_number(raw.get("input"))) + int(safe_number(raw.get("tool")))
+        cached_tokens = int(safe_number(raw.get("cached")))
+        output_tokens = int(safe_number(raw.get("output")))
+        reasoning_tokens = int(safe_number(raw.get("thoughts")))
+        total_tokens = int(safe_number(raw.get("total")))
+        usage["usage_complete"] &= (valid_counts and all(key in raw for key in ("input", "output", "total"))
+                                    and total_tokens == input_tokens + output_tokens + reasoning_tokens)
+        usage["price_allocation_complete"] &= valid_counts and "input" in raw and cached_tokens <= input_tokens
+        usage["input_tokens"] += input_tokens
+        usage["cached_input_tokens"] += cached_tokens
+        usage["output_tokens"] += output_tokens
+        usage["reasoning_output_tokens"] += reasoning_tokens
+        usage["total_tokens"] += total_tokens
     active = bool(updated and (now - updated).total_seconds() <= 120)
     return {
         "session_id": meta["sessionId"], "source": "gemini", "runtime_provider": "google",
         "cwd": cwd, "started_at": meta.get("startTime"),
         "updated_at": updated.isoformat().replace("+00:00", "Z") if updated else None,
         "status": "active" if active else "idle", "model": model or "unmeasured",
-        "effort": "unmeasured", "usage": usage, "cost_usd_reported": None,
+        "effort": "unmeasured", "usage": checked_usage(usage), "cost_usd_reported": None,
         "active_intervals": active_intervals(stamps, gap_s),
     }
 
@@ -463,37 +943,43 @@ def empty_summary(window_hours):
 
 
 def summarize(sessions, window_hours):
+    sessions = [{**item, "usage": checked_usage(dict(item["usage"]))} for item in sessions]
     result = empty_summary(window_hours)
     result["sessions"] = len(sessions)
     result["active_sessions"] = sum(item["status"] == "active" for item in sessions)
     result["idle_sessions"] = len(sessions) - result["active_sessions"]
     result["usage_incomplete_sessions"] = sum(item["usage"].get("usage_complete") is not True for item in sessions)
-    for item in sessions:
-        for key in USAGE_KEYS:
-            result[key] += int(safe_number(item["usage"].get(key)))
+    for key in USAGE_KEYS:
+        values = [item["usage"].get(key, None if key == "reasoning_output_tokens" else 0) for item in sessions]
+        result[key] = (None if key == "reasoning_output_tokens" and any(value is None for value in values)
+                       else known_token_total(values))
     result["tokens_total"] = result.pop("total_tokens")
     priced = [item for item in sessions if item.get("cost_usd_estimate") is not None]
     result["priced_sessions"] = len(priced)
     result["unpriced_sessions"] = len(sessions) - len(priced)
     result["pricing_coverage"] = len(priced) / len(sessions) if sessions else None
-    result["cost_usd_known_sum"] = round(sum(item["cost_usd_estimate"] for item in priced), 6)
+    known = harness_report._money_total(item["cost_usd_estimate"] for item in priced)
+    result["cost_usd_known_sum"] = round(known, 6) if known is not None else None
     result["cost_usd_estimate"] = result["cost_usd_known_sum"] if sessions and len(priced) == len(sessions) else None
     reported = [item for item in sessions if item.get("cost_usd_reported") is not None]
-    result["cost_usd_reported_sum"] = round(sum(item["cost_usd_reported"] for item in reported), 6)
+    known = harness_report._money_total(item["cost_usd_reported"] for item in reported)
+    result["cost_usd_reported_sum"] = round(known, 6) if known is not None else None
     result["reported_cost_sessions"] = len(reported)
     result["reported_cost_coverage"] = len(reported) / len(sessions) if sessions else None
     routes = {}
     for item in sessions:
         key = (item["runtime_provider"], item["model"], item["effort"])
-        row = routes.setdefault(key, {"provider": key[0], "model": key[1], "effort": key[2], "sessions": 0, "tokens": 0, "cost_usd_estimate": 0, "priced_sessions": 0})
+        row = routes.setdefault(key, {"provider": key[0], "model": key[1], "effort": key[2], "sessions": 0, "token_counts": [], "cost_usd_estimate": 0, "priced_sessions": 0})
         row["sessions"] += 1
-        row["tokens"] += item["usage"].get("total_tokens", 0)
+        row["token_counts"].append(item["usage"].get("total_tokens", 0))
         if item.get("cost_usd_estimate") is not None:
-            row["cost_usd_estimate"] += item["cost_usd_estimate"]
+            row["cost_usd_estimate"] = harness_report._money_total((row["cost_usd_estimate"], item["cost_usd_estimate"]))
             row["priced_sessions"] += 1
-    result["routes"] = sorted(routes.values(), key=lambda row: (-row["tokens"], row["provider"], row["model"]))
-    for row in result["routes"]:
-        row["cost_usd_estimate"] = round(row["cost_usd_estimate"], 6) if row["priced_sessions"] == row["sessions"] else None
+    for row in routes.values():
+        row["tokens"] = known_token_total(row.pop("token_counts"))
+        row["cost_usd_estimate"] = (round(row["cost_usd_estimate"], 6)
+                                    if row["cost_usd_estimate"] is not None and row["priced_sessions"] == row["sessions"] else None)
+    result["routes"] = sorted(routes.values(), key=lambda row: (-(row["tokens"] or 0), row["provider"], row["model"]))
     result["recent_sessions"] = sorted(sessions, key=lambda item: item.get("updated_at") or "", reverse=True)[:20]
     return result
 
@@ -509,21 +995,23 @@ class ActivityCollector:
         self.pricer = pricer or HeadroomPricer()
         self.lookback_hours = lookback_hours
         self.gap_s = float(activity_gap_minutes) * 60
-        self.cache = {}
+        self.cursors = {}  # path -> (stat stamp, consumed offset, parser, consumed-byte hash)
+        self._lock = threading.RLock()
+        self.unreadable = set()  # *.jsonl.zst logs no decoder could read (reported, never skipped silently)
         self.identity_cache = {}
 
     def candidates(self, now):
         cutoff = (now - timedelta(hours=self.lookback_hours)).timestamp()
         sources = (
-            ("codex", self.codex_root, "*.jsonl"),
-            ("claude", self.claude_root, "*.jsonl"),
-            ("kimi", self.kimi_root, "state.json"),
-            ("gemini", self.gemini_root / "tmp", "session-*.jsonl"),
+            ("codex", self.codex_root, ("*.jsonl", "*.jsonl.zst")),
+            ("claude", self.claude_root, ("*.jsonl",)),
+            ("kimi", self.kimi_root, ("state.json",)),
+            ("gemini", self.gemini_root / "tmp", ("session-*.jsonl",)),
         )
-        for source, root, pattern in sources:
+        for source, root, patterns in sources:
             if not root.exists():
                 continue
-            for path in root.rglob(pattern):
+            for path in (path for pattern in patterns for path in root.rglob(pattern)):
                 try:
                     if path.is_file() and path.stat().st_mtime >= cutoff:
                         yield source, path
@@ -531,24 +1019,40 @@ class ActivityCollector:
                     continue
 
     def parse(self, source, path, now):
-        stat = path.stat()
-        key = (stat.st_size, stat.st_mtime_ns)
-        cached = self.cache.get(path)
-        if cached and cached[0] == key:
-            return cached[1]
-        if source == "codex":
-            value = parse_codex_session(path, now, self.lookback_hours, self.gap_s)
-        elif source == "claude":
-            value = parse_claude_session(path, now, lookback_hours=self.lookback_hours, gap_s=self.gap_s)
-        elif source == "kimi":
-            value = parse_kimi_session(path, now, self.lookback_hours, self.gap_s)
-        else:
+        with self._lock:
+            return self._parse(source, path, now)
+
+    def _parse(self, source, path, now):
+        """The session of one log as of `now`. Only what the rows say is kept between calls (a cursor per Codex/Claude log); status
+        and the lookback window are recomputed every call, since they move with the clock even when the file does not."""
+        if source not in LOGS:
+            # ponytail: Kimi and Gemini logs are re-read on every call; give them a cursor like LOGS if a large one shows up
+            if source == "kimi":
+                return parse_kimi_session(path, now, self.lookback_hours, self.gap_s)
             slug = path.parents[1].name
             projects = json.loads((self.gemini_root / "projects.json").read_text()).get("projects", {})
             cwd = next((project for project, key in projects.items() if key == slug), None)
-            value = parse_gemini_session(path, cwd, now, self.lookback_hours, self.gap_s)
-        self.cache[path] = (key, value)
-        return value
+            return parse_gemini_session(path, cwd, now, self.lookback_hours, self.gap_s)
+        stat = path.stat()
+        known, offset, log, digest = self.cursors.pop(path, (None, 0, None, None))
+        stamp = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        # Changed plain files must retain every consumed byte before their parser can read on. Hashing the prefix costs I/O
+        # but avoids reparsing unchanged JSON. Unchanged files and archives do not perform this prefix check.
+        packed = path.suffix == ".zst"
+        stale = known != stamp if packed else known is None or known[:2] != stamp[:2] or offset > stat.st_size
+        if log is not None and not packed and not stale and known != stamp:
+            stale = not unchanged_prefix(path, offset, digest)
+        if log is None or stale:
+            offset, log, digest = 0, LOGS[source](path), None if packed else hashlib.sha256()
+        try:
+            if not packed or offset == 0:
+                offset = read_log(path, log, offset, digest)
+        except UnreadableLog:
+            self.unreadable.add(path)
+            return None
+        self.unreadable.discard(path)
+        self.cursors[path] = (stamp, offset, log, digest)
+        return log.result(now, self.lookback_hours, self.gap_s)
 
     def identity(self, path):
         path = str(Path(path).resolve())
@@ -557,25 +1061,35 @@ class ActivityCollector:
         return self.identity_cache[path]
 
     def project_id(self, session, entries, identities):
-        cwd = Path(session["cwd"]).resolve()
-        for entry in entries:
-            project = Path(entry["path"]).resolve()
-            if cwd == project or project in cwd.parents:
-                return entry["project_id"]
-        cwd_identity = self.identity(cwd)
-        if cwd_identity:
+        for cwd in session.get("cwds") or [session["cwd"]]:  # the first cwd of the session that maps to a project
+            cwd = Path(cwd).resolve()
             for entry in entries:
-                if identities.get(entry["project_id"]) == cwd_identity:
+                project = Path(entry["path"]).resolve()
+                if cwd == project or project in cwd.parents:
                     return entry["project_id"]
+            cwd_identity = self.identity(cwd)
+            if cwd_identity:
+                for entry in entries:
+                    if identities.get(entry["project_id"]) == cwd_identity:
+                        return entry["project_id"]
         return None
 
     def collect(self, entries, now=None):
+        with self._lock:
+            return self._collect(entries, now)
+
+    def _collect(self, entries, now=None):
+        if not entries:
+            self.cursors.clear()
+            self.unreadable.clear()
+            return {"aggregate": summarize([], self.lookback_hours), "projects": {}, "errors": []}
         now = now or datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=self.lookback_hours)
         identities = {entry["project_id"]: self.identity(entry["path"]) for entry in entries}
         sessions_by_project = {entry["project_id"]: [] for entry in entries}
-        errors = []
+        errors, seen = [], set()
         for source, path in self.candidates(now):
+            seen.add(path)
             try:
                 session = self.parse(source, path, now)
                 if not session:
@@ -591,6 +1105,11 @@ class ActivityCollector:
                 sessions_by_project[project_id].append(session)
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 errors.append({"file": path.name, "error": str(exc)})
+        self.cursors = {path: cursor for path, cursor in self.cursors.items() if path in seen}
+        unread = len(self.unreadable & seen)
+        if unread:
+            errors.append({"file": "*.jsonl.zst", "error": f"{unread} compressed log(s) not read: needs Python 3.14+ "
+                                                          "(compression.zstd) or the zstd binary"})
         all_sessions = [session for sessions in sessions_by_project.values() for session in sessions]
         for session, pricing in zip(all_sessions, self.pricer.quote(all_sessions)):
             session["cost_usd_estimate"] = pricing.get("cost_usd")

@@ -1,0 +1,30 @@
+name: Scorecard
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e
+        with:
+          results_file: scorecard-results.json
+          results_format: json
+          publish_results: false
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: scorecard-${{ github.sha }}
+          path: scorecard-results.json
+          if-no-files-found: error
+          retention-days: 14

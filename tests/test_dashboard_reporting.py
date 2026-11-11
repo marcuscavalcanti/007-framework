@@ -1,6 +1,7 @@
 """Reporting regressions: statements must not exceed observed evidence."""
 
 import importlib
+import hashlib
 import io
 import json
 import shutil
@@ -173,6 +174,197 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(aggregate["active_tasks"], 1)
         self.assertEqual(aggregate["cost_coverage"], 1.0)
         self.assertEqual(aggregate["cost_accounting_status"], "provisional")
+
+    def test_lab_ledger_sums_007_receipts_per_experiment_and_never_crashes_on_a_bad_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.json"
+            self.assertEqual(dashboard.load_lab_ledger(config)["configured"], False)  # no config file: nothing configured
+            first, second = root / "results", root / "next-results"
+            first.mkdir(), second.mkdir()
+            write = lambda path, value: path.write_text(value if isinstance(value, str) else json.dumps(value))
+            write(first / "t1-r01-low.json", {"valid": True})
+            write(first / "t1-r01-low.runner.json", {"cost_usd": 1.25, "cost_source": "client-estimate", "valid": True})
+            write(first / "t1-r01-high.json", {"valid": False})
+            write(first / "t1-r01-high.runner.json", {"cost_usd": 0.5, "cost_source": "client-estimate", "valid": False})
+            write(first / "t2-r01-low.runner.json", "")  # orphan: reserved, never finished
+            write(first / "t2-r01-high.json", {"valid": False, "runner_receipt_sha256": "unmeasured"})  # execution/cost unknown
+            write(first / "dispatch.jsonl", '{"cell":"t1-r01-low","dispatched_at":"2026-11-01T10:00:00+00:00"}\n'
+                  '{"cell":"t1-r01-high","finished_at":"2026-11-02T09:00:00Z"}\n{"cut')
+            write(second / "t1-next-r01-low.json", {"valid": True})
+            write(second / "t1-next-r01-low.runner.json", {"cost_usd": 2, "cost_source": "rate-card-estimate"})
+            write(first / "report.json", {"valid": True})  # not a cell
+            write(config, {"observatory": {"lab_ledger": [
+                {"name": "chain", "results": ["results", str(second)]},
+                {"name": "gone", "results": "missing"},
+                {"name": "broken"}]}})
+            ledger = dashboard.load_lab_ledger(config)
+        chain, gone, broken = ledger["experiments"]
+        self.assertTrue(ledger["configured"])
+        self.assertEqual({key: chain[key] for key in ("attempts", "valid", "invalid", "orphans", "unpriced")},
+                         {"attempts": 5, "valid": 2, "invalid": 2, "orphans": 1, "unpriced": 2})
+        self.assertEqual((chain["cost_usd"], chain["invalid_cost_usd"]), (3.75, 0.5))
+        self.assertEqual(chain["cost_sources"], {"client-estimate": 2, "rate-card-estimate": 1})
+        self.assertEqual((chain["first_attempt_at"], chain["last_attempt_at"]),
+                         ("2026-11-01T10:00:00+00:00", "2026-11-02T09:00:00+00:00"))
+        self.assertEqual((gone["available"], gone["error"]), (False, "results directory unavailable"))
+        self.assertFalse(broken["available"])
+        self.assertEqual(ledger["total_cost_usd"], 3.75)
+        self.assertFalse(ledger["total_complete"])  # an orphan and two unavailable experiments: the total is a lower bound
+
+    def test_lab_ledger_does_not_price_a_missing_receipt_or_unattributed_amount_as_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "missing-r01-low.json").write_text(json.dumps({"valid": True}))
+            (root / "amount-r01-low.json").write_text(json.dumps({"valid": False}))
+            (root / "amount-r01-low.runner.json").write_text(json.dumps({"cost_usd": 7}))
+            config = root / "config.json"
+            config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": "fixture", "results": "."}]}}))
+            ledger = dashboard.load_lab_ledger(config)
+            self.assertEqual(ledger["experiments"][0]["unpriced"], 2)
+            self.assertFalse(ledger["total_complete"])
+            self.assertEqual(ledger["total_cost_usd"], 0)  # known subtotal, not a measured zero for these attempts
+
+    def test_lab_ledger_keeps_an_executed_failure_without_receipt_unpriced(self):
+        import replay_eval
+        from test_scripts import make_base_repo
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, base = make_base_repo(temporary)
+            output = root / "results"
+            output.mkdir(mode=0o700)
+            marker = root / "agent-executed.txt"
+            agent = "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('executed'); sys.exit(1)"
+            config = {"repos": {"fixture": str(repo)},
+                      "agent_command": [sys.executable, "-c", agent, str(marker)],
+                      "arms": {"NEW": {"model": "fixture", "effort": "fixture", "doctrine": ""}}}
+            task = {"id": "no-receipt", "repo": "fixture", "base": base, "accepted": base, "prompt": "fixture",
+                    "acceptance": [[sys.executable, "-c", "raise SystemExit(0)"]]}
+            cell = replay_eval.execute_cell(config, task, "NEW", 1, output, 10)
+            self.assertEqual(marker.read_text(), "executed")
+            self.assertEqual((cell["valid"], cell["agent_exit"], cell["runner_receipt_sha256"]),
+                             (False, 1, "unmeasured"))
+            config_file = root / "config.json"
+            config_file.write_text(json.dumps({"observatory": {"lab_ledger": [
+                {"name": "fixture", "results": str(output)}]}}))
+            ledger = dashboard.load_lab_ledger(config_file)
+            self.assertEqual(ledger["experiments"][0]["unpriced"], 1)
+            self.assertFalse(ledger["total_complete"])
+            self.assertEqual(ledger["total_cost_usd"], 0)
+
+            zero = root / "known-zero"
+            zero.mkdir()
+            (zero / "fixture-r01-NEW.runner.json").write_text(json.dumps({
+                "cost_usd": 0, "cost_source": "custom:synthetic-local-control"}))
+            control = dashboard.lab_experiment("known-zero", [zero])
+            self.assertEqual((control["cost_usd"], control["unpriced"]), (0, 0))
+
+    def test_lab_ledger_counts_dispatch_only_attempts_and_marks_damaged_history_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            results = root / "results"
+            results.mkdir()
+            config = root / "config.json"
+            config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": "fixture", "results": str(results)}]}}))
+            dispatch = results / "dispatch.jsonl"
+            started = {"cell": "lost-r01-NEW", "dispatched_at": "2026-11-09T10:00:00Z"}
+            finished = {"cell": started["cell"], "finished_at": "2026-11-09T10:01:00Z"}
+            dispatch.write_text(json.dumps(started) + "\n" + json.dumps(finished) + "\n")
+            ledger = dashboard.load_lab_ledger(config)
+            self.assertEqual((ledger["experiments"][0]["attempts"], ledger["experiments"][0]["unpriced"]), (1, 1))
+            self.assertFalse(ledger["total_complete"])
+            (results / "priced-r01-NEW.runner.json").write_text(json.dumps({
+                "cost_usd": 0.5, "cost_source": "custom:synthetic-control"}))
+            ledger = dashboard.load_lab_ledger(config)
+            self.assertEqual((ledger["total_cost_usd"], ledger["experiments"][0]["attempts"]), (0.5, 2))
+            self.assertFalse(ledger["total_complete"])
+            (results / "lost-r01-NEW.runner.json").write_text(json.dumps({
+                "cost_usd": 0, "cost_source": "custom:synthetic-control"}))
+            self.assertTrue(dashboard.load_lab_ledger(config)["total_complete"])
+            with dispatch.open("a") as handle:
+                handle.write('{"cell":"torn')
+            damaged = dashboard.load_lab_ledger(config)
+            self.assertFalse(damaged["total_complete"])
+            self.assertEqual(damaged["experiments"][0]["dispatch_errors"], 1)
+
+    def test_repeated_dispatches_cannot_be_certified_by_one_retained_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "case-r01-high.runner.json").write_text(json.dumps({"cost_usd": 0.5, "cost_source": "custom:synthetic"}))
+            started = {"cell": "case-r01-high", "dispatched_at": "2026-11-09T10:00:00Z"}
+            (root / "dispatch.jsonl").write_text(json.dumps(started) + "\n" + json.dumps(started) + "\n")
+            ledger = dashboard.lab_experiment("duplicate", [root])
+            self.assertEqual(ledger["cost_usd"], 0.5)
+            self.assertEqual(ledger["dispatch_errors"], 1)
+
+    def test_ledger_numeric_boundaries_keep_accounting_json_finite(self):
+        self.assertFalse(dashboard.is_number(10 ** 400))
+        self.assertTrue(dashboard.is_number(-1))
+        for cost, priced in ((10 ** 400, False), (float("nan"), False), (float("inf"), False),
+                             (-1, False), (False, False), (0, True), (0.5, True)):
+            with self.subTest(cost_type=type(cost).__name__, priced=priced), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "case-r01-high.runner.json").write_text(json.dumps({
+                    "cost_usd": cost, "cost_source": "custom:synthetic"}))
+                config = root / "config.json"
+                config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": "numeric", "results": str(root)}]}}))
+                result = dashboard.load_lab_ledger(config)
+                self.assertEqual(result["total_complete"], priced)
+                self.assertEqual(result["experiments"][0]["unpriced"], int(not priced))
+                json.dumps(result, allow_nan=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = []
+            for name in ("first", "second"):
+                directory = root / name
+                directory.mkdir()
+                (directory / "case-r01-high.runner.json").write_text(json.dumps({
+                    "cost_usd": 1e308, "cost_source": "custom:synthetic"}))
+                entries.append({"name": name, "results": str(directory)})
+            config = root / "config.json"
+            config.write_text(json.dumps({"observatory": {"lab_ledger": entries}}))
+            result = dashboard.load_lab_ledger(config)
+            self.assertFalse(result["total_complete"])
+            self.assertIsNone(result["total_cost_usd"])
+            json.dumps(result, allow_nan=False)
+
+    def test_runner_suffix_results_keep_one_attempt_and_one_cost(self):
+        import effort_lab
+        for arm in ("high.runner", "high.observation", "high.runner.runner"):
+            with self.subTest(arm=arm), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cid = "case-r01-" + arm
+                receipt = json.dumps({"schema": "007-framework/runner-receipt/v1", "valid": True,
+                                      "cost_usd": 0.5, "cost_source": "custom:synthetic"}).encode()
+                (root / (cid + ".runner.json")).write_bytes(receipt)
+                (root / (cid + ".json")).write_text(json.dumps({"schema": "007-framework/replay-cell/v1",
+                    "task": "case", "arm": arm, "replicate": 1, "valid": True, "cost_usd": 0.5,
+                    "cost_source": "custom:synthetic", "acceptance_outcomes": {},
+                    "runner_receipt_sha256": hashlib.sha256(receipt).hexdigest()}))
+                ledger = dashboard.lab_experiment("suffix", [root])
+                self.assertEqual((ledger["attempts"], ledger["valid"], ledger["orphans"], ledger["cost_usd"]),
+                                 (1, 1, 0, 0.5))
+                rows = effort_lab.load_cells(root)
+                self.assertEqual([row["cell"] for row in rows], [cid])
+
+    def test_ambiguous_legacy_suffix_and_repeated_terminals_do_not_certify_accounting(self):
+        for name, rows, ambiguous in (
+                ("ambiguous", [], True),
+                ("single-finish", [{"cell": "case-r01-high", "finished_at": "2026-11-09T10:00:00Z"}], False),
+                ("repeated-finish", [{"cell": "case-r01-high", "finished_at": "2026-11-09T10:00:00Z", "cost_usd": 0.5},
+                                     {"cell": "case-r01-high", "finished_at": "2026-11-09T10:01:00Z", "cost_usd": 0.7}], True)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                result = root / "case-r01-high.runner.json"
+                result.write_text(json.dumps({"cost_usd": 0.5, "cost_source": "custom:synthetic",
+                                              **({"valid": True} if name == "ambiguous" else {})}))
+                original = result.read_bytes()
+                (root / "dispatch.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+                config = root / "config.json"
+                config.write_text(json.dumps({"observatory": {"lab_ledger": [{"name": name, "results": str(root)}]}}))
+                self.assertEqual(dashboard.load_lab_ledger(config)["total_complete"], not ambiguous)
+                self.assertEqual(result.read_bytes(), original)
 
     def test_lab_report_carries_the_repository_cli_and_model_it_is_bound_to(self):
         # audit F09: a bare report path has no repository identity, so its verdict must not read as evidence for any repository

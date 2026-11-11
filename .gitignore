@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 replay-results/
 .DS_Store
+/build/
+/dist/
+/*.egg-info/

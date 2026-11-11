@@ -15,6 +15,7 @@ lab_accept.py; nothing here knows a vendor or a language.
 import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
+import fcntl
 import hashlib
 import json
 import math
@@ -31,6 +32,7 @@ import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commit_replay  # noqa: E402
+import harness_report  # noqa: E402
 import replay_eval  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -125,13 +127,14 @@ def overlay(repo, tree, rev, files):
 
 
 def collect(tree, spec, sandbox, env):
-    """Every test -> outcome in `tree`, inside the sandbox when one is configured."""
+    """Every test -> outcome in `tree`, through the configured command prefix and environment."""
+    sandbox, env = replay_eval.acceptance_policy(sandbox, env)
     shutil.copy(HERE / "lab_accept.py", replay_eval.hidden_target(tree, f"{ACCEPT}/lab_accept.py"))
     replay_eval.hidden_target(tree, f"{ACCEPT}/lab.json").write_text(json.dumps(spec))
     with tempfile.TemporaryDirectory(prefix="lab-report-") as scratch:
         report = Path(scratch) / "report.json"
         argv = [p.replace("{cwd}", str(tree)) for p in sandbox or []] + [sys.executable, "-I", "-B", f"{ACCEPT}/lab_accept.py", "--collect", f"{ACCEPT}/lab.json"]
-        subprocess.run(argv, cwd=tree, env={**os.environ, **(env or {}), "ACCEPT_REPORT": str(report)}, capture_output=True, timeout=900, check=True)
+        subprocess.run(argv, cwd=tree, env={**env, "ACCEPT_REPORT": str(report)}, capture_output=True, timeout=900, check=True)
         return json.loads(report.read_text())
 
 
@@ -140,6 +143,15 @@ def passing(outcomes):
 
 
 # ---- mine
+
+def failure_summary(error, retain_diagnostic_text=False):
+    """Exception messages can contain private argv/output; keep a safe class and numeric exit only."""
+    label = type(error).__name__
+    if retain_diagnostic_text:
+        return f"{label}: {error}"[:200]
+    if isinstance(error, subprocess.CalledProcessError) and type(error.returncode) is int:
+        label += f" (exit {error.returncode})"
+    return label
 
 def spec_for(config, test_file):
     packages = config.get("packages") or {"": {}}
@@ -310,7 +322,8 @@ def build(config, candidate, out):
 
 
 def mine(config, out, jobs):
-    out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    retain_text = replay_eval._diagnostic_retention(config, out)
     log = out / "mine.jsonl"
     seen = {json.loads(l)["sha"]: json.loads(l) for l in log.read_text().splitlines()} if log.exists() else {}
     candidates = pool(config)
@@ -323,7 +336,7 @@ def mine(config, out, jobs):
         try:
             task, meta = build(config, candidate, out)
         except Exception as error:  # one unbuildable commit must not end the scan
-            task, meta = None, f"{type(error).__name__}: {error}"[:200]
+            task, meta = None, failure_summary(error, retain_text)
         return candidate, task, meta
     with ThreadPoolExecutor(jobs) as pool_:
         while True:
@@ -345,13 +358,13 @@ def mine(config, out, jobs):
                     row["drop"] = meta
                 with log.open("a") as handle:
                     handle.write(json.dumps(row) + "\n")
-                print(candidate["sha"][:8], "kept" if task else row["drop"], flush=True)
+                print(candidate["sha"][:8], "kept" if task else "dropped (private diagnostic)" if retain_text else row["drop"], flush=True)
     return write_set(config, out)
 
 
 def write_set(config, out):
     loaded = [json.loads(p.read_text()) for p in sorted((out / "tasks").glob("*/task.json"))]
-    replay = {k: config[k] for k in ("seed", "agent_command", "arms", "served_identity", "acceptance_sandbox", "acceptance_env", "compare") if k in config}
+    replay = {k: config[k] for k in ("seed", "agent_command", "arms", "served_identity", "acceptance_sandbox", "acceptance_env", "compare", "retain_diagnostic_text") if k in config}
     replay.update(repos={config.get("repo_key", "source"): config["repo"]}, retain_candidate_patch=True, tasks=[x["task"] for x in loaded], gates=GATES)
     (out / "replay-set.json").write_text(json.dumps(replay, indent=1, ensure_ascii=False))
     (out / "pairs.json").write_text(json.dumps({x["meta"]["id"]: x["meta"] for x in loaded}, indent=1, ensure_ascii=False))
@@ -399,7 +412,7 @@ def chain(config_path, results, out):
     pairs = json.loads((config_path.parent / "pairs.json").read_text())
     tasks = {t["id"]: t for t in config["tasks"]}
     repo = next(iter(config["repos"].values()))
-    out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
     mirror = out / "mirror.git"
     if not mirror.exists():
         subprocess.run(["git", "clone", "-q", "--bare", "--no-hardlinks", str(repo), str(mirror)], check=True, capture_output=True)
@@ -482,7 +495,7 @@ def sensitivity(config_path, jobs, per_task=6):
         try:
             return tid, control, probe(config, out, tid, patch_text, real_next)
         except Exception as error:
-            return tid, control, f"{type(error).__name__}: {error}"[:200]
+            return tid, control, failure_summary(error)
     with ThreadPoolExecutor(jobs) as pool_:
         rows = list(pool_.map(one, work))
     result = sensitivity_summary(rows)
@@ -521,18 +534,38 @@ def plan(config, replicates):
         block = [(t, rep, a) for t in config["tasks"] for a in config["arms"]]
         rng.shuffle(block)
         cells += block
+    replay_eval.validate_cell_artifacts(config["tasks"], config["arms"], replicates)
     return cells
 
 
 def cost_of(out, cid, row):
-    if isinstance(row.get("cost_usd"), (int, float)):
+    if harness_report._valid_money(row.get("cost_usd")):
         return row["cost_usd"]
     receipt = out / f"{cid}.runner.json"
     value = json.loads(receipt.read_text()).get("cost_usd") if receipt.is_file() and receipt.stat().st_size else None
-    return value if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0 else None
+    return value if harness_report._valid_money(value) else None
 
 
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
+    """Serialize controllers sharing an output directory before checking or publishing dispatch history."""
+    if not all(harness_report._valid_money(value) for value in (max_usd, stop_usd)):
+        raise ValueError("budget values must be finite nonnegative numbers")
+    for name, value, minimum in (("replicates", replicates, 1), ("jobs", jobs, 1),
+                                  ("max_calls", max_calls, 0), ("max_invalid", max_invalid, 1)):
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"{name} limit must be an integer >= {minimum}")
+    timeout_s = replay_eval.validate_timeout(timeout_s)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (out / ".run.lock").open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"stop": "run-already-active", "calls": 0}
+        return _run(config_path, out, replicates=replicates, jobs=jobs, max_calls=max_calls, max_usd=max_usd,
+                    stop_usd=stop_usd, timeout_s=timeout_s, execute=execute, max_invalid=max_invalid)
+
+
+def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s, execute, max_invalid):
     """Spend rule: a cell is dispatched only if the spend so far plus stop_usd for it and for each cell in flight stays under max_usd.
     A failed call that reports no cost is charged stop_usd (its reserve), never zero; only a valid cell without a cost stops the run."""
     config = json.loads(config_path.read_text())
@@ -540,16 +573,46 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
     execute = execute or replay_eval.execute_cell
     ledger = out / "dispatch.jsonl"
     cells = plan(config, replicates)
-    done = {p.stem for p in out.glob("*-r[0-9][0-9]-*.json") if not p.name.endswith(".runner.json")}
-    orphans = {p.name[:-len(".runner.json")] for p in out.glob("*.runner.json")} - done
+    replay_eval.validate_cell_artifacts(config["tasks"], config["arms"], replicates, directory=out)
+    results, receipts = replay_eval.read_cell_artifacts(out)
+    done = set(results)
+    orphans = set(receipts) - done
+    try:
+        history, invalid_history, ambiguous_history = replay_eval.load_dispatch_history(out)
+        if invalid_history:
+            return {"stop": "unreadable-dispatch-history", "calls": 0}
+        if ambiguous_history:
+            return {"stop": "ambiguous-dispatch-history", "calls": 0}
+        for row in history:
+            if row["cell"] not in done:
+                orphans.add(row["cell"])
+    except (OSError, ValueError):
+        return {"stop": "unreadable-dispatch-history", "calls": 0}
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
+
+    def charge(cost):
+        nonlocal spent, stop
+        if spent is not None:
+            try:
+                spent = float(harness_report._money_sum((spent, stop_usd if cost is None else cost)))
+            except ValueError:
+                spent = None
+                stop = stop or "cost-total-unavailable"
+
     for name in done:
         row = json.loads((out / f"{name}.json").read_text())
         cost = cost_of(out, name, row)
-        spent += stop_usd if cost is None else cost
+        if cost is None and row.get("valid") is True:
+            stop = "cost-unavailable"
+        else:
+            charge(cost)
+            if cost is not None and cost > stop_usd:
+                stop = stop or "cell-over-limit"
         invalid += row.get("valid") is not True
+    if invalid >= max_invalid:
+        stop = stop or "invalid-budget"
     cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
     todo = [c for c in cells if cell_name(c) not in done]
     calls = 0
@@ -564,7 +627,11 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
                 if calls >= max_calls:
                     stop = stop or ("call-budget" if next(queue, None) else None)
                     break
-                if spent + stop_usd * (len(active) + 1) > max_usd:
+                try:
+                    reserved = harness_report._money_sum((spent, stop_usd * (len(active) + 1)))
+                except ValueError:
+                    reserved = None
+                if reserved is None or reserved > harness_report._money_sum((max_usd,)):
                     stop = "usd-budget"
                     break
                 cell = next(queue, None)
@@ -587,7 +654,7 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
                 if cost is None and row.get("valid") is True:
                     stop = "cost-unavailable"
                 else:
-                    spent += stop_usd if cost is None else cost  # ponytail: a failed call with no receipt cost is charged its reserve
+                    charge(cost)  # A failed call with no receipt cost is charged its reserve.
                     if cost is not None and cost > stop_usd:
                         stop = "cell-over-limit"
                 if invalid >= max_invalid:
@@ -601,11 +668,13 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
 
 def load_cells(out):
     rows = []
-    for path in sorted(out.glob("*-r[0-9][0-9]-*.json")):
-        if path.name.endswith(".runner.json"):
-            continue
-        row = json.loads(path.read_text())
-        row["cell"] = path.stem
+    try:
+        results, _ = replay_eval.read_cell_artifacts(out)
+    except FileNotFoundError:
+        return rows
+    for identifier, row in sorted(results.items()):
+        path = out / (identifier + ".json")
+        row["cell"] = identifier
         if not isinstance(row.get("acceptance_outcomes"), dict):  # unreadable report (a hung suite, the cap): no test seen passing; report() names it
             row["acceptance_outcomes"], row["outcomes_unreadable"] = {}, True
         receipt = out / f"{path.stem}.runner.json"
@@ -622,12 +691,14 @@ def load_cells(out):
 
 def arm_stats(rows, durable, next_rows):
     accepted = sum(r["accepted"] for r in rows)
-    wall, cost = sum(r["agent_wall_s"] for r in rows), sum(r["cost_usd"] for r in rows)
+    wall = sum(r["agent_wall_s"] for r in rows)
+    cost = harness_report._money_total(r["cost_usd"] for r in rows)
     following = [next_rows[r["cell"]] for r in rows if r["cell"] in next_rows]
     good = sum(durable.get(r["cell"], False) for r in rows)
     return {"units": len(rows), "accepted": accepted, "agent_wall_s": wall, "cost_usd": cost, "wall_per_accepted_s": wall / accepted if accepted else None,
-            "cost_per_accepted_usd": cost / accepted if accepted else None, "durable": good, "durable_rate": good / len(rows) if rows else None,
-            "next_accepted": sum(r["accepted"] for r in following), "total_wall_s": wall + sum(r["agent_wall_s"] for r in following), "total_cost_usd": cost + sum(r["cost_usd"] for r in following)}
+            "cost_per_accepted_usd": cost / accepted if accepted and cost is not None else None, "durable": good, "durable_rate": good / len(rows) if rows else None,
+            "next_accepted": sum(r["accepted"] for r in following), "total_wall_s": wall + sum(r["agent_wall_s"] for r in following),
+            "total_cost_usd": harness_report._money_total(r["cost_usd"] for group in (rows, following) for r in group)}
 
 
 def contrast(rows, durable, next_rows, low, ref):
@@ -886,7 +957,8 @@ def report(config_path, results, next_results):
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     rows = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
-    orphans = sorted({p.name[:-len(".runner.json")] for p in results.glob("*.runner.json")} - {r["cell"] for r in rows})
+    _, receipts = replay_eval.read_cell_artifacts(results)
+    orphans = sorted(set(receipts) - {r["cell"] for r in rows})
     excluded = sorted(r["cell"] for r in rows if r["valid"] is not True)
     rows = [r for r in rows if r["valid"] is True]
     if not rows:

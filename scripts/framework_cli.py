@@ -19,6 +19,7 @@ import webbrowser
 from cli_telemetry import NativeTelemetry, drain, enrich, validate_command
 import replay_capture
 import harness_report
+from package_version import version
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -496,12 +497,7 @@ def validate_receipt(value, allow_cost_unavailable=False):
         if not isinstance(reason, str) or not reason:
             raise ValueError("cost_status unavailable requires cost_unavailable_reason")
     else:
-        if (
-            isinstance(cost, bool)
-            or not isinstance(cost, (int, float))
-            or not math.isfinite(cost)
-            or cost < 0
-        ):
+        if not harness_report._valid_money(cost):
             raise ValueError("cost_usd must be a non-negative measured number")
         source = value.get("cost_source")
         if not isinstance(source, str) or (
@@ -722,6 +718,8 @@ def run_acceptance(root, task):
             )
         checks.append({
             "command": command,
+            "command_sha256": hashlib.sha256(json.dumps(command).encode()).hexdigest(),
+            "diagnostic_text_retained": True,
             "cwd": ".",
             "exit": exit_code,
             "duration_ms": round((time.monotonic() - started) * 1000),
@@ -981,12 +979,6 @@ def run_task(repo, task_id, receipt, command, authority_file=None, action=None, 
     return (4 if checks and any(check["exit"] != 0 for check in checks) else 0), destination
 
 
-def version():
-    """SKILL.md is the single version source; test_package pins the dashboard to it."""
-    match = re.search(r"(?m)^  version: (\S+)$", (Path(__file__).resolve().parents[1] / "SKILL.md").read_text())
-    return match.group(1) if match else "unknown"
-
-
 def parser():
     result = argparse.ArgumentParser(description="007 Framework local tooling")
     result.add_argument("--version", action="version", version=f"007 {version()}")
@@ -1037,7 +1029,7 @@ def run_dashboard(host, port, registry, open_browser=True, *, curation_checkpoin
     static_dir = Path(__file__).resolve().parents[1] / "dashboard"
     server = dashboard.create_server(host, port, registry, static_dir, curation_checkpoint=curation_checkpoint, curation_vault=curation_vault, background=True)
     url = f"http://{host}:{server.server_port}"
-    print(f"007 dashboard: {url}")
+    print(f"007 dashboard: {url}", flush=True)
     if open_browser:
         webbrowser.open(url)
     try:

@@ -1,4 +1,5 @@
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import importlib
 import json
 import os
@@ -40,6 +41,7 @@ class ObservatoryHistoryTests(unittest.TestCase):
 
     def setUp(self):
         self.hist = importlib.import_module("observatory_history")
+        self.registered_entries = [{"project_id": "p1", "path": "/repo"}, {"project_id": "p2", "path": "/other"}]
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Path(self.tmp.name, "sessions.jsonl")
 
@@ -55,11 +57,34 @@ class ObservatoryHistoryTests(unittest.TestCase):
         collector = FakeCollector([self.session("a", "2026-10-22T10:05:00Z", title="PRIVATE prompt text"),
                                    self.session("b", "2026-10-22T10:06:00Z", project="p2"),
                                    self.session("c", "2026-10-22T10:07:00Z", project=None)])
-        rows = self.hist.snapshot(collector, entries=[], allowed={"p1"}, now=None)
+        rows = self.hist.snapshot(collector, entries=self.registered_entries, allowed={"p1"}, now=None)
         self.assertEqual([r["session_id"] for r in rows], ["a"])
         self.assertEqual(set(rows[0]), set(self.hist.FIELDS))
         self.assertEqual((rows[0]["project_id"], rows[0]["total_tokens"], rows[0]["reasoning_output_tokens"]), ("p1", 10, 3))
         self.assertNotIn("PRIVATE", json.dumps(rows))
+
+    def test_usage_completeness_survives_recording_legacy_rows_and_counter_repairs(self):
+        repo = self.git_repo("usage-repair")
+        session = self.session("usage", "2026-10-22T10:05:00Z", active_intervals=[[T0, T0 + 600]],
+                               usage={"total_tokens": 7, "reasoning_output_tokens": 0, "usage_complete": False})
+        entries = [{"project_id": "p1", "path": str(repo)}]
+        fresh, = self.hist.snapshot(FakeCollector([session]), entries, {"p1"}, None)
+        legacy = {k: v for k, v in fresh.items() if k != "usage_complete"}
+        self.assertEqual(self.hist.record(self.store, [legacy]), 1)
+        legacy_report, = self.hist.report(self.store, entries, "p1", {"p1"}, now=T0 + 40 * 86400)
+        self.assertIsNone(legacy_report["total_tokens"])
+        self.assertEqual(legacy_report["known_total_tokens"], 7)
+        self.assertEqual(self.hist.record(self.store, [fresh]), 1)
+        partial, = self.hist.report(self.store, entries, "p1", {"p1"}, now=T0 + 40 * 86400)
+        self.assertFalse(partial["usage_complete"])
+        self.assertIsNone(partial["total_tokens"])
+        self.assertEqual(partial["known_total_tokens"], 7)
+        repaired = {**fresh, "usage_complete": True, "total_tokens": 9}
+        self.assertEqual(self.hist.record(self.store, [repaired]), 1)
+        self.assertEqual(self.hist.record(self.store, [repaired]), 0)
+        complete, = self.hist.report(self.store, entries, "p1", {"p1"}, now=T0 + 40 * 86400)
+        self.assertTrue(complete["usage_complete"])
+        self.assertEqual(complete["total_tokens"], 9)
 
     def git_repo(self, name, commit_at=T0 + 100):
         repo = Path(self.tmp.name, name)
@@ -101,7 +126,7 @@ class ObservatoryHistoryTests(unittest.TestCase):
         repo = self.git_repo("project-alpha")
         pid = f"git:{repo}"
         self.hist.record(self.store, [{"source": "claude", "session_id": "s", "project_id": pid, "cwd": str(repo), "model": "m",
-                                       "effort": "high", "started_at": T0, "updated_at": T0 + 200, "total_tokens": 1,
+                                       "effort": "high", "subagent": False, "started_at": T0, "updated_at": T0 + 200, "total_tokens": 1,
                                        "reasoning_output_tokens": 0}])
         rows = self.hist.report(self.store, [], pid, allowed={pid}, now=T0 + 40 * 86400, slack_s=0)
         self.assertEqual((len(rows), rows[0]["evidence_level"]), (1, 1))
@@ -146,8 +171,8 @@ class ObservatoryHistoryTests(unittest.TestCase):
         self.assertEqual(self.hist.load(legacy)[0]["model"], "claude-opus-5-5")     # a declared main log beats an unmarked row
 
     def test_record_is_append_only_without_duplicates_and_load_keeps_the_latest(self):
-        first = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), [], {"p1"}, None)
-        later = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T11:00:00Z")]), [], {"p1"}, None)
+        first = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), self.registered_entries, {"p1"}, None)
+        later = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T11:00:00Z")]), self.registered_entries, {"p1"}, None)
         self.assertEqual(self.hist.record(self.store, first), 1)
         self.assertEqual(self.hist.record(self.store, first), 0)
         self.assertEqual(self.hist.record(self.store, later), 1)
@@ -157,9 +182,9 @@ class ObservatoryHistoryTests(unittest.TestCase):
 
     def test_a_stored_row_without_intervals_is_recorded_again_once_a_parse_brings_them(self):
         # the store from before active_intervals existed (2026-10-22..25) must gain them, or those days keep the 271 h span
-        old = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), [], {"p1"}, None)
+        old = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z")]), self.registered_entries, {"p1"}, None)
         fresh = self.hist.snapshot(FakeCollector([self.session("a", "2026-10-22T10:05:00Z", title="PRIVATE",
-                                                               active_intervals=[[T0, T0 + 60]])]), [], {"p1"}, None)
+                                                               active_intervals=[[T0, T0 + 60]])]), self.registered_entries, {"p1"}, None)
         self.assertIn("active_intervals", self.hist.FIELDS)
         self.assertEqual((old[0]["active_intervals"], fresh[0]["active_intervals"]), (None, [[T0, T0 + 60]]))
         self.assertNotIn("PRIVATE", json.dumps(fresh))
@@ -172,14 +197,338 @@ class ObservatoryHistoryTests(unittest.TestCase):
     def test_one_session_id_over_several_logs_keeps_the_latest_row_with_the_union_of_their_intervals(self):
         # Claude subagent logs (<session>/subagents/agent-*.jsonl) carry the parent sessionId; the latest row alone can be a
         # 20-minute subagent, and its intervals alone would hand the main session's commits to another session (a guess)
-        main = self.session("a", "2026-10-25T18:05:00Z", model="main-model", active_intervals=[[T0, T0 + 60], [T0 + 9000, T0 + 9100]])
-        sub = self.session("a", "2026-10-25T04:05:00Z", model="sub-model", active_intervals=[[T0 + 30, T0 + 5000]])
-        rows = self.hist.snapshot(FakeCollector([main, sub]), [], {"p1"}, None)
+        main = self.session("a", "2026-10-25T18:05:00Z", model="main-model", source="claude",
+                            active_intervals=[[T0, T0 + 60], [T0 + 9000, T0 + 9100]])
+        sub = self.session("a", "2026-10-25T04:05:00Z", model="sub-model", source="claude", active_intervals=[[T0 + 30, T0 + 5000]])
+        rows = self.hist.snapshot(FakeCollector([main, sub]), self.registered_entries, {"p1"}, None)
         self.assertEqual(self.hist.record(self.store, rows), 2)
         self.assertEqual(self.hist.record(self.store, rows), 0, "an older log's row is not appended again on every pass")
         loaded, = self.hist.load(self.store)
         self.assertEqual((loaded["updated_at"], loaded["model"]), ("2026-10-25T18:05:00Z", "main-model"))
         self.assertEqual(loaded["active_intervals"], [[T0, T0 + 5000], [T0 + 9000, T0 + 9100]])
+
+    def codex_row(self, sid, **extra):
+        return {"source": "codex", "session_id": sid, "project_id": "p1", "cwd": "/x", "model": "m", "effort": "high",
+                "started_at": T0, "updated_at": T0 + 9000, "total_tokens": 1, "reasoning_output_tokens": 0, **extra}
+
+    def test_a_whole_log_read_replaces_the_interval_a_clipped_tail_read_stored(self):
+        # 1.6 stored one fake 291 h interval for a 527 MB rollout read from its last 4 MiB; a union of rows would keep it forever
+        clipped = self.codex_row("a", active_intervals=[[T0, T0 + 9000]])
+        whole = self.codex_row("a", log_id="a", subagent=False, active_intervals=[[T0, T0 + 60], [T0 + 8000, T0 + 9000]])
+        self.assertEqual(self.hist.record(self.store, [clipped]), 1)
+        self.assertEqual(self.hist.record(self.store, [whole]), 1, "same updated_at, but the parse differs")
+        self.assertEqual(self.hist.record(self.store, [whole, clipped]), 0)
+        self.assertEqual(self.hist.load(self.store)[0]["active_intervals"], [[T0, T0 + 60], [T0 + 8000, T0 + 9000]])
+
+    def test_claude_whole_read_replaces_only_identifiable_legacy_main_intervals(self):
+        repo = self.git_repo("claude-gap", commit_at=T0 + 5000)
+        for role, expected in ((False, []), (True, ["ambiguous"]), (None, ["ambiguous"])):
+            with self.subTest(legacy_subagent=role):
+                store = Path(self.tmp.name, "claude-" + str(role) + ".jsonl")
+                old = self.codex_row("main", source="claude", active_intervals=[[T0, T0 + 9000]])
+                if role is not None:
+                    old["subagent"] = role
+                fresh = {**old, "log_id": "main", "subagent": False,
+                         "active_intervals": [[T0, T0 + 60], [T0 + 8000, T0 + 9000]]}
+                self.hist.record(store, [old])
+                original = store.read_bytes()
+                self.hist.record(store, [fresh])
+                self.assertTrue(store.read_bytes().startswith(original))
+                loaded, = self.hist.load(store)
+                if role is False:
+                    self.assertEqual(loaded["active_intervals"], fresh["active_intervals"])
+                row, = self.hist.report(store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                        now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(row["commits"], [])
+                self.assertEqual(["ambiguous"] * len(row["ambiguous_commits"]), expected)
+
+    def test_legacy_only_claude_uncertainty_does_not_require_a_fresh_companion_log(self):
+        repo = self.git_repo("legacy-only", commit_at=T0 + 5000)
+        for role in (None, True, False):
+            with self.subTest(role=role):
+                store = Path(self.tmp.name, "legacy-only-" + str(role) + ".jsonl")
+                legacy = self.codex_row("legacy", source="claude", active_intervals=[[T0, T0 + 9000]])
+                if role is not None:
+                    legacy["subagent"] = role
+                self.hist.record(store, [legacy])
+                row, = self.hist.report(store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                        now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(len(row["commits"]), 1 if role is False else 0)
+                self.assertEqual(len(row["ambiguous_commits"]), 0 if role is False else 1)
+                self.assertEqual(row["attribution_uncertain"], role is not False)
+        for source in ("kimi", "gemini"):
+            with self.subTest(source=source):
+                store = Path(self.tmp.name, source + ".jsonl")
+                self.hist.record(store, [self.codex_row("own-log", source=source, active_intervals=[[T0, T0 + 9000]])])
+                row, = self.hist.report(store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                        now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(len(row["commits"]), 1)
+                self.assertFalse(row["attribution_uncertain"])
+
+    def test_unidentified_legacy_fallback_survives_a_fresh_named_log(self):
+        repo = self.git_repo("legacy-fallback", commit_at=T0 + 5000)
+        entries = [{"project_id": "p1", "path": str(repo)}]
+        for mode, owned in (("missing-intervals", False), ("explicit-intervals", False), ("identified-main", True)):
+            with self.subTest(mode=mode):
+                store = Path(self.tmp.name, mode + ".jsonl")
+                legacy = self.codex_row("S", source="claude")
+                if mode == "explicit-intervals":
+                    legacy["active_intervals"] = [[T0, T0 + 9000]]
+                elif mode == "identified-main":
+                    legacy["subagent"] = False
+                rival = self.codex_row("R", subagent=False, log_id="R",
+                                       active_intervals=[[T0 + 4900, T0 + 5100]])
+                current = {**legacy, "subagent": False, "log_id": "S",
+                           "active_intervals": [[T0, T0 + 60], [T0 + 8000, T0 + 9000]]}
+                self.hist.record(store, [legacy, rival])
+                before = store.read_bytes()
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(next(row for row in rows if row["session_id"] == "R")["commits"], [])
+                self.hist.record(store, [current])
+                self.assertTrue(store.read_bytes().startswith(before))
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                rival_result = next(row for row in rows if row["session_id"] == "R")
+                self.assertEqual(len(rival_result["commits"]), int(owned))
+                self.assertEqual(len(rival_result["ambiguous_commits"]), int(not owned))
+
+    def test_identified_main_fallback_survives_a_different_child_log(self):
+        repo = self.git_repo("identified-fallback", commit_at=T0 + 5000)
+        entries = [{"project_id": "p1", "path": str(repo)}]
+        for source in ("claude", "codex"):
+            with self.subTest(source=source):
+                store = Path(self.tmp.name, source + "-identified.jsonl")
+                main = self.codex_row("S", source=source, subagent=False)
+                rival = self.codex_row("R", subagent=False, log_id="R",
+                                       active_intervals=[[T0 + 4900, T0 + 5100]])
+                child = {**main, "log_id": "C", "subagent": True, "started_at": T0 + 8000,
+                         "active_intervals": [[T0 + 8000, T0 + 9000]]}
+                self.hist.record(store, [main, rival])
+                original = store.read_bytes()
+                self.hist.record(store, [child])
+                self.assertTrue(store.read_bytes().startswith(original))
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                rival_result = next(row for row in rows if row["session_id"] == "R")
+                self.assertEqual(rival_result["commits"], [])
+                self.assertEqual(len(rival_result["ambiguous_commits"]), 1)
+                fresh_main = {**main, "log_id": "S", "active_intervals": [[T0, T0 + 60]]}
+                self.hist.record(store, [fresh_main])
+                rows = self.hist.report(store, entries, "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+                self.assertEqual(len(next(row for row in rows if row["session_id"] == "R")["commits"]), 1)
+
+    def test_codex_children_and_reviews_join_their_root_session_even_when_stored_under_their_own_id(self):
+        repo = self.git_repo("project-delta", commit_at=T0 + 5000)
+        self.hist.record(self.store, [
+            self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("root", log_id="worker", subagent=True, model="m2", active_intervals=[[T0 + 4800, T0 + 5200]]),
+            self.codex_row("root", log_id="review", subagent=True, model="codex-auto-review", active_intervals=[[T0 + 4900, T0 + 5100]]),
+            self.codex_row("legacy", active_intervals=[[T0 + 4900, T0 + 5100]]),  # a child as 1.6 stored it, under its own id
+            self.codex_row("root", log_id="legacy", subagent=True, active_intervals=[[T0 + 4900, T0 + 5100]])])
+        row, = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"}, now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual((row["session_id"], row["model"], len(row["commits"]), row["ambiguous_commits"]), ("root", "m", 1, []))
+
+    def test_codex_lineage_does_not_transfer_activity_between_projects(self):
+        first = self.git_repo("parent-project", commit_at=T0 + 5000)
+        second = self.git_repo("child-project", commit_at=T0 + 5000)
+        self.hist.record(self.store, [
+            self.codex_row("root", log_id="root", subagent=False, project_id="p1",
+                           active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("root", log_id="worker", subagent=True, project_id="p2", model="child-model",
+                           active_intervals=[[T0 + 4800, T0 + 5200]])])
+        loaded = {row["project_id"]: row for row in self.hist.load(self.store)}
+        self.assertEqual(set(loaded), {"p1", "p2"})
+        self.assertEqual(loaded["p1"]["active_intervals"], [[T0, T0 + 600]])
+        self.assertEqual(loaded["p2"]["active_intervals"], [[T0 + 4800, T0 + 5200]])
+        entries = [{"project_id": "p1", "path": str(first)}, {"project_id": "p2", "path": str(second)}]
+        first_report, = self.hist.report(self.store, entries, "p1", {"p1", "p2"},
+                                        now=T0 + 40 * 86400, slack_s=0)
+        second_report, = self.hist.report(self.store, entries, "p2", {"p1", "p2"},
+                                         now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual(first_report["commits"], [])
+        self.assertEqual(len(second_report["commits"]), 1)
+        self.assertEqual(second_report["model"], "child-model")
+
+    def test_root_sessions_keep_project_scope_across_worktrees_of_the_same_git(self):
+        repo = self.git_repo("scoped-main", commit_at=T0 + 5000)
+        worktree = Path(self.tmp.name, "scoped-worktree")
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(worktree)], cwd=repo,
+                       check=True, capture_output=True)
+        self.hist.record(self.store, [
+            self.codex_row("root", log_id="root", subagent=False, project_id="p1", active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("root", log_id="child", subagent=True, project_id="p2", active_intervals=[[T0 + 4800, T0 + 5200]])])
+        entries = [{"project_id": "p1", "path": str(repo)}, {"project_id": "p2", "path": str(worktree)}]
+        parent, = self.hist.report(self.store, entries, "p1", {"p1", "p2"}, now=T0 + 40 * 86400, slack_s=0)
+        child, = self.hist.report(self.store, entries, "p2", {"p1", "p2"}, now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual((parent["commits"], parent["ambiguous_commits"]), ([], []))
+        self.assertIsNone(parent["durability"])
+        self.assertEqual(len(child["commits"]), 1)
+
+    def test_same_session_id_in_different_cli_sources_keeps_separate_owners(self):
+        repo = self.git_repo("scoped-sources", commit_at=T0 + 5000)
+        self.hist.record(self.store, [
+            self.codex_row("same", log_id="same", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("same", source="claude", log_id="same", subagent=False,
+                           active_intervals=[[T0 + 4800, T0 + 5200]])])
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        by_source = {row["source"]: row for row in rows}
+        self.assertEqual(by_source["codex"]["commits"], [])
+        self.assertEqual(len(by_source["claude"]["commits"]), 1)
+
+    def test_record_deduplication_keeps_the_declared_project_scope(self):
+        row = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
+        other = {**row, "project_id": "p2"}
+        self.assertEqual(self.hist.record(self.store, [row]), 1)
+        self.assertEqual(self.hist.record(self.store, [other]), 1)
+        self.assertEqual(self.hist.record(self.store, [row, other]), 0)
+        self.assertEqual({r["project_id"] for r in self.hist.load(self.store)}, {"p1", "p2"})
+
+    def test_named_log_restoration_becomes_current_even_at_an_old_native_timestamp(self):
+        for same_timestamp in (True, False):
+            with self.subTest(same_timestamp=same_timestamp):
+                store = Path(self.tmp.name, "restored-" + str(same_timestamp) + ".jsonl")
+                first = self.codex_row("root", log_id="root", subagent=False, usage_complete=False,
+                                       total_tokens=7, active_intervals=[[T0, T0 + 600]])
+                second = {**first, "usage_complete": True, "total_tokens": 9,
+                          "updated_at": first["updated_at"] + (0 if same_timestamp else 60)}
+                self.assertEqual(self.hist.record(store, [first]), 1)
+                original = store.read_bytes()
+                self.assertEqual(self.hist.record(store, [second]), 1)
+                self.assertEqual(self.hist.record(store, [second]), 0)
+                self.assertEqual(self.hist.record(store, [first]), 1)
+                self.assertEqual(self.hist.record(store, [first]), 0)
+                current, = self.hist.load(store)
+                self.assertEqual((current["usage_complete"], current["total_tokens"], current["updated_at"]),
+                                 (False, 7, first["updated_at"]))
+                self.assertTrue(store.read_bytes().startswith(original))
+
+    def test_restored_self_identity_withdraws_an_obsolete_parent_alias(self):
+        repo = self.git_repo("restored-identity")
+        original = self.codex_row("child", log_id="child", subagent=False,
+                                  active_intervals=[[T0, T0 + 600]])
+        parent = self.codex_row("parent", log_id="parent", subagent=False,
+                                active_intervals=[[T0 + 4800, T0 + 5200]])
+        self.hist.record(self.store, [parent, original])
+        prefix = self.store.read_bytes()
+        self.hist.record(self.store, [{**original, "session_id": "parent", "subagent": True}])
+        self.assertEqual([r["session_id"] for r in self.hist.load(self.store)], ["parent"])
+        self.assertEqual(self.hist.record(self.store, [original]), 1)
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        by_id = {row["session_id"]: row for row in rows}
+        self.assertEqual(set(by_id), {"child", "parent"})
+        self.assertEqual(len(by_id["child"]["commits"]), 1)
+        self.assertEqual(by_id["parent"]["commits"], [])
+        self.assertTrue(self.store.read_bytes().startswith(prefix))
+
+    def test_project_local_self_identity_wins_over_a_conflicting_remote_parent(self):
+        repo = self.git_repo("local-lineage-conflict")
+        self.hist.record(self.store, [
+            self.codex_row("child", log_id="child", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", log_id="parent", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", log_id="child", project_id="p2", subagent=True,
+                           active_intervals=[[T0 + 4800, T0 + 5200]]),
+            self.codex_row("parent", log_id="parent", project_id="p2", subagent=False,
+                           active_intervals=[[T0 + 6000, T0 + 6200]])])
+        original = self.store.read_bytes()
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual({row["session_id"] for row in rows}, {"child", "parent"})
+        for row in rows:
+            self.assertEqual(row["commits"], [])
+            self.assertEqual(len(row["ambiguous_commits"]), 1)
+            self.assertIsNone(row["durability"])
+        other, = [row for row in self.hist.load(self.store) if row["project_id"] == "p2"]
+        self.assertEqual(other["session_id"], "parent")
+        self.assertEqual(len(other["activity_sources"]), 2)
+        self.assertEqual(self.store.read_bytes(), original)
+
+    def test_legacy_main_identity_wins_over_a_conflicting_remote_parent(self):
+        repo = self.git_repo("legacy-main-lineage-conflict")
+        self.hist.record(self.store, [
+            self.codex_row("child", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", subagent=False, active_intervals=[[T0, T0 + 600]]),
+            self.codex_row("parent", log_id="child", project_id="p2", subagent=True,
+                           active_intervals=[[T0 + 4800, T0 + 5200]])])
+        original = self.store.read_bytes()
+        rows = self.hist.report(self.store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                now=T0 + 40 * 86400, slack_s=0)
+        self.assertEqual({row["session_id"] for row in rows}, {"child", "parent"})
+        for row in rows:
+            self.assertEqual(row["commits"], [])
+            self.assertEqual(len(row["ambiguous_commits"]), 1)
+            self.assertIsNone(row["durability"])
+        self.assertEqual(self.store.read_bytes(), original)
+
+    def test_recording_current_logs_is_idempotent_and_torn_history_keeps_new_rows_readable(self):
+        parent = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
+        child = self.codex_row("root", log_id="child", subagent=True, active_intervals=[[T0 + 4800, T0 + 5200]])
+        self.assertEqual(self.hist.record(self.store, [parent, child]), 2)
+        self.assertEqual(self.hist.record(self.store, [parent, child]), 0)
+        repaired = {**parent, "usage_complete": False, "total_tokens": 7}
+        self.assertEqual(self.hist.record(self.store, [repaired, child]), 1)
+        self.assertEqual(self.hist.record(self.store, [repaired, child]), 0)
+        torn = Path(self.tmp.name, "torn.jsonl")
+        fragment = b'{"source":"unresolved-fragment'
+        torn.write_bytes(fragment)
+        self.assertEqual(self.hist.record(torn, [parent]), 1)
+        self.assertEqual(self.hist.load(torn)[0]["log_id"], "root")
+        self.assertTrue(torn.read_bytes().startswith(fragment + b"\n"))
+
+    def test_concurrent_recording_deduplicates_current_observations_under_one_lock(self):
+        row = self.codex_row("root", log_id="root", subagent=False, active_intervals=[[T0, T0 + 600]])
+        with ThreadPoolExecutor(4) as pool:
+            counts = list(pool.map(lambda _: self.hist.record(self.store, [row]), range(8)))
+        self.assertEqual(sum(counts), 1)
+        self.assertEqual(len(self.store.read_text().splitlines()), 1)
+
+    def test_commit_routes_follow_the_contributing_logs_activity(self):
+        cases = [
+            ("child", 5000, [[T0, T0 + 600], [T0 + 8000, T0 + 8600]], 0, "child-model", "low"),
+            ("resumed", 8200, [[T0, T0 + 600], [T0 + 8000, T0 + 8600]], 0, "parent-model", "high"),
+            ("overlap", 5000, [[T0, T0 + 5200]], 0, "mixed", "mixed"),
+            ("slack", 5300, [[T0, T0 + 600]], 100, "child-model", "low"),
+        ]
+        for name, offset, parent_spans, slack, model, effort in cases:
+            with self.subTest(name=name):
+                repo = self.git_repo("route-" + name, commit_at=T0 + offset)
+                store = Path(self.tmp.name, name + ".jsonl")
+                self.hist.record(store, [
+                    self.codex_row("root", log_id="root", subagent=False, model="parent-model", effort="high",
+                                   effort_segments=[[T0, "parent-model", "high"]], active_intervals=parent_spans),
+                    self.codex_row("root", log_id="child", subagent=True, model="child-model", effort="low",
+                                   effort_segments=[[T0 + 4800, "child-model", "low"]],
+                                   active_intervals=[[T0 + 4800, T0 + 5200]])])
+                row, = self.hist.report(store, [{"project_id": "p1", "path": str(repo)}], "p1", {"p1"},
+                                        now=T0 + 40 * 86400, slack_s=slack)
+                self.assertEqual(len(row["commits"]), 1)
+                route, = row["commit_efforts"].values()
+                self.assertEqual(route, {"model": model, "effort": effort})
+
+    def test_a_linked_worktree_is_one_project_with_its_repository(self):
+        repo = self.git_repo("project-zeta")
+        worktree = Path(self.tmp.name, "worktrees", "w1", "project-zeta")
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(worktree)], cwd=repo, check=True, capture_output=True)
+        with mock.patch.object(self.hist, "TEMPORARY", ()):  # this test's repositories live in the temporary directory
+            self.assertEqual({self.hist.git_root(str(path)) for path in (repo, repo / "sub", worktree)}, {str(repo)})
+
+    def test_auto_follows_a_session_into_the_repository_its_rows_moved_to(self):
+        repo, home = self.git_repo("project-eta"), Path(self.tmp.name, "home")
+        home.mkdir()
+        session = self.session("a", "2026-10-22T10:05:00Z", project=None, cwd=str(home), cwds=[str(home), str(repo / "sub")])
+        with mock.patch.object(self.hist, "TEMPORARY", ()):
+            rows = self.hist.snapshot(FakeCollector([session]), [], allowed=set(), now=None, auto=True)
+        self.assertEqual([r["project_id"] for r in rows], [f"git:{repo}"])
+
+    def test_nothing_is_recorded_until_the_user_opts_in(self):
+        # the open-source default: observatory.auto is off; only a config naming projects (or auto: true) records anything
+        home = Path(self.tmp.name, "home")
+        home.mkdir()
+        result = subprocess.run([sys.executable, str(ROOT / "scripts" / "observatory_history.py"), "record", "--config",
+                                 str(home / "config.json"), "--store", str(self.store)],
+                                env={**os.environ, "HOME": str(home)}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(self.store.exists())
+        self.assertEqual(self.hist.allowed(self.hist.read_config(home / "config.json"), [], self.store), set())
 
     def test_report_runs_the_observatory_on_an_opted_in_project_and_refuses_others(self):
         repo = Path(self.tmp.name, "repo")

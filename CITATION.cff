@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, cite the repository and the exact version or commit used."
+type: software
+title: "007 Framework"
+authors:
+  - family-names: Cavalcanti
+    given-names: Marcus
+repository-code: "https://github.com/marcuscavalcanti/007-framework"
+url: "https://github.com/marcuscavalcanti/007-framework"
+license: MIT
+abstract: "Provider-neutral tooling for evidence-bounded agentic coding, local receipts, and pre-registered replay experiments."

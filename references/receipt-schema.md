@@ -162,13 +162,37 @@ shell-wrapper shapes; it does not authenticate the executable or provider.
 The executor must still produce the outcome receipt at
 `FRAMEWORK_007_RECEIPT_PATH`; telemetry alone never manufactures acceptance.
 
-007 parses stdout incrementally (1 MiB per line, 32 MiB per stream), forwards
+007 parses stdout incrementally (1 MiB retained envelope, 256 MiB per stream), forwards
 the original output, and retains only counters, estimates, timings and hashes
 in `.007/tasks/<task-id>.telemetry.json` with owner-only permissions. It uses
 the existing task and cleanup boundary, then enriches the persisted receipt
 without rewriting the executor's source receipt. `native_telemetry` is computed
 by `run`, not accepted by manual `record`. Its stream hash binds observed bytes,
 not authenticated provider authorship or a billing invoice.
+
+Oversized Codex `item.started/updated/completed` and Claude `user/assistant`
+events retain their envelope. A bounded in-memory lexer replaces strings longer
+than 64 KiB with JSON null, validates their UTF-8 and escape syntax, and delegates
+the remaining grammar to the standard JSON parser. Identity metadata is checked
+across the whole envelope, including fields after large content. The
+`oversized_content_rows` counter records these events. Large keys, excessive
+nesting, oversized control events and envelopes exceeding 1 MiB after compaction
+invalidate telemetry. Text compaction writes no payload to disk. Fatal accounting
+errors freeze accepted counters at the same byte prefix for every chunk layout.
+Service errors continue scanning to retain a later, more severe service class.
+An error item's model-observation message must remain inspectable. A compacted
+message invalidates telemetry with `invalid-model-observation`, including a
+reroute whose reason exceeds the string-body limit.
+
+The replay helper `scripts/native_runner.py` drains stdout and stderr concurrently
+through bounded in-memory reads. Its receipt retains the existing `stderr_bytes`
+count and adds `streams_closed`. Both pipes must reach EOF for `valid` to be true.
+An unconfirmed pipe retains observed prefix diagnostics with
+`stream-closure-unconfirmed`; its stderr count covers bytes consumed so far.
+
+Claude's native cache and thinking aliases are validated whenever present.
+Canonical counters remain supported, and simultaneous native/canonical values
+must agree. An absent optional counter retains unknown availability.
 
 Codex completed-turn usage is summed once; cached input and reasoning output
 are not added again. Claude uses one final fresh-session usage/cost result,
@@ -193,7 +217,7 @@ For authority-bound actions, the executed event is saved before telemetry so
 a telemetry collision or I/O failure cannot suppress that prior execution record.
 If cleanup is unconfirmed and telemetry persistence also fails, the error keeps
 the cleanup state and the telemetry failure; no terminal receipt advances.
-Malformed, missing, duplicated, oversized or unfinished telemetry cannot publish
+Malformed, missing, duplicated, over-limit or unfinished telemetry cannot publish
 a native-mode receipt. A controller crash, shutdown signal, spawn exception or
 broken stdout can still leave only an open start; this is not universal capture.
 The mode is opt-in and does not retrofit existing interactive sessions.

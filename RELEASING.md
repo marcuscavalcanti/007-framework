@@ -54,7 +54,7 @@ is the `007` CLI, the receipt and report schemas, and the dashboard snapshot.
    shasum -a 256 -c evidence/vX.Y.Z/manifest.sha256
    ```
 
-   The tag CI checks it with `sha256sum --check`. Regenerate it after any
+   The tag CI checks it with `shasum -a 256 --check` on Linux and macOS. Regenerate it after any
    change, including a review fix.
    Spaces in tracked filenames are preserved. Unsupported escape characters or
    symbolic links (including the destination and its parents) fail before
@@ -97,12 +97,24 @@ is the `007` CLI, the receipt and report schemas, and the dashboard snapshot.
      `git ls-tree -r --name-only vX.Y.Z | wc -l`).
    - **Qualification:** actual-main CI, exact-tag CI, independent review status.
 
-Planned: a tag-triggered release workflow that builds the archive, attaches
-build provenance through OIDC, and creates the release, replacing steps 3–5.
-Until it exists, run them by hand.
+The tag-triggered `release.yml` prepares the source archive twice, checks their
+bytes and the extracted manifest, computes SHA256SUMS and attaches GitHub build
+provenance through OIDC. It accepts stable annotated tags whose version agrees
+with the CLI and whose release record exists. It retains a source-candidate
+Actions artifact for the maintainer. Exact-tag CI, independent review and the
+publication authorization remain required before step 5. Account configuration,
+PyPI Trusted Publishing and announcement each keep their separate approval.
 
 ## Rules
 
+- CI runs for pull requests, pushes to `main`, and `v*` tags. Development
+  branches receive CI through their pull request. Main and tag runs qualify
+  their own release gates.
+- CI retains the required `test (3.11)`, `test (3.12)` and `test (3.13)` check
+  names on Linux and adds `test (3.13) macOS`. The package job exercises a
+  wheel through pipx on Python 3.11. Dependabot proposes weekly GitHub Actions
+  updates. Changes to required checks or account protection need a separate
+  maintainer decision.
 - A CI failure on `main` is investigated. Re-run only for a demonstrated flake,
   and record it in the release notes.
 - The independent review follows `AGENTS.md` reviewer identity levels.

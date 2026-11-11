@@ -605,8 +605,9 @@ class DashboardTests(unittest.TestCase):
     def test_record_rejects_non_finite_or_unaccounted_cost(self):
         cli = self.module("framework_cli")
         base = json.loads((ROOT / "examples/task.receipt.example.json").read_text())
-        with self.assertRaisesRegex(ValueError, "cost_usd"):
-            cli.validate_receipt({**base, "cost_usd": float("nan")})
+        for cost in (float("nan"), 10 ** 400):
+            with self.subTest(cost_type=type(cost).__name__), self.assertRaisesRegex(ValueError, "cost_usd"):
+                cli.validate_receipt({**base, "cost_usd": cost})
         with self.assertRaisesRegex(ValueError, "cost_source"):
             cli.validate_receipt({**base, "cost_source": "unaccounted"})
         with self.assertRaisesRegex(ValueError, "authority_summary"):
@@ -1206,6 +1207,9 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(stored["acceptance_evidence"], "controlled")
             self.assertEqual(stored["acceptance_sha256"], hashlib.sha256(acceptance.read_bytes()).hexdigest())
             self.assertEqual(stored["checks"][0]["command"], [sys.executable, "-c", "print('gate-ok')"])
+            self.assertEqual(stored["checks"][0]["command_sha256"], hashlib.sha256(
+                json.dumps([sys.executable, "-c", "print('gate-ok')"]).encode()).hexdigest())
+            self.assertTrue(stored["checks"][0]["diagnostic_text_retained"])
             self.assertEqual(stored["checks"][0]["exit"], 0)
             self.assertRegex(stored["checks"][0]["stdout_sha256"], r"^[0-9a-f]{64}$")
             self.assertRegex(stored["checks"][0]["stderr_sha256"], r"^[0-9a-f]{64}$")

@@ -3,7 +3,9 @@
 
 import json
 import copy
+import fnmatch
 import hashlib
+import ipaddress
 import math
 import os
 import stat
@@ -15,6 +17,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from urllib.parse import urlsplit
 
 import framework_cli
@@ -28,7 +31,7 @@ import touch_rate
 
 
 MISSING = {"", "unmeasured", "pending", "N/A", "N/D", "unknown", None}  # "N/D": legacy receipts, still accepted
-VERSION = "1.6.2"
+VERSION = "1.7.0"
 ACTIVITY_COLLECTOR = local_activity.ActivityCollector()
 TELEMETRY_FIELDS = ("provider", "model", "effort", "tokens", "wall_s")
 RAW_METRICS = (
@@ -55,7 +58,10 @@ RAW_METRICS = (
 
 
 def is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def is_known_label(value):
@@ -1255,6 +1261,81 @@ def load_lab_report(config=None):
     return {**report["verdict"], "bound_to": binding if binding and all(isinstance(v, str) and v for v in binding.values()) else None}
 
 
+def lab_experiment(name, directories):
+    """007's own spend in `007 lab run` results: one attempt per cell with a runner receipt or a result.
+    Numeric receipt cost and provenance establish accounting; missing receipts stay unpriced even after a failed execution.
+    Costs are the receipts' client estimates, not an invoice."""
+    attempts, stamps, dispatch_errors = {}, [], 0
+    for directory in directories:
+        results, receipts = replay_eval.read_cell_artifacts(directory)
+        for identifier, receipt in receipts.items():
+            attempts.setdefault((directory, identifier), {})["receipt"] = receipt
+        for identifier, result in results.items():
+            attempts.setdefault((directory, identifier), {})["valid"] = result.get("valid") is True
+        history, invalid, ambiguous = replay_eval.load_dispatch_history(directory)
+        dispatch_errors += invalid + ambiguous
+        for row in history:
+            attempts.setdefault((directory, row["cell"]), {})
+            stamps.extend(harness_report._instant(row.get(key)) for key in ("dispatched_at", "finished_at"))
+    stamps = sorted(stamp for stamp in stamps if stamp)
+    rows = attempts.values()
+    for item in rows:
+        receipt = item.get("receipt")
+        cost = (receipt or {}).get("cost_usd")
+        source = (receipt or {}).get("cost_source")
+        accounted = is_known_label(source) and source != "unavailable"
+        item["cost"] = cost if accounted and harness_report._valid_money(cost) else None
+    priced = [item for item in rows if item["cost"] is not None]
+    return {
+        "name": name, "available": True, "error": None,
+        "first_attempt_at": stamps[0].isoformat() if stamps else None,
+        "last_attempt_at": stamps[-1].isoformat() if stamps else None,
+        "attempts": len(rows),
+        "dispatch_errors": dispatch_errors,
+        "valid": sum(item.get("valid") is True for item in rows),
+        "invalid": sum(item.get("valid") is False for item in rows),
+        "orphans": sum("valid" not in item for item in rows),
+        "cost_usd": round(float(harness_report._money_sum(item["cost"] for item in priced)), 6),
+        "invalid_cost_usd": round(float(harness_report._money_sum(
+            item["cost"] for item in priced if item.get("valid") is not True)), 6),
+        "unpriced": len(rows) - len(priced),
+        "cost_sources": dict(Counter(item["receipt"]["cost_source"] for item in priced
+                                     if item.get("receipt") and is_known_label(item["receipt"].get("cost_source")))),
+    }
+
+
+def load_lab_ledger(config=None):
+    """Spend caused by 007 itself, per experiment in observatory.lab_ledger ([{"name", "results": dir or [dirs]}]), apart from
+    the user's own agent usage. Relative paths are relative to the config file; an entry that cannot be read is unavailable."""
+    path = Path(config) if config else observatory_history.HOME / "config.json"
+    ledger = {"configured": False, "error": None, "experiments": [], "total_cost_usd": 0, "total_complete": True}
+    try:
+        entries = observatory_history.read_config(path).get("observatory", {}).get("lab_ledger") or []
+    except (OSError, ValueError) as exc:
+        return {**ledger, "error": f"unreadable config: {exc}"[:300]}
+    for index, entry in enumerate(entries):
+        entry = entry if isinstance(entry, dict) else {}
+        name = entry["name"] if isinstance(entry.get("name"), str) and entry["name"] else f"lab_ledger[{index}]"
+        results = [entry.get("results")] if isinstance(entry.get("results"), str) else entry.get("results")
+        if not isinstance(results, list) or not results or not all(isinstance(item, str) and item for item in results):
+            ledger["experiments"].append({"name": name, "available": False, "error": "results must be a directory or a list of them"})
+            continue
+        try:
+            ledger["experiments"].append(lab_experiment(name, [Path(path.parent, Path(item).expanduser()) for item in results]))
+        except OSError:
+            ledger["experiments"].append({"name": name, "available": False, "error": "results directory unavailable"})
+        except ValueError:
+            ledger["experiments"].append({"name": name, "available": False, "error": "unreadable receipt or result"})
+    available = [item for item in ledger["experiments"] if item["available"]]
+    try:
+        total = round(float(harness_report._money_sum(item["cost_usd"] for item in available)), 6)
+    except ValueError:
+        total = None
+    return {**ledger, "configured": bool(ledger["experiments"]), "total_cost_usd": total,
+            "total_complete": total is not None and len(available) == len(ledger["experiments"]) and not any(
+                item["unpriced"] or item["dispatch_errors"] for item in available)}
+
+
 def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provider=None, project_provider=None, curation_provider=None,
                    observatory_provider=None):
     entries, registry_errors = registry_entries(registry)
@@ -1298,6 +1379,7 @@ def build_snapshot(registry, touch_provider=touch_rate.calculate, activity_provi
         },
         "causal_evidence": load_causal_evidence(),
         "lab_report": load_lab_report(),
+        "lab_ledger": load_lab_ledger(),
         "curation": {key: value for key, value in curation.items() if key not in ("by_project", "proposals_by_project")},
     }
 
@@ -1371,8 +1453,43 @@ def handler_class(registry, static_dir, touch_provider, activity_provider=None, 
             self.end_headers()
             self.wfile.write(payload)
 
+        def valid_host(self):
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1:
+                return False
+            authority = hosts[0].strip()
+            if not authority or any(ord(c) <= 32 or ord(c) >= 127 for c in authority):
+                return False
+            try:
+                parsed = urlsplit("//" + authority)
+                if (parsed.username is not None or parsed.password is not None or parsed.path or parsed.query
+                        or parsed.fragment or not parsed.hostname or authority.endswith(":")):
+                    return False
+                if (parsed.port if parsed.port is not None else 80) != self.server.server_port:
+                    return False
+                local = self.connection.getsockname()[0]
+                allowed = {local, self.server.server_address[0],
+                           getattr(self.server, "dashboard_bind_host", self.server.server_address[0])}
+                if ipaddress.ip_address(local).is_loopback:
+                    allowed.add("localhost")
+                return parsed.hostname.removesuffix(".").casefold() in {h.removesuffix(".").casefold() for h in allowed}
+            except ValueError:
+                return False
+
         def do_GET(self):
-            request = urlsplit(self.path)
+            if not self.valid_host():
+                self.json_response(403, {"error": "invalid host"})
+                return
+            # BaseHTTPRequestHandler normalizes a leading //, so inspect the original request target as well.
+            target = self.requestline.split()[1]
+            try:
+                request = urlsplit(target)
+            except ValueError:
+                self.json_response(400, {"error": "invalid request target"})
+                return
+            if not target.startswith("/") or target.startswith("//") or request.scheme or request.netloc:
+                self.json_response(400, {"error": "only origin-form request targets are supported"})
+                return
             if request.query or request.fragment:
                 self.json_response(400, {"error": "query parameters are not supported"})
                 return
@@ -1416,10 +1533,19 @@ def handler_class(registry, static_dir, touch_provider, activity_provider=None, 
     return Handler
 
 
+class DashboardHTTPServer(ThreadingHTTPServer):
+    """Bind without reverse DNS, which the dashboard handler does not use."""
+
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def create_server(host, port, registry, static_dir, activity_provider=None, *, curation_checkpoint=None, curation_vault=None, background=False):
     cache = TouchCache()
-    server = ThreadingHTTPServer(
+    server = DashboardHTTPServer(
         (host, port), handler_class(Path(registry), Path(static_dir), cache, activity_provider, curation_checkpoint, curation_vault, background)
     )
     server.daemon_threads = True
+    server.dashboard_bind_host = host
     return server

@@ -4,8 +4,10 @@ Level 0: a session was observed (model, effort, times). Level 1: commits are att
 is mature. Attribution is a heuristic: a commit belongs to the one session of this repository whose active intervals (row
 timestamps, local_activity.active_intervals) +- slack hold its committer time; a session without intervals falls back to
 [start - slack, end + slack]; inside two sessions it is "ambiguous", never guessed. Commits come from every local branch and every
-worktree's HEAD (BRANCHES). Durability is line survival (git blame) on HEAD at the last commit before each window's cutoff; an
-attributed commit HEAD does not reach is "not merged": neither surviving nor reworked. Callers pass the project's sessions
+worktree's HEAD (BRANCHES). Rows sharing a session id (Claude subagent logs, Codex subagent and auto-review threads) are one
+owner; each attributed commit carries the model and effort in force at its time (commit_efforts, from effort_segments).
+Durability is line survival (git blame) on HEAD at the last commit before each window's cutoff; an attributed commit HEAD does
+not reach is "not merged": neither surviving nor reworked. Callers pass the project's sessions
 (local_activity maps cwd to project) and, as rivals, those of other projects on the same repository (a worktree registered apart).
 Level 3 (Calibrated): `calibrated` reads a holdout analysis (007-thesis-d-holdout-analysis/v1) configured for the session's
 project, CLI and model; `questions` turns one session into the dashboard's three questions. Level 2 and External are not built.
@@ -61,19 +63,46 @@ def _spans(session, slack_s):
     return [] if start is None or end is None else [(start - slack_s, end + slack_s)]
 
 
+def _owner_key(session):
+    return session.get("source"), session.get("project_id"), session["session_id"]
+
+
 def attribute(repo, sessions, slack_s=600):
-    windows = [(s["session_id"], _spans(s, slack_s)) for s in sessions]
-    result = {"sessions": {s["session_id"]: [] for s in sessions}, "unattributed": {},
-              "ambiguous": {s["session_id"]: [] for s in sessions}}
+    """Internal maps use (source, project, root session). Parent and child logs share an owner only inside that scope."""
+    windows = [(_owner_key(s), _spans(s, slack_s)) for s in sessions]
+    result = {"sessions": {_owner_key(s): [] for s in sessions}, "unattributed": {},
+              "ambiguous": {_owner_key(s): [] for s in sessions}, "committed_at": {}}
     for sha, when in reversed(_commits(repo)):  # oldest first
-        owners = [sid for sid, spans in windows if any(start <= when <= end for start, end in spans)]
-        if len(owners) == 1:
+        result["committed_at"][sha] = when
+        owners = list(dict.fromkeys(sid for sid, spans in windows if any(start <= when <= end for start, end in spans)))
+        uncertain = any(start - slack_s <= when <= end + slack_s
+                        for session in sessions for start, end in session.get("uncertain_intervals") or [])
+        if len(owners) == 1 and not uncertain:
             result["sessions"][owners[0]].append(sha)
         else:
-            result["unattributed"][sha] = "ambiguous" if owners else "no-session"
+            result["unattributed"][sha] = "uncertain-history" if uncertain else "ambiguous" if owners else "no-session"
             for sid in owners:
                 result["ambiguous"][sid].append(sha)
     return result
+
+
+def route_at(session, when, slack_s=0):
+    """Route at epoch `when`, limited to contributing logs' activity when present. Differing concurrent routes are mixed,
+    missing identity is unmeasured. Within a log, use its latest segment by then, or its first segment/own labels."""
+    if "activity_sources" in session:
+        routes = [route_at(source, when) for source in session["activity_sources"]
+                  if any(start <= when <= end for start, end in _spans(source, slack_s))]
+        result = {}
+        for name in ("model", "effort"):
+            values = {route.get(name) for route in routes}
+            if not values or values.intersection({None, "", "unmeasured", "unknown"}):
+                result[name] = "unmeasured"
+            else:
+                result[name] = next(iter(values)) if len(values) == 1 else "mixed"
+        return result
+    segments = [s for s in session.get("effort_segments") or [] if s[0] is not None]
+    current = next((s for s in reversed(segments) if s[0] <= when), segments[0] if segments else None)
+    return {"model": current[1], "effort": current[2]} if current else {k: session.get(k) for k in ("model", "effort")}
 
 
 def _last(repo, shas):
@@ -136,7 +165,7 @@ def observe(repo, sessions, now, slack_s=600, windows=(7, 30), rivals=(), surviv
     head = _on_head(repo) if any(owned.values()) else set()
     rows = []
     for s in sessions:
-        shas = owned.get(s["session_id"], [])
+        shas = owned.get(_owner_key(s), [])
         integrated = [sha for sha in shas if sha in head]
         dur = durability(repo, integrated, now, windows) if integrated else None
         mature = bool(dur) and any(v["status"] == "mature" for v in dur.values())
@@ -145,10 +174,17 @@ def observe(repo, sessions, now, slack_s=600, windows=(7, 30), rivals=(), surviv
             until = min(_ts(now), _last(repo, integrated) + survival_days * DAY)
             extra = {"line_survival": line_survival(repo, integrated, now, survival_days),
                      "corrective_share": corrective_share(repo, integrated, until)}
-        rows.append({**{k: s.get(k) for k in ("session_id", "source", "model", "effort", "started_at", "updated_at",
+        rows.append({**{k: s.get(k) for k in ("session_id", "source", "project_id", "model", "effort", "started_at", "updated_at",
                                                "total_tokens", "reasoning_output_tokens")},
+                     "usage_complete": s.get("usage_complete"),
+                     "known_total_tokens": s.get("total_tokens"),
+                     "known_reasoning_output_tokens": s.get("reasoning_output_tokens"),
+                     "attribution_uncertain": bool(s.get("uncertain_intervals")),
+                     "total_tokens": s.get("total_tokens") if s.get("usage_complete") is True else None,
+                     "reasoning_output_tokens": s.get("reasoning_output_tokens") if s.get("usage_complete") is True else None,
                      "commits": shas, "unintegrated_commits": [sha for sha in shas if sha not in head],
-                     "ambiguous_commits": attribution["ambiguous"].get(s["session_id"], []),
+                     "commit_efforts": {sha: route_at(s, attribution["committed_at"][sha], slack_s) for sha in shas},
+                     "ambiguous_commits": attribution["ambiguous"].get(_owner_key(s), []),
                      "durability": dur, "evidence_level": 1 if mature else 0, **extra})
     return rows
 
@@ -314,6 +350,8 @@ def questions(row, q3):
     """The dashboard's three questions for one observed session; q3 comes from `calibrated` or `no_evidence`."""
     tokens, reasoning = row.get("total_tokens"), row.get("reasoning_output_tokens")
     quota = "quota N/A" if tokens is None else f"{tokens} tokens ({'N/A' if reasoning is None else reasoning} reasoning)"
+    if tokens is None and row.get("usage_complete") is False and row.get("known_total_tokens") is not None:
+        quota = f"quota incomplete ({row['known_total_tokens']} known tokens)"
     q1 = {"question": "What did you run?", "level": 0, "badge": "Observed",
           "answer": " · ".join([row.get("source") or "CLI N/A", row.get("model") or "model N/A",
                                 f"effort {row.get('effort') or 'unmeasured'}", _duration(row), quota])}
@@ -321,6 +359,8 @@ def questions(row, q3):
     if not row.get("commits"):
         n = len(row.get("ambiguous_commits") or [])
         answer = f"not attributed: {n} commit(s) in the window of more than one session" if n else "not attributed: no commit in the session's window"
+        if n and row.get("attribution_uncertain"):
+            answer = f"not attributed: {n} commit(s) overlap unresolved historical activity"
         q2 = {"question": "Did it last?", "level": None, "badge": None, "answer": answer, "windows": None}
     elif not windows:
         q2 = {"question": "Did it last?", "level": None, "badge": None, "windows": None,

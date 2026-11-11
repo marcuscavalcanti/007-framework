@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "007-framework"
+dynamic = ["version"]
+description = "Evidence-bounded agent orchestration and local replay instrumentation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+007 = "seven_framework._entrypoint:main"
+
+[project.urls]
+Repository = "https://github.com/marcuscavalcanti/007-framework"
+
+[tool.setuptools]
+packages = ["seven_framework"]
+package-dir = {seven_framework = "."}
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = {attr = "seven_framework.__version__"}
+
+[tool.setuptools.package-data]
+seven_framework = [
+    "SKILL.md",
+    "scripts/*.py",
+    "dashboard/*.html",
+    "dashboard/*.css",
+    "dashboard/*.js",
+    "references/*.md",
+    "examples/*.json",
+    "evidence/v1.4.0/causal-roi-result.json",
+]

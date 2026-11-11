@@ -5,7 +5,7 @@ const byId = (id) => document.getElementById(id);
 const percent = (value, digits = 0) => value == null ? "N/A" : `${(value * 100).toFixed(digits)}%`;
 const decimal = (value, digits = 1) => value == null ? "N/A" : Number(value).toFixed(digits);
 const money = (value) => value == null ? "N/A" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 3 : 2 }).format(value);
-const integer = (value) => new Intl.NumberFormat("en-US", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
+const integer = (value) => value === null ? "N/A" : new Intl.NumberFormat("en-US", { notation: value >= 1_000_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value || 0);
 const equivalentMoney = (activity = {}) => activity.cost_usd_estimate != null ? money(activity.cost_usd_estimate) : activity.cost_usd_known_sum > 0 ? `≥ ${money(activity.cost_usd_known_sum)}` : "N/A";
 const terminalMoney = (activity = {}) => activity.reported_cost_sessions ? `${activity.reported_cost_coverage < 1 ? "≥ " : ""}${money(activity.cost_usd_reported_sum)} · ${percent(activity.reported_cost_coverage)}` : "N/A";
 const activityTokens = (activity = {}) => `${integer(activity.tokens_total)}${activity.usage_incomplete_sessions > 0 ? " · partial" : ""}`;
@@ -379,7 +379,7 @@ function renderTrial(trial) {
   const band = (b) => (Array.isArray(b) ? `${pp(b[0])} to ${pp(b[1])} pp` : "N/A");
   const arms = (by) => `medium ${pct(by?.medium)}, xhigh ${pct(by?.xhigh)}`;
   const e = trial.enrollment || {};
-  box.append(element("h3", null, `Effort trial · ${trial.trial_id} · ${trial.enabled ? "running" : "off"} · verdict: ${trial.verdict}`));
+  box.append(element("h4", null, `Effort trial · ${trial.trial_id} · ${trial.enabled ? "running" : "off"} · verdict: ${trial.verdict}`));
   const gates = Object.entries(trial.gates || {}).map(([k, v]) => `${k} ${v ? "ok" : "not yet"}`).join(" · ");
   // a session without the hook inherits the arm in force, so sessions cluster in draws: never call them drawn
   const enrollment = !trial.enabled ? "Enrollment paused (trial off)" : `Enrollment ${e.open ? "open" : `closed ${String(e.closed_at || "").slice(0, 10)}`}`;
@@ -409,7 +409,7 @@ function renderObservatory(project) {
   status.textContent = `${integer(view.sessions.length)} recorded session(s) · levels built: ${(view.parameters?.levels_built || []).join(", ")} · each answer carries its badge; no badge = no evidence to judge.`;
   for (const c of view.calibrations || []) {
     const box = element("div", "observatory-block");
-    box.append(element("h3", null, `Calibrated on your repository · ${c.cli} · ${c.model}`));
+    box.append(element("h4", null, `Calibrated on your repository · ${c.cli} · ${c.model}`));
     if (c.error) box.append(element("p", "measurement-note", `Unreadable analysis: ${c.error}`));
     for (const [effort, v] of Object.entries(c.by_effort || {})) box.append(element("p", "observatory-answer", `At ${effort}: [${v.badge || "no badge"}] ${v.answer}`));
     if (c.limits) box.append(element("p", "measurement-note", c.limits));
@@ -417,7 +417,7 @@ function renderObservatory(project) {
   }
   for (const s of (view.sessions || []).slice(-10).reverse()) {
     const box = element("div", "observatory-block");
-    box.append(element("h3", null, `Session ${String(s.session_id).slice(0, 8)} · ${s.source || "CLI N/A"} · started ${s.started_at ?? "N/A"}`));
+    box.append(element("h4", null, `Session ${String(s.session_id).slice(0, 8)} · ${s.source || "CLI N/A"} · started ${s.started_at ?? "N/A"}`));
     for (const q of s.questions || []) {
       box.append(element("p", "observatory-answer", `${q.question} [${q.badge || "no badge"}] ${q.answer}`));
       if (q.limits) box.append(element("p", "measurement-note", q.limits));
@@ -620,6 +620,40 @@ function renderEvidence() {
     : "Spread N/A");
 }
 
+const shortDateTime = (value) => {
+  const date = typeof value === "string" ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? new Intl.DateTimeFormat("en-US", {dateStyle: "medium", timeStyle: "short", hourCycle: "h23"}).format(date) : "N/A";
+};
+
+// 007's own spend, summed from `007 lab run` receipts: global, never filtered by the selected project
+function renderLabLedger(ledger) {
+  const experiments = ledger?.experiments || [];
+  const body = byId("lab-ledger-body");
+  body.replaceChildren();
+  byId("lab-ledger-scroll").hidden = byId("lab-ledger-total").hidden = !experiments.length;
+  if (!experiments.length) {
+    setText("lab-ledger-note", `No 007 experiments configured${ledger?.error ? ` (${ledger.error})` : ""}.`);
+    return;
+  }
+  setText("lab-ledger-total", `${ledger.total_complete ? "" : "≥ "}${money(ledger.total_cost_usd)} in all · estimate`);
+  setText("lab-ledger-note", "Attempt records and retained receipt costs in each configured 007 lab run directory. Spend caused by 007 is tracked separately from your agents' own usage. Client-side cost estimate. ≥ marks missing cost, incomplete dispatch history or an unavailable experiment.");
+  for (const item of experiments) {
+    const row = element("tr");
+    row.append(element("td", null, `${item.name}${item.dispatch_errors ? " · dispatch history incomplete" : ""}`));
+    if (!item.available) {
+      const cell = element("td", "dim", `Unavailable: ${item.error || "N/A"}`);
+      cell.colSpan = 9;
+      row.append(cell);
+    } else {
+      const atLeast = item.unpriced || item.dispatch_errors ? "≥ " : "";
+      for (const [text, cls] of [[shortDateTime(item.first_attempt_at)], [shortDateTime(item.last_attempt_at)], [`${item.dispatch_errors ? "≥ " : ""}${integer(item.attempts)}`, "num"],
+          [integer(item.valid), "num"], [integer(item.invalid), "num"], [integer(item.orphans), "num"], [`${atLeast}${money(item.cost_usd)}`, "num"],
+          [`${atLeast}${money(item.invalid_cost_usd)}`, "num"], [Object.keys(item.cost_sources || {}).sort().join(", ") || "source N/A"]]) row.append(element("td", cls, text));
+    }
+    body.append(row);
+  }
+}
+
 // ---- verdict home: what the evidence supports for the selected scope, never more
 const JUDGED = ["above-necessary", "good-choice", "no-cheaper-proven", "cannot-spend-less"];
 const SAYS = {
@@ -658,11 +692,15 @@ function effortScores(projects, now) {
   const judged = sessions.filter((session) => JUDGED.includes(session.questions?.[2]?.verdict));
   const enough = judged.filter((session) => session.questions[2].verdict !== "above-necessary");
   const tokens = (rows) => rows.reduce((sum, session) => sum + (session.total_tokens || 0), 0);
+  const completeUsage = judged.every((session) => session.usage_complete === true &&
+    Number.isFinite(session.total_tokens) && session.total_tokens >= 0);
+  const judgedTokens = tokens(judged), enoughTokens = tokens(enough);
   const every = projects.flatMap((project) => project.observatory?.sessions || []);  // a 30-day window only matures on older sessions
   const mature = every.map((session) => session.durability?.["30"]).filter((window) => window?.status === "mature" && window.lines_added);
   const added = mature.reduce((sum, window) => sum + window.lines_added, 0);
   const calibrated = projects.filter((project) => calibrationsOf([project]).length).length;
-  return { quota: tokens(judged) ? tokens(enough) / tokens(judged) : null, enough: enough.length, judged: judged.length, sessions: sessions.length,
+  return { quota: completeUsage && Number.isFinite(judgedTokens) && Number.isFinite(enoughTokens) && judgedTokens > 0
+             ? enoughTokens / judgedTokens : null, enough: enough.length, judged: judged.length, sessions: sessions.length,
            lines: added ? mature.reduce((sum, window) => sum + window.lines_surviving, 0) / added : null, calibrated, repositories: projects.length,
            blinded: every.some((session) => typeof session.durability === "string") };
 }
@@ -803,6 +841,7 @@ function render() {
   renderActivity(recentTasks());
   renderRoutes(metrics);
   renderEvidence();
+  renderLabLedger(state.snapshot.lab_ledger);
   renderDiagnostics(metrics, project);
   setText("framework-version", `v${state.snapshot.framework_version}`);
   renderFreshness(metrics, state.snapshot.evidence_read_at || state.snapshot.generated_at);

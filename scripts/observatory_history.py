@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Thesis D step 2: keep session METADATA beyond the 24 h log lookback so durability (7/30 days) can mature.
 
-Only projects the user opted in (config `observatory.projects`) are recorded, or, with `observatory.auto: true`, every project with
-an active session (registered in 007, or any git repository by its root, id "git:<root>") except `observatory.exclude` (names or
-ids); only FIELDS are stored, never conversation content (active_intervals are row timestamps merged across pauses of at most
+Only projects the user opted in (config `observatory.projects`) are recorded, or, with `observatory.auto: true` (off by default),
+every project with an active session (registered in 007, or any git repository by its root, id "git:<root>"; a linked worktree is
+its repository) except `observatory.exclude` (names or ids); only FIELDS are stored, never conversation content (active_intervals are row timestamps merged across pauses of at most
 `observatory.activity_gap_minutes`, default 30). `observatory.lookback_hours` (default 168) bounds each record pass.
-The store is append-only JSONL; a session is appended again only when its updated_at changes, or when the stored row predates
-active_intervals and a fresh parse brings them; readers keep the latest row, with the union of the session's intervals.
+The store is append-only JSONL. Identified logs append changed observations in recorded order, including same-timestamp
+repairs and restored native timestamps. Writers serialize read/dedup/append. Readers combine the current observations'
+intervals and preserve uncertainty for unresolved legacy logs.
 Sessions of other projects on the same repository (git common dir) compete for its commits.
 Question 3 at level 3 uses the holdout analysis that config `observatory.calibrations` maps to (project_id, cli, model); no
 guessing: an unmapped session is "no evidence to judge".
@@ -20,6 +21,7 @@ Usage: python3 scripts/observatory_history.py record | report --project-id ID | 
 """
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -32,7 +34,7 @@ import effort_trial
 import local_activity
 
 FIELDS = ("source", "session_id", "project_id", "cwd", "model", "effort", "started_at", "updated_at",
-          "total_tokens", "reasoning_output_tokens", "active_intervals", "subagent")
+          "total_tokens", "reasoning_output_tokens", "usage_complete", "active_intervals", "subagent", "log_id", "effort_segments")
 HOME = Path.home() / ".007-framework"
 CALIBRATION_KEYS = ("project_id", "cli", "model", "analysis")
 NOT_OPTED_IN = {"opted_in": False, "answer": "outside observatory.projects: nothing is recorded or judged"}
@@ -40,12 +42,17 @@ TEMPORARY = ("/var/folders/", "/private/var/", "/tmp/", "/private/tmp/")  # expe
 
 
 def git_root(cwd):
-    """The repository root of a session's cwd, or None (not a directory, not git, or a temporary workspace)."""
+    """The repository root of a session's cwd, or None (not a directory, not git, or a temporary workspace). A linked worktree
+    (e.g. ~/.codex/worktrees/<name>/<repo>) maps to its main repository through the git common dir, so it is one project."""
     if not isinstance(cwd, str) or not cwd or cwd.startswith(TEMPORARY) or not Path(cwd).is_dir():
         return None
-    out = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    root = out.stdout.strip()
-    return str(Path(root).resolve()) if out.returncode == 0 and root and not root.startswith(TEMPORARY) else None
+    out = subprocess.run(["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"],
+                         capture_output=True, text=True)
+    common, _, top = out.stdout.strip().partition("\n")
+    if out.returncode or not top:
+        return None
+    root = str(Path(common).parent.resolve() if Path(common).name == ".git" else Path(top).resolve())
+    return None if root.startswith(TEMPORARY) else root
 
 
 def _excluded(project, path, exclude):
@@ -103,6 +110,8 @@ def calibrations(config, base):
 
 
 def snapshot(collector, entries, allowed, now, auto=False, exclude=()):
+    if not auto and not any(e["project_id"] in allowed for e in entries):
+        return []
     now = now or datetime.now(timezone.utc)
     paths = {e["project_id"]: e["path"] for e in entries}
     identities = {e["project_id"]: collector.identity(e["path"]) for e in entries}
@@ -116,7 +125,7 @@ def snapshot(collector, entries, allowed, now, auto=False, exclude=()):
         if not session:
             continue
         if not project and auto:
-            root = git_root(session.get("cwd"))
+            root = next(filter(None, map(git_root, session.get("cwds") or [session.get("cwd")])), None)
             project = root and "git:" + root
         if not project or (project not in allowed and not auto):
             continue
@@ -124,7 +133,7 @@ def snapshot(collector, entries, allowed, now, auto=False, exclude=()):
             continue
         usage = session.get("usage") if isinstance(session.get("usage"), dict) else {}
         merged = {**session, "project_id": project, "total_tokens": usage.get("total_tokens"),
-                  "reasoning_output_tokens": usage.get("reasoning_output_tokens")}
+                  "reasoning_output_tokens": usage.get("reasoning_output_tokens"), "usage_complete": usage.get("usage_complete")}
         rows.append({k: merged.get(k) for k in FIELDS})
     return rows
 
@@ -150,14 +159,74 @@ def _union(intervals):
     return out
 
 
+def _log_id(row):
+    identifiable = row.get("source") in ("codex", "kimi", "gemini") or row.get("subagent") is False
+    return row.get("log_id") or (row.get("session_id") if identifiable else None)
+
+
+def _log_key(row):
+    return row.get("source"), row.get("project_id"), _log_id(row)
+
+
+def _can_replace(row, kept):
+    if kept is None:
+        return True
+    if kept.get("active_intervals") and not row.get("active_intervals"):
+        return False
+    return not kept.get("log_id") or bool(row.get("log_id"))
+
+
+def _current_rows(rows):
+    """A named log's latest recorded observation wins, including restored generations and native clock rewinds."""
+    named, unresolved = {}, []
+    for row in rows:
+        if _log_id(row) is None:
+            unresolved.append(row)
+        elif _can_replace(row, named.get(_log_key(row))):
+            named[_log_key(row)] = row
+    return [*unresolved, *named.values()]
+
+
 def load(store):
-    """The latest row of each session; its active_intervals are the union over all its rows, because one session id spans
-    several logs (Claude subagents under <session>/subagents/ carry the parent sessionId) and the latest may be a subagent's."""
-    latest, main, spans, last = {}, {}, {}, {}
+    """The latest row of each session; its active_intervals are the union over all its logs, because one session id spans
+    several logs (Claude subagents under <session>/subagents/ carry the parent sessionId, Codex children their root's) and the
+    latest may be a subagent's. A log named by its row (log_id; a Codex row before it is its own thread) speaks through its
+    newest row with intervals, which reads the whole log: a 1.6 parse of a large log, clipped to its tail, is replaced."""
+    rows = _current_rows(_rows(store))
+    # a Codex child stored before 1.7 kept its own thread id as session id: a later row of the same log names its root
+    alias, global_alias = {}, {}
+    for row in rows:
+        log_id = _log_id(row) if row.get("subagent") is False else row.get("log_id")
+        if row.get("source") == "codex" and isinstance(log_id, str):
+            alias[row.get("project_id"), log_id] = row["session_id"]
+            global_alias.setdefault(log_id, set()).add(row["session_id"])
+
+    def root(session_id, project):
+        seen = set()
+        while session_id not in seen:
+            seen.add(session_id)
+            parent = alias.get((project, session_id))
+            if parent is None:
+                candidates = global_alias.get(session_id, set())
+                parent = next(iter(candidates)) if len(candidates) == 1 else None
+            if parent is None:
+                break
+            session_id = parent
+        return session_id
+
+    latest, main, spans, logs, last, sources, uncertain = {}, {}, {}, {}, {}, {}, {}
     newer = lambda row, kept: kept is None or choice_observatory._ts(row["updated_at"]) >= choice_observatory._ts(kept["updated_at"])
-    for row in _rows(store):
-        key = (row.get("source"), row.get("session_id"))
-        spans.setdefault(key, []).extend(row.get("active_intervals") or [])
+    for row in rows:
+        codex = row.get("source") == "codex"
+        key = (row.get("source"), root(row.get("session_id"), row.get("project_id")) if codex else row.get("session_id"), row.get("project_id"))
+        log = _log_id(row)
+        if log is None:
+            fallback = [list(span) for span in choice_observatory._spans(row, 0)]
+            spans.setdefault(key, []).extend(fallback)
+            sources.setdefault(key, []).append(row)
+            uncertain.setdefault(key, []).extend(fallback)
+        elif newer(row, logs.get((key, log))):
+            logs[(key, log)] = row
         if newer(row, latest.get(key)):
             latest[key] = row
         # model, effort, start and tokens come from the session's own log, never from a subagent's; a row stored before the
@@ -168,22 +237,46 @@ def load(store):
             main[key] = (rank, row)
         stamp = choice_observatory._ts(row["updated_at"])
         last[key] = row["updated_at"] if key not in last or stamp >= choice_observatory._ts(last[key]) else last[key]
-    return [{**(main[key][1] if key in main else row), "updated_at": last[key], "active_intervals": _union(spans[key]) or None}
-            for key, row in latest.items()]
+    for (key, _), row in logs.items():
+        spans.setdefault(key, []).extend([list(span) for span in choice_observatory._spans(row, 0)])
+        sources.setdefault(key, []).append(row)
+    return [{**(main[key][1] if key in main else row), "session_id": key[1], "updated_at": last[key],
+             "activity_sources": sources.get(key, [main[key][1] if key in main else row]),
+             "uncertain_intervals": _union(uncertain.get(key, [])),
+             "active_intervals": _union(spans.get(key, [])) or None} for key, row in latest.items()]
 
 
 def record(store, rows):
+    if not rows:
+        return 0
     store = Path(store)
-    seen = {}
-    for r in _rows(store):  # every stored row, not only the latest: an older log of the same session is not appended again
-        key = (r.get("source"), r.get("session_id"), r.get("updated_at"))
-        seen[key] = seen.get(key, False) or bool(r.get("active_intervals"))
-    new = [r for r in rows if (had := seen.get((r["source"], r["session_id"], r["updated_at"]))) is None
-           or (not had and r.get("active_intervals"))]  # a row from before active_intervals gains them once
-    if new:
-        store.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with open(store, "a") as handle:
-            handle.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in new))
+    store.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parsed = lambda row: tuple(row.get(key) for key in FIELDS)
+    with store.open("a+b") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        stored = _rows(store)
+        current = {_log_key(row): row for row in _current_rows(stored) if _log_id(row) is not None}
+        unresolved = [parsed(row) for row in stored if _log_id(row) is None]
+        new = []
+        for row in rows:
+            key = _log_key(row)
+            kept = current.get(key)
+            if _log_id(row) is None:
+                if parsed(row) in unresolved:
+                    continue
+                unresolved.append(parsed(row))
+            elif not _can_replace(row, kept) or (kept is not None and parsed(row) == parsed(kept)):
+                continue
+            else:
+                current[key] = row
+            new.append(row)
+        if new:
+            handle.seek(0, 2)
+            if handle.tell():
+                handle.seek(-1, 2)
+                if handle.read(1) != b"\n":
+                    handle.write(b"\n")
+            handle.write("".join(json.dumps(row, sort_keys=True) + "\n" for row in new).encode())
     return len(new)
 
 
@@ -282,7 +375,12 @@ def main():
                                                      activity_gap_minutes=float(section.get("activity_gap_minutes", 30)))
         rows = snapshot(collector, entries, set(section.get("projects", [])), None, auto=section.get("auto") is True,
                         exclude=section.get("exclude", []))
-        print(json.dumps({"recorded": record(args.store, rows)}))
+        result = {"recorded": record(args.store, rows)}
+        if collector.unreadable:
+            result["unreadable_logs"] = len(collector.unreadable)
+            print(f"{len(collector.unreadable)} compressed log(s) not read: needs Python 3.14+ (compression.zstd) or the zstd binary",
+                  file=sys.stderr)
+        print(json.dumps(result))
         return 0
     allowed_now = allowed(config, entries, args.store)
     now = datetime.now(timezone.utc).timestamp()

@@ -42,6 +42,14 @@ test('partial native consumption is labelled in the overview and each affected p
   assert.equal(r.text('activity-tokens'), '123');
 });
 
+test('unavailable native token aggregates render as N/A while explicit zero stays zero', () => {
+  const r = renderer();
+  vm.runInContext('renderRuntimeActivity({tokens_total:null,usage_incomplete_sessions:1})', r.context);
+  assert.match(r.text('activity-tokens'), /N\/A.*partial/);
+  vm.runInContext('renderRuntimeActivity({tokens_total:0,usage_incomplete_sessions:0})', r.context);
+  assert.equal(r.text('activity-tokens'), '0');
+});
+
 test('economic totals come from the complete cohort, not accepted-only legacy sums', () => {
   const r = renderer();
   vm.runInContext('renderMetrics({cost_usd_known_sum:2, cost_usd_known_tasks:1, tasks:2, economics:{cost_basis:"api-equivalent", cost_usd_known_sum:10, cost_usd_known_tasks:2, cost_coverage:1, cohort_tasks:2, accepted_declared:1, open_tasks:0, reasons:[], cost_usd_per_declared_accepted:10, cost_usd_per_reliable_declared:null}})', r.context);
@@ -514,8 +522,8 @@ const verdictSnapshot = () => ({ generated_at: '2026-11-01T12:00:00Z', lab_repor
     medium: { verdict: 'good-choice', badge: 'Calibrated', gain: { effort: 'medium', against: 'high', time_reduction: .5, cost_reduction: .3 } },
     high: { verdict: 'above-necessary', badge: 'Calibrated', gain: { effort: 'medium', against: 'high' } } } }],
   sessions: [
-    { started_at: '2026-10-30T00:00:00Z', total_tokens: 90, durability: { 30: { status: 'pending' } }, questions: [{}, {}, { verdict: 'above-necessary' }] },
-    { started_at: '2026-10-30T00:00:00Z', total_tokens: 10, durability: { 30: { status: 'mature', lines_added: 10, lines_surviving: 8 } }, questions: [{}, {}, { verdict: 'good-choice' }] },
+    { started_at: '2026-10-30T00:00:00Z', total_tokens: 90, usage_complete: true, durability: { 30: { status: 'pending' } }, questions: [{}, {}, { verdict: 'above-necessary' }] },
+    { started_at: '2026-10-30T00:00:00Z', total_tokens: 10, usage_complete: true, durability: { 30: { status: 'mature', lines_added: 10, lines_surviving: 8 } }, questions: [{}, {}, { verdict: 'good-choice' }] },
     { started_at: '2026-10-30T00:00:00Z', total_tokens: 500, questions: [{}, {}, { verdict: 'no-evidence' }] },
     { started_at: '2026-01-01T00:00:00Z', total_tokens: 500, questions: [{}, {}, { verdict: 'above-necessary' }] }] } }] });
 
@@ -536,6 +544,29 @@ test('scores weigh quota by tokens, ignore uncalibrated sessions and stay inside
   const s = vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at))', r.context);
   assert.equal(s.quota, .1);
   assert.deepEqual([s.enough, s.judged, s.sessions, s.lines, s.calibrated], [1, 2, 3, .8, 1]);
+});
+
+test('quota weighting remains unavailable when any judged usage is partial or legacy', () => {
+  const r = renderer();
+  r.context.snapshotFixture = verdictSnapshot();
+  vm.runInContext('for (const project of snapshotFixture.projects) for (const session of project.observatory?.sessions || []) session.usage_complete = true', r.context);
+  assert.equal(vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at)).quota', r.context), .1);
+  for (const completeness of [false, null]) {
+    r.context.completeness = completeness;
+    vm.runInContext('snapshotFixture.projects[0].observatory.sessions[0].usage_complete = completeness', r.context);
+    assert.equal(vm.runInContext('effortScores(snapshotFixture.projects, Date.parse(snapshotFixture.generated_at)).quota', r.context), null);
+  }
+});
+
+test('quota weighting rejects unrepresentable sums and preserves coherent controls', () => {
+  const r = renderer();
+  const started_at = '2026-11-09T12:00:00Z';
+  for (const [tokens, expected] of [[1e308, null], [10, .5], [0, null]]) {
+    r.context.projects = [{ observatory: { sessions: ['good-choice', 'above-necessary'].map(verdict => ({
+      started_at, total_tokens: tokens, usage_complete: true, questions: [null, null, { verdict }],
+    })) } }];
+    assert.equal(vm.runInContext('effortScores(projects, Date.parse("2026-11-09T12:00:00Z")).quota', r.context), expected);
+  }
 });
 
 test('durable is never claimed without a proving lab report', () => {
@@ -559,6 +590,15 @@ test('the same change is only called proven by a lab report that says so', () =>
   assert.equal(claim({ same_change: 'KILL', same_change_reachable: 'NOT-PROVEN' }), 'NOT PROVEN');  // the superseded rule never decides
 });
 
+test('damaged dispatch history keeps each experiment amount visibly incomplete', () => {
+  const r = renderer();
+  vm.runInContext('renderLabLedger({total_complete:false,total_cost_usd:0.5,experiments:[{name:"damaged",available:true,attempts:1,valid:1,invalid:0,orphans:0,unpriced:0,dispatch_errors:1,cost_usd:0.5,invalid_cost_usd:0,cost_sources:{"custom:synthetic":1}}]})', r.context);
+  const row = r.root('lab-ledger-body').children[0];
+  assert.match(row.children[7].textContent, /^≥ /);
+  assert.match(row.children[3].textContent, /^≥ /);
+  assert.match(r.text('lab-ledger-body'), /dispatch history incomplete/i);
+});
+
 test('quota is never called supported from a price estimate', () => {
   const r = renderer();
   r.context.snapshotFixture = verdictSnapshot();
@@ -566,6 +606,32 @@ test('quota is never called supported from a price estimate', () => {
   assert.equal(quota, 'ESTIMATED');
   const reasoning = vm.runInContext('thesisClaims(bestVerdict(calibrationsOf(snapshotFixture.projects)), null).find((c) => c.id === "claim-reasoning").state[0]', r.context);
   assert.equal(reasoning, 'CHECK');  // the manipulation check is not a benefit
+});
+
+test('007 spend ledger shows each experiment as an estimate, a lower bound when unpriced, and nothing when unconfigured', () => {
+  const r = renderer('UTC');
+  vm.runInContext('renderLabLedger({configured:false, experiments:[]})', r.context);
+  assert.match(r.text('lab-ledger-note'), /No 007 experiments configured/);
+  assert.equal(r.root('lab-ledger-body').children.length, 0);
+  assert.equal(r.root('lab-ledger-scroll').hidden, true);
+  assert.equal(r.root('lab-ledger-total').hidden, true);
+  vm.runInContext(`renderLabLedger({configured:true, total_cost_usd:3.75, total_complete:false, experiments:[
+    {name:"chain", available:true, first_attempt_at:"2026-11-01T10:00:00+00:00", last_attempt_at:"2026-11-02T09:00:00+00:00",
+     attempts:5, valid:2, invalid:2, orphans:1, unpriced:1, cost_usd:3.75, invalid_cost_usd:0.5, cost_sources:{"client-estimate":2}},
+    {name:"done", available:true, first_attempt_at:null, last_attempt_at:null, attempts:1, valid:1, invalid:0, orphans:0, unpriced:0,
+     cost_usd:2, invalid_cost_usd:0, cost_sources:{}},
+    {name:"gone", available:false, error:"results directory unavailable"}]})`, r.context);
+  const [chain, done, gone] = r.root('lab-ledger-body').children.map(row => row.children.map(cell => cell.textContent));
+  assert.deepEqual(chain, ['chain', 'Nov 1, 2026, 10:00', 'Nov 2, 2026, 09:00', '5', '2', '2', '1', '≥ $3.75', '≥ $0.500', 'client-estimate']);
+  assert.deepEqual(done.slice(1, 3).concat(done.slice(7)), ['N/A', 'N/A', '$2.00', '$0.000', 'source N/A']);
+  assert.deepEqual(gone, ['gone', 'Unavailable: results directory unavailable']);
+  assert.equal(r.root('lab-ledger-body').children[2].children[1].colSpan, 9);
+  assert.match(r.text('lab-ledger-total'), /≥ \$3\.75.*estimate/);
+  assert.match(r.text('lab-ledger-note'), /Client-side cost estimate/);
+  assert.equal(r.root('lab-ledger-scroll').hidden, false);
+  vm.runInContext('renderLabLedger({configured:false, experiments:[], error:"unreadable config: bad"})', r.context);
+  assert.match(r.text('lab-ledger-note'), /No 007 experiments configured \(unreadable config: bad\)/);
+  assert.equal(r.root('lab-ledger-body').children.length, 0);
 });
 
 test('a lab verdict reads as evidence only for the repository, CLI and model it is bound to (audit F09)', () => {

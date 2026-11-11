@@ -1,4 +1,5 @@
 import importlib
+import itertools
 import json
 import os
 import subprocess
@@ -13,6 +14,260 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class NativeTelemetryTests(unittest.TestCase):
+    def test_compacted_identity_messages_cannot_become_silent_model_agreement(self):
+        module = self.module()
+        message = "model rerouted: requested -> other (" + "r" * (module.MAX_ROW_BYTES // 16 + 1) + ")"
+        for padded, first_key in itertools.product((False, True), ("type", "item")):
+            row = {"type": "item.completed", "item": {"type": "error", "message": message}}
+            if first_key == "item":
+                row = {"item": row["item"], "type": row["type"]}
+            if padded:
+                row["padding"] = "x" * (module.MAX_ROW_BYTES + 1)
+            data = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                    + json.dumps(row).encode() + b'\n'
+                    + b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n')
+            for width in (65521, len(data)):
+                with self.subTest(padded=padded, first_key=first_key, width=width):
+                    reader = module.NativeTelemetry("codex")
+                    for offset in range(0, len(data), width):
+                        reader.feed(data[offset:offset + width])
+                    result = reader.finish()
+                    if padded:
+                        self.assertEqual(result["status"], "incomplete")
+                        self.assertEqual(result["problem"], "invalid-model-observation")
+                    else:
+                        self.assertEqual(result["status"], "complete")
+                        self.assertEqual(result["model_usage"], {"other": {}})
+                    with self.assertRaises(ValueError):
+                        module.enrich({"served_model": "requested"}, result)
+
+    def test_claude_alias_presence_type_and_conflict_are_validated(self):
+        aliases = (("cache_read_input_tokens", "cached_input_tokens"),
+                   ("cache_creation_input_tokens", "cache_write_input_tokens"),
+                   ("thinking_tokens", "reasoning_output_tokens"))
+        for native, canonical in aliases:
+            for value in (None, True, 2.0, "2", -1, 2**53, 0, 1, 2):
+                for form in ("native", "canonical", "both"):
+                    usage = {"input_tokens": 1, "output_tokens": 1}
+                    if form != "native":
+                        usage[canonical] = value
+                    if form != "canonical":
+                        if native == "thinking_tokens":
+                            usage["output_tokens_details"] = {native: value}
+                        else:
+                            usage[native] = value
+                    valid = type(value) is int and 0 <= value < 2**53
+                    valid &= native != "thinking_tokens" or value in (0, 1)
+                    with self.subTest(alias=native, form=form, value=value):
+                        rows = [{"type": "system", "subtype": "init", "session_id": "s"},
+                                {"type": "result", "subtype": "success", "is_error": False,
+                                 "session_id": "s", "num_turns": 1, "usage": usage}]
+                        result = self.parse("claude", rows)
+                        self.assertEqual(result["status"], "complete" if valid else "incomplete")
+                        if valid:
+                            self.assertEqual(result["usage"][canonical], value)
+                        else:
+                            with self.assertRaises(ValueError):
+                                self.module().enrich({}, result)
+            for canonical_value in (True, 0, 2.0, "1"):
+                usage = {"input_tokens": 1, "output_tokens": 1, canonical: canonical_value}
+                if native == "thinking_tokens":
+                    usage["output_tokens_details"] = {native: 1}
+                else:
+                    usage[native] = 1
+                with self.subTest(conflict=native, canonical_value=canonical_value):
+                    with self.assertRaises(ValueError):
+                        self.module().NativeTelemetry("claude").add_usage(usage)
+        for details in (None, [], True, "private"):
+            with self.subTest(details_type=type(details).__name__):
+                with self.assertRaises(ValueError):
+                    self.module().NativeTelemetry("claude").add_usage(
+                        {"input_tokens": 1, "output_tokens": 1, "output_tokens_details": details})
+
+    def test_fatal_accounting_diagnostics_are_chunk_invariant(self):
+        rows = [{"type": "thread.started", "thread_id": "s"}, {"type": "turn.started"},
+                {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 1,
+                                                       "cache_write_input_tokens": 0, "output_tokens": 0}},
+                {"type": "turn.started"},
+                {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 2,
+                                                       "output_tokens": 0}},
+                {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 0}}]
+        wire = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+        expected = None
+        for width in (1, 7, 64, len(wire)):
+            reader = self.module().NativeTelemetry("codex")
+            for offset in range(0, len(wire), width):
+                reader.feed(wire[offset:offset + width])
+            result = reader.finish()
+            self.assertEqual(result["completed_turns"], 1)
+            self.assertEqual(result["usage"]["cached_input_tokens"], 1)
+            if expected is not None:
+                self.assertEqual(result, expected)
+            expected = result
+
+    def test_native_error_at_eof_keeps_the_most_severe_class(self):
+        reader = self.module().NativeTelemetry("codex")
+        reader.feed(b'{"type":"error","message":"Reconnecting"}\n')
+        reader.feed(b'{"type":"error","message":"quota exceeded"}')
+        self.assertEqual(reader.finish()["problem"], "native-error-rate-limit")
+
+    def test_stream_limit_preserves_the_same_accepted_prefix(self):
+        from unittest.mock import patch
+        wire = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n')
+        expected = None
+        with patch.object(self.module(), "MAX_STREAM_BYTES", len(wire)):
+            for width in (1, 7, len(wire) + 1):
+                reader = self.module().NativeTelemetry("codex")
+                data = wire + b"x"
+                for offset in range(0, len(data), width):
+                    reader.feed(data[offset:offset + width])
+                result = reader.finish()
+                self.assertEqual(result["problem"], "stream-limit")
+                self.assertEqual(result["completed_turns"], 1)
+                if expected is not None:
+                    self.assertEqual(result, expected)
+                expected = result
+
+    def test_large_content_preserves_identity_anywhere_in_the_envelope(self):
+        big = "PRIVATE" * (self.module().MAX_ROW_BYTES // 7 + 2)
+        for kind in ("item.started", "item.updated", "item.completed"):
+            for position in ("before", "after"):
+                row = {"type": kind}
+                if position == "before":
+                    row["thread_id"] = "foreign"
+                row["item"] = {"type": "command_execution", "aggregated_output": big}
+                if position == "after":
+                    row["thread_id"] = "foreign"
+                wire = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                        + json.dumps(row, separators=(",", ":")).encode() + b"\n"
+                        + b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n')
+                for width in (65521, len(wire)):
+                    with self.subTest(kind=kind, position=position, width=width):
+                        reader = self.module().NativeTelemetry("codex")
+                        for offset in range(0, len(wire), width):
+                            reader.feed(wire[offset:offset + width])
+                        result = reader.finish()
+                        self.assertEqual(result["status"], "incomplete")
+                        self.assertEqual(result["problem"], "foreign-thread-usage")
+                        self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_large_error_item_preserves_reroute_before_and_after_padding(self):
+        for order in ("before", "after"):
+            item = {"type": "error", "message": "model rerouted: requested -> other (reason)"}
+            row = {"type": "item.completed"}
+            if order == "before":
+                row["item"] = item
+            row["padding"] = "x" * (self.module().MAX_ROW_BYTES + 1)
+            row["item"] = item
+            wire = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                    + json.dumps(row, separators=(",", ":")).encode() + b"\n"
+                    + b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n')
+            for width in (65521, len(wire)):
+                with self.subTest(order=order, width=width):
+                    reader = self.module().NativeTelemetry("codex")
+                    for offset in range(0, len(wire), width):
+                        reader.feed(wire[offset:offset + width])
+                    result = reader.finish()
+                    self.assertEqual(result["model_usage"], {"other": {}})
+                    with self.assertRaises(ValueError):
+                        self.module().enrich({"model": "requested"}, result)
+
+    def test_large_envelopes_preserve_escaped_metadata_and_validate_discarded_text(self):
+        from unittest.mock import patch
+        module = self.module()
+        header = b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+        terminal = b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n'
+        with patch.object(module, "MAX_ROW_BYTES", 4096):
+            for suffix in (b'","thread_id":"foreign"}', b'","thread_id":"s"}',
+                           b'","thread\\u005fid":"foreign"}', b'","type":[]}',
+                           b'\\q"}', b'\\uZZZZ"}', b'\x01"}', b'\xff"}', b'\\"}'):
+                row = b'{"type":"item.completed","padding":"' + b'x' * 4097 + suffix
+                expected = None
+                for width in (1, 7, 513, len(row) + len(header) + len(terminal) + 1):
+                    with self.subTest(suffix=suffix, width=width):
+                        data = header + row + b'\n' + terminal
+                        reader = module.NativeTelemetry("codex")
+                        for offset in range(0, len(data), width):
+                            reader.feed(data[offset:offset + width])
+                        result = reader.finish()
+                        valid = suffix == b'","thread_id":"s"}'
+                        self.assertEqual(result["status"], "complete" if valid else "incomplete")
+                        if expected is not None:
+                            self.assertEqual(result, expected)
+                        expected = result
+
+    def test_large_valid_strings_keep_bounded_state_at_eof_and_across_escapes(self):
+        from unittest.mock import patch
+        module = self.module()
+        with patch.object(module, "MAX_ROW_BYTES", 4096):
+            for token in ('a', '\\', '"', '\n', '\U0001f680'):
+                row = json.dumps({"item": {"type": "command_execution", "aggregated_output": token * 5000},
+                                  "thread_id": "s", "type": "item.completed"},
+                                 ensure_ascii=False, separators=(",", ":")).encode()
+                header = b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                terminal = b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n'
+                for width in (7, 257, len(row)):
+                    with self.subTest(token=token, width=width):
+                        reader = module.NativeTelemetry("codex")
+                        reader.feed(header + terminal)
+                        for offset in range(0, len(row), width):
+                            reader.feed(row[offset:offset + width])
+                            self.assertLessEqual(len(reader.buffer), 4096)
+                            if reader.large_row:
+                                self.assertLessEqual(len(reader.large_row.data), 4096)
+                        result = reader.finish()
+                        self.assertEqual(result["status"], "complete")
+                        self.assertEqual(result["oversized_content_rows"], 1)
+                        self.assertEqual(reader.finish(), result)
+                reader = module.NativeTelemetry("codex")
+                reader.feed(header + terminal + row[:-1])
+                self.assertEqual(reader.finish()["status"], "incomplete")
+
+    def test_fatal_error_after_a_service_error_stops_further_accounting(self):
+        rows = [{"type": "thread.started", "thread_id": "s"}, {"type": "turn.started"},
+                {"type": "error", "message": "Reconnecting"},
+                {"type": "turn.completed", "usage": {"input_tokens": 1, "cached_input_tokens": 2,
+                                                       "output_tokens": 0}},
+                {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 0}}]
+        result = self.parse("codex", rows)
+        self.assertEqual(result["completed_turns"], 0)
+        self.assertEqual(result["problem"], "invalid-cache")
+
+    def test_json_parser_resource_errors_stay_sanitized_for_every_row_path(self):
+        from unittest.mock import patch
+        module = self.module()
+        for large, newline in itertools.product((False, True), (b"", b"\n")):
+            padding = b'x' * (module.MAX_ROW_BYTES + 1) if large else b'x'
+            row = b'{"type":"item.completed","padding":"' + padding + b'"}'
+            reader = module.NativeTelemetry("codex")
+            with patch.object(module.json, "loads", side_effect=RecursionError("PRIVATE")):
+                reader.feed(row + newline)
+                result = reader.finish()
+            self.assertEqual(result["problem"], "invalid-native-event")
+            self.assertNotIn("PRIVATE", json.dumps(result))
+
+    def test_compaction_near_the_envelope_limit_is_chunk_invariant(self):
+        from unittest.mock import patch
+        module = self.module()
+        with patch.object(module, "MAX_ROW_BYTES", 4096):
+            for filler in (1900, 1970, 1990, 2010):
+                row = (b'{"type":"item.completed","padding":"' + b'x' * 5000
+                       + b'","values":[' + b'0,' * filler + b'0],"more":"'
+                       + b'x' * 5000 + b'"}\n')
+                data = (b'{"type":"thread.started","thread_id":"s"}\n{"type":"turn.started"}\n'
+                        + row + b'{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":0}}\n')
+                expected = None
+                for width in (1, 7, 257, 65536):
+                    reader = module.NativeTelemetry("codex")
+                    for offset in range(0, len(data), width):
+                        reader.feed(data[offset:offset + width])
+                    result = reader.finish()
+                    self.assertEqual(result["status"], "complete")
+                    if expected is not None:
+                        self.assertEqual(result, expected)
+                    expected = result
+
     def test_codex_fork_cannot_be_assigned_as_fresh_task_usage(self):
         with self.assertRaises(ValueError):
             self.module().validate_command("codex", [
@@ -89,6 +344,61 @@ class NativeTelemetryTests(unittest.TestCase):
         self.assertEqual(result["status"], "incomplete")
         self.assertEqual(result["usage"]["total_tokens"], 12)
 
+    def test_codex_cache_partition_admission_and_receipt_enrichment(self):
+        cases = 0
+        for prompt, cached, written, output, mask in itertools.product(range(5), range(5), range(5), range(3), range(4)):
+            usage = {"input_tokens": prompt, "output_tokens": output, "total_tokens": prompt + output}
+            if mask & 1:
+                usage["cached_input_tokens"] = cached
+            if mask & 2:
+                usage["cache_write_input_tokens"] = written
+            expected = usage.get("cached_input_tokens", 0) + usage.get("cache_write_input_tokens", 0) <= prompt
+            result = self.parse("codex", [{"type": "thread.started", "thread_id": "synthetic-allocation"},
+                                           {"type": "turn.started"},
+                                           {"type": "turn.completed", "usage": usage}])
+            context = (prompt, cached, written, output, mask)
+            self.assertEqual(result["status"] == "complete", expected, context)
+            if expected:
+                receipt = self.module().enrich({}, {**result, "wall_s": 0})
+                self.assertEqual(receipt["usage"], usage, context)
+                self.assertEqual(receipt["tokens"], prompt + output, context)
+            else:
+                with self.assertRaisesRegex(ValueError, "incomplete native telemetry"):
+                    self.module().enrich({}, {**result, "wall_s": 0})
+            cases += 1
+        self.assertEqual(cases, 1500)
+
+    def test_native_cache_contract_preserves_provider_semantics_and_prior_turns(self):
+        for prompt, cached, written in ((1, 1, 0), (1, 0, 1), (2, 1, 1), (1, 1, 1), (1, 0, 2),
+                                        (2**53 - 1, 2**53 - 1, 0), (2**53 - 1, 2**53 - 1, 1)):
+            codex = self.parse("codex", [{"type": "thread.started", "thread_id": "synthetic"},
+                                          {"type": "turn.started"},
+                                          {"type": "turn.completed", "usage": {
+                                              "input_tokens": prompt, "output_tokens": 0,
+                                              "cached_input_tokens": cached, "cache_write_input_tokens": written}}])
+            self.assertEqual(codex["status"] == "complete", cached + written <= prompt)
+            claude = self.parse("claude", [{"type": "system", "subtype": "init", "session_id": "synthetic"},
+                                            {"type": "result", "subtype": "success", "session_id": "synthetic",
+                                             "is_error": False, "num_turns": 1, "usage": {
+                                                 "input_tokens": prompt, "output_tokens": 0,
+                                                 "cache_read_input_tokens": cached,
+                                                 "cache_creation_input_tokens": written}}])
+            self.assertEqual(claude["status"], "complete")
+            self.assertEqual(claude["usage"]["total_tokens"], prompt + cached + written)
+        result = self.parse("codex", [{"type": "thread.started", "thread_id": "synthetic"},
+                                       {"type": "turn.started"},
+                                       {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 0,
+                                                                              "cached_input_tokens": 1,
+                                                                              "cache_write_input_tokens": 0}},
+                                       {"type": "turn.started"},
+                                       {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 0,
+                                                                              "cached_input_tokens": 1,
+                                                                              "cache_write_input_tokens": 1}}])
+        self.assertEqual(result["status"], "incomplete")
+        self.assertEqual(result["completed_turns"], 1)
+        self.assertEqual(result["usage"]["total_tokens"], 1)
+        self.assertEqual(result["usage"]["cache_write_input_tokens"], 0)
+
     def test_absent_optional_counters_remain_unknown_not_zero(self):
         result = self.parse("codex", [
             {"type": "thread.started", "thread_id": "s"}, {"type": "turn.started"},
@@ -150,9 +460,64 @@ class NativeTelemetryTests(unittest.TestCase):
                 {"type": "result", "session_id": "s", "subtype": "success", "is_error": False,
                  "usage": {"input_tokens": 1, "output_tokens": 1}, "total_cost_usd": 0.2}]
         self.assertEqual(self.parse("claude", rows + rows[1:])["status"], "incomplete")
-        for cost in (True, -1, float("nan"), float("inf")):
+        for cost in (True, -1, float("nan"), float("inf"), 10 ** 400):
             rows[-1]["total_cost_usd"] = cost
             self.assertEqual(self.parse("claude", rows)["status"], "incomplete")
+
+    def test_recognized_session_initializations_require_one_nonempty_string_id(self):
+        codex_init = {"type": "thread.started", "thread_id": "s"}
+        claude_init = {"type": "system", "subtype": "init", "session_id": "s"}
+        usage = {"input_tokens": 1, "output_tokens": 0}
+        codex_turn = [{"type": "turn.started"}, {"type": "turn.completed", "usage": usage}]
+        claude_result = [{"type": "result", "subtype": "success", "is_error": False,
+                          "session_id": "s", "num_turns": 1, "usage": usage}]
+        control = self.parse("codex", [codex_init, *codex_turn, *codex_turn])
+        self.assertEqual((control["status"], control["usage"]["total_tokens"]), ("complete", 2))
+        for provider, init, key, terminal in (
+                ("codex", codex_init, "thread_id", codex_turn),
+                ("claude", claude_init, "session_id", claude_result)):
+            shape = {k: v for k, v in init.items() if k != key}
+            invalid = [shape, *[dict(shape, **{key: value}) for value in (None, "", 1, "s", "other")]]
+            for duplicate in invalid:
+                with self.subTest(provider=provider, duplicate=duplicate):
+                    before_terminal = self.parse(provider, [init, duplicate, *terminal])
+                    self.assertEqual((before_terminal["status"], before_terminal["problem"]),
+                                     ("incomplete", "ambiguous-session"))
+                    after_terminal = self.parse(provider, [init, *terminal, duplicate, *terminal])
+                    self.assertEqual((after_terminal["status"], after_terminal["problem"]),
+                                     ("incomplete", "ambiguous-session"))
+                    self.assertEqual(after_terminal["usage"]["total_tokens"], 1)
+            for missing in (shape, dict(shape, **{key: None})):
+                with self.subTest(provider=provider, missing=missing):
+                    result = self.parse(provider, [missing, init, *terminal])
+                    self.assertEqual((result["status"], result["problem"]),
+                                     ("incomplete", "ambiguous-session"))
+
+    def test_claude_terminal_session_id_is_checked_without_string_coercion(self):
+        terminal = {"type": "result", "subtype": "success", "is_error": False,
+                    "num_turns": 1, "usage": {"input_tokens": 1, "output_tokens": 0}}
+        for initial, fields in (("1", {"session_id": 1}), ("None", {}),
+                                ("None", {"session_id": None}), ("True", {"session_id": True}),
+                                ("s", {"session_id": "other"}), ("s", {"session_id": ""})):
+            with self.subTest(initial=initial, fields=fields):
+                init = {"type": "system", "subtype": "init", "session_id": initial}
+                control = self.parse("claude", [init, {**terminal, "session_id": initial}])
+                self.assertEqual((control["status"], control["usage"]["total_tokens"]), ("complete", 1))
+                invalid = self.parse("claude", [init, {**terminal, **fields}])
+                self.assertEqual((invalid["status"], invalid["problem"]),
+                                 ("incomplete", "ambiguous-terminal"))
+                self.assertIsNone(invalid["usage"])
+
+    def test_invalid_optional_model_cost_does_not_discard_the_valid_total(self):
+        result = self.parse("claude", [
+            {"type": "system", "subtype": "init", "session_id": "s"},
+            {"type": "result", "session_id": "s", "subtype": "success", "is_error": False,
+             "usage": {"input_tokens": 1, "output_tokens": 1}, "total_cost_usd": 0.2,
+             "modelUsage": {"claude-test": {"inputTokens": 1, "costUSD": 10 ** 400}}}])
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["estimated_cost_usd"], 0.2)
+        self.assertEqual(result["reported_model"], "claude-test")
+        self.assertEqual(result["model_usage"]["claude-test"], {"inputTokens": 1})
 
     def test_command_boundary_enriches_receipt_without_rewriting_source(self):
         self.run_fixture("codex", exit_code=0)

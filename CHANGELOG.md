@@ -6,6 +6,184 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-09
+
+Candidate prepared for independent review. Release qualification is recorded in
+[the release record](evidence/v1.7.0/release-evidence.md).
+
+### Security
+
+- The dashboard rejects foreign, missing, duplicate or malformed HTTP authorities and absolute request targets before
+  reading route data; loopback aliases, the actual port and explicitly configured external binds remain supported.
+- Activity skips session enumeration when no projects are registered; the observatory does the same when enrollment is
+  empty and auto discovery is off. This does not promise preselection of every file while a project scope is active.
+- Lab collection now honors an explicit acceptance environment without merging parent variables; retained-case rechecks
+  honor the configured wrapper and environment too. Cells label the execution boundary without claiming sandbox proof.
+- Local argv and bounded diagnostics remain available by default, with additional hashes for integrity/correlation.
+  Explicit `retain_diagnostic_text: false` minimizes diagnostic text in new replay/lab runs and their copies; frozen
+  inputs and historical results remain unchanged. New output directories are owner-only; existing permissions are preserved.
+- Stale observatory enrollment with no matching registered project skips session enumeration. Security probes use synthetic
+  or explicitly allowlisted environments and avoid assertions that can render credential values.
+
+### Added
+
+- CodeQL and Scorecard workflows retain bounded analysis reports as Actions artifacts, with pinned actions and read-only
+  repository permissions. CodeQL SARIF/database uploads and Scorecard result publication are disabled.
+
+- Tag-triggered source candidates with repeat-build and extracted-manifest checks, SHA256SUMS and GitHub build provenance,
+  retained for maintainer publication after release qualification.
+- A macOS Python 3.13 CI job alongside the existing Linux check names, portable tag-manifest verification and weekly
+  Dependabot proposals restricted to GitHub Actions.
+- An installable `007-framework` wheel with a `007` console entry point, versioned from `SKILL.md`, carrying the existing
+  runtime layout, dashboard assets and default causal evidence. A synthetic installed-CLI check covers project records and
+  the HTTP dashboard. CI builds the wheel at the minimum supported Python version and runs that check.
+- A short README quickstart, `PRIVACY.md` for local collection and explicit egress, and software citation metadata.
+- A persistent security review workflow in the shared agent instructions: native Codex Security when available, honest
+  scope/coverage and completion gates, with the same criteria across hosts and separate authorization for paid/Cloud operations.
+- `effort_segments` (`[start, model, effort]`) from Codex `turn_context` and Claude assistant rows, stored by `record`; each
+  report row lists its attributed commits with the model and effort in force at commit time (`commit_efforts`).
+
+- Dashboard snapshot field `lab_ledger`: the spend 007 itself caused, per experiment listed in the local config
+  (`observatory.lab_ledger: [{"name": ..., "results": "dir" or ["dir", ...]}]`, paths relative to the config file), kept apart
+  from the user's own agent usage. Per experiment: first and last attempt (from `dispatch.jsonl`), attempts, valid, invalid,
+  orphan receipts, USD with its sources, USD on attempts without a valid result; plus a total. Sums of `007 lab run` runner
+  receipts, a client estimate and not an invoice: an attempt without a cost is counted as unpriced (the total becomes a lower
+  bound), never as zero, and a missing or unreadable directory is reported unavailable instead of failing the read.
+- Dashboard panel "What each 007 experiment cost" shows that field under "Spend and cost", labelled as an estimate; with
+  nothing configured it says only "No 007 experiments configured".
+
+### Changed
+
+- The README separates effort evaluation, local observation and host-skill use. It states log-decoding and served-identity
+  limits, compressed-log requirements, stable installation/PATH and integration coverage, with detailed evidence linked.
+- A session whose turns used more than one model or effort is labelled `mixed` instead of its last value, so a mixed-model
+  session is no longer priced at one model's rate nor matched to one model's calibration. Claude's `<synthetic>` placeholder is
+  not a model.
+
+- Dashboard: "Full evidence and operations" now uses the verdict home's type scale, spacing, flat 6 px cards and colour tokens,
+  and its summary reads as a section header. Its panels are grouped under Spend and cost, Activity and coverage, Outcomes and
+  gates, and Data quality; route economics, authority counts, dataset counts and the case-evolution chart start collapsed.
+  Groups are h2 and panels h3, so the page keeps one h1 and no skipped heading level. Table headers are sentence case
+  everywhere, the live-session table included. No claim wording changed.
+
+### Fixed
+
+- Codex reasoning counters reconcile reported deltas, cumulative observations and available output bounds. Optional
+  baselines retain uncertainty, known cumulative values stay visible, and dated errors outside the window preserve valid primary baselines.
+  Cumulative reasoning growth fits output growth over the corresponding interval, including optional gaps. Repeated
+  last-usage records validate their own reasoning/output relationship before consumption is deduplicated.
+  Mixed known and unknown reasoning deltas retain their feasible lower and upper bounds. Pre-window primary resets
+  discard obsolete constraints, and sparse reasoning deltas obey the output growth available from cumulative counters.
+  Reporting-window results reconcile cumulative, baseline and window ranges together. Unknown baselines retain their
+  output bounds, zero-capacity intervals infer exact reasoning, and dated inconsistent deltas discard older constraints.
+  Continuous pre-window omissions retain earlier reasoning evidence. Unanchored last observations constrain their own
+  cumulative reasoning within output bounds. Mixed full/sparse last objects retain every reconstructible primary increment,
+  while contradictory reported deltas remain incomplete and preserve known diagnostic totals.
+  Malformed optional scalars preserve readable primary counters. Unreported reasoning stays unavailable through summaries
+  and snapshots, with an explicit availability flag; Codex output pricing can use complete primary usage without that optional
+  measurement. Duplicate consumption is identified by primary counters while every physical observation retains validation
+  and optional evidence. Subset constraints include non-reasoning capacity, and resets preserve known interval subtotals.
+  An empty reporting window requires a readable primary snapshot before its counters can be complete.
+- Codex cache subsets must fit the cumulative input categories and leave a feasible complement. Sparse allocation
+  reports must agree with a known chronological increment. Contradictory allocation withholds pricing while primary
+  diagnostics remain available. Omitted subset fields retain their feasible ranges.
+- Full primary last-usage objects preserve optional allocation presence through aggregation. Known cumulative
+  increments reconstruct omitted allocation fields, and explicit contradictory values still withhold pricing.
+- Reasoning availability reflects the normalized diagnostic value, including aggregates outside the numeric envelope.
+- Fresh-command Codex telemetry validates cache reads plus cache writes against inclusive input before accumulation
+  and receipt enrichment. Claude retains its separate additive input/cache accounting.
+- Primary subtotal availability is checked before composition, including across resets whose individually finite
+  counters produce an unavailable aggregate. Finite diagnostic subtotals and explicit zero retain their values.
+- Sparse Codex reasoning deltas obey reported cumulative bounds before deduplication, while absent optional bounds remain
+  unavailable. Reliably dated Kimi/Gemini events outside the window cannot invalidate current usage because of missing counters.
+- Retained identified logs preserve timestamp fallback beside other contributing logs; a fresh observation replaces only
+  its own log. Full and partial repeated deltas share cumulative bounds before duplicate suppression.
+- Gemini validates primary composition and cache allocations per observation, preserving known primary usage with unavailable
+  allocation pricing. Untimed usage and missing counter objects retain uncertainty across the native readers.
+- Invalid cache-only deltas retain allocation uncertainty before fallback and duplicate suppression. Coherent partial
+  allocations remain priceable through validated cumulative counters.
+  Unidentified historical activity keeps its timestamp fallback when merged with named logs.
+- Shared native usage checks and checked token subtotals keep unrepresentable aggregates unavailable across pricing,
+  summaries, routes and the dashboard. Known finite subtotals and explicit zero remain supported.
+  Token-weighted quota rejects unrepresentable denominators, and invalid provided Kimi/Gemini counters stay incomplete.
+- Counter timestamps survive duplicate suppression, and untimed Claude usage or cost retains window uncertainty.
+  Required cumulative cache baselines and normalized Claude cache tiers are validated before pricing.
+  Contradictory cache tiers preserve known primary and aggregate usage with tier pricing unavailable.
+- Cumulative windows share temporal validation across native providers. Cache allocation is validated
+  before duplicate suppression and after interval/window derivation, preserving primary usage.
+- Native command telemetry validates Claude counter aliases by presence, type and agreement. Fatal accounting
+  errors freeze the accepted prefix independently of read chunking, including aggregate limits and EOF.
+  Oversized content retains its parsed identity envelope through bounded in-memory string compaction,
+  with UTF-8 and escape validation throughout the discarded text.
+- Compacted Codex identity messages invalidate native observation when their model evidence becomes unavailable.
+  The replay runner requires confirmed output-stream closure, retains accepted prefix diagnostics, and concurrently
+  counts stderr in memory. Its receipt adds `streams_closed` beside the existing stderr byte count.
+- Activity, route and lab-report totals expose unavailable aggregates when they cannot be represented.
+  Reservation comparisons handle large integer operands. Execution and acceptance timeout limits are
+  checked before launch within the portable subprocess wait range.
+- Native usage windows use an inclusive cutoff, reject temporal rewinds and reconcile cache pricing counters.
+  Overflow-safe monetary validation is shared by collection, telemetry, task/replay receipts and rate cards.
+  Rate-card arithmetic preserves representable estimates without intermediate float overflow.
+- Standalone replay rejects nonpositive timeouts before output or launch. Controller accounting preserves
+  unavailable aggregate spend when individually finite costs exceed representable totals, including recovery.
+- Lineage prefers current project-local identities and uses cross-project parent information only when unambiguous.
+  Cumulative usage requires continuity. Contradictory cache allocation keeps primary totals available and pricing unknown.
+- Replay preflight checks the target filesystem's case rules, and the lab report reuses the shared receipt classifier.
+  Numeric execution limits are validated before output/dispatch. Ledger readers and sums handle oversized values safely.
+- CI runs on pull requests, `main` pushes and version tags, avoiding a second full run for each development-branch push.
+- Recovery preserves unavailable-cost, per-cell and invalid-count stops before dispatch. Invalid numeric costs remain
+  unavailable. Controllers and the ledger share timestamp and
+  repeated-terminal validation. Replay and lab entry points preflight the full cell artifact namespace before execution.
+- Artifact readers distinguish identified replay cells from runner receipts, including arms ending in `.runner`.
+  Ambiguous legacy artifacts stay unavailable without rewriting historical bytes. Current log identities withdraw
+  obsolete parent aliases. Native usage completeness is checked per observation, before deduplication, and against
+  available cumulative counters.
+- The spend ledger joins dispatch-only attempts and marks malformed or duplicate dispatch history incomplete. The dashboard
+  shows lower bounds for affected counts and costs. Lab controllers sharing an output directory serialize before dispatch
+  and refuse uncertain or damaged history. Task/arm identity collisions fail before execution. Three-digit replicates
+  remain visible to result and budget readers.
+- Commit ownership carries source, project and root session through attribution, including linked worktrees. Named-log
+  observations supersede by recorded order, including same-timestamp repairs and restored native timestamps. Recording
+  serializes read/dedup/append and preserves torn historical bytes while separating new JSON rows. Unresolved Claude
+  legacy history stays uncertain even without a fresh companion log.
+- Empty Codex per-turn usage falls back to cumulative observations. Incoherent totals remain incomplete. Claude aggregate
+  cache writes survive missing tier detail, with tier-dependent prices unavailable when the breakdown is unknown.
+  Successful decoder recovery clears the previous unreadable-log marker.
+- Parent/child consolidation preserves project scope, including record deduplication. Per-commit model and effort come from
+  the contributing logs, with mixed or unavailable identity retained explicitly. Fresh Claude main-log reads replace
+  identifiable legacy clipped intervals. Unresolved historical intervals stay uncertain for attribution.
+- Changed plain logs verify every consumed byte before resuming their parser, detecting equal-length, regrown and middle
+  rewrites on the same inode. This adds prefix-read I/O with bounded memory. Concurrent reads serialize collector state.
+- Missing Claude response usage and invalid Codex snapshots remain incomplete. Durable recording keeps completeness and
+  same-timestamp counter repairs. Reports retain known subtotals, while incomplete and legacy totals remain unavailable
+  for token-weighted quota comparisons.
+- `lab chain` creates new output directories owner-only and preserves existing directory permissions.
+- Dashboard startup uses the bound address for its server metadata, avoiding reverse-DNS stalls before announcing its URL.
+
+- Project navigation wraps to its own row when the brand and controls cannot fit, avoiding page overflow on narrow screens.
+- The lab spend ledger keeps missing receipts and amounts without cost provenance unpriced, including executed failures.
+  A measured zero needs an explicit numeric receipt cost and provenance.
+- Local session capture reads every Codex and Claude log whole, streaming row metadata with bounded memory, and reads a growing
+  log on from a byte cursor. It read only the last 4 MiB of a Codex rollout (64 MiB for Claude) and counted the unread head as
+  active: on the maintainer's machine one 541 MB rollout was a single 291 h activity interval instead of 35 (60 h), so it was
+  credited with commits made while it was idle, with 4 M tokens instead of 2.6 bn. Each stored row names its log (`log_id`) and
+  the store keeps a log's newest whole read, so the next `record` pass replaces a clipped interval.
+- Compressed Codex rollouts (`*.jsonl.zst`, 2,819 of 2,879 on the maintainer's machine) are read: `compression.zstd` on
+  Python 3.14+, else the `zstd` binary. Without either they are counted in `activity_errors` and in `record`'s output
+  (`unreadable_logs`), never skipped silently.
+- Codex subagent and auto-review (guardian) threads report their root session's id with `subagent: true`, as Claude subagent logs
+  do, so they no longer compete with the thread that spawned them for its commits; rows stored under a child's own id join the
+  root once `record` reads the child's log again. With this release's fixes, one `record` pass on the maintainer's machine took
+  one repository from 8 attributed, 200 ambiguous and 43 unattributed commits to 198, 13 and 40.
+- With `observatory.auto`, a Codex worktree (`~/.codex/worktrees/<name>/<repo>`) is the same project as its repository (git
+  common dir) instead of a project of its own.
+- A Claude session opened outside a repository maps to the first repository its rows move into (`cwds`), not only to its first
+  row's directory.
+- The activity panel no longer freezes a session's status and its 24 h window while the log is unchanged: both are recomputed at
+  every read from the metadata kept per log.
+- The passive Claude reader counts each response once (Claude Code repeats a response's usage on one row per content block: 52%
+  of the maintainer's assistant rows), and a present but invalid token counter makes usage incomplete instead of zero.
+
 ## [1.6.2] - 2026-11-08
 
 Patch release: the confirmed findings of an external audit of 1.6.1, the contribution rules, reviewer identity levels and
@@ -448,7 +626,9 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...HEAD
+
+[1.7.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...v1.7.0
 [1.6.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.5.2...v1.6.0
