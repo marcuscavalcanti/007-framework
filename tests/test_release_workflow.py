@@ -45,6 +45,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.git("add", ".")
         self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture")
         self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "tag", "-a", "v1.2.3", "-m", "fixture")
+        self.env["GITHUB_EVENT_NAME"] = "push"
+        self.env["GITHUB_SHA"] = self.git("rev-parse", "HEAD").stdout.strip()
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.repo, env=self.env, check=True, capture_output=True, text=True, timeout=15)
@@ -84,3 +86,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_unsafe_tag_name_is_refused(self):
         self.env["GITHUB_REF_NAME"] = "v1.2.3/extra"
         self.assert_refused()
+
+    def test_checkout_fetches_the_tag_ref_explicitly(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        checkout = workflow.split("uses: actions/checkout@", 1)[1].split("- uses:", 1)[0]
+        self.assertIn("ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}", checkout)
+
+    def test_tag_event_cannot_build_a_different_commit(self):
+        self.env["GITHUB_SHA"] = "0" * 40
+        self.assert_refused()
+
+    def test_manual_recovery_archives_the_bound_tag_from_main(self):
+        tag_object = self.git("rev-parse", "refs/tags/v1.2.3").stdout.strip()
+        self.env.update(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF_NAME="main",
+                        GITHUB_SHA="0" * 40, RELEASE_TAG="v1.2.3", EXPECTED_TAG_OBJECT=tag_object)
+        result = self.execute()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("007-framework-1.2.3.tar.gz", (self.root / "outputs").read_text())
+
+    def test_manual_recovery_refuses_missing_or_changed_tag_object(self):
+        self.env.update(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF_NAME="main", RELEASE_TAG="v1.2.3")
+        for tag_object in ("", "0" * 40):
+            with self.subTest(tag_object=tag_object):
+                self.env["EXPECTED_TAG_OBJECT"] = tag_object
+                self.assert_refused()

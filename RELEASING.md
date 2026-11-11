@@ -105,6 +105,14 @@ Actions artifact for the maintainer. Exact-tag CI, independent review and the
 publication authorization remain required before step 5. Account configuration,
 PyPI Trusted Publishing and announcement each keep their separate approval.
 
+If tag-triggered preparation fails, keep the annotated tag and record the failed
+run. After the workflow fix reaches `main`, dispatch `release.yml` on `main`
+with the existing `tag` and its exact `tag_object` SHA. The job checks out the
+tag, confirms the annotated object and builds from its peeled commit. Verify the
+attestation against the workflow and commit that ran on `main`. Verify the
+packaged source commit against the original annotated tag and retain the
+successful exact-tag CI record.
+
 ## Rules
 
 - CI runs for pull requests, pushes to `main`, and `v*` tags. Development
