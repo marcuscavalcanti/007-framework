@@ -111,6 +111,10 @@ Candidate prepared for independent review. Release qualification is recorded in
   Contradictory cache tiers preserve known primary and aggregate usage with tier pricing unavailable.
 - Cumulative windows share temporal validation across native providers. Cache allocation is validated
   before duplicate suppression and after interval/window derivation, preserving primary usage.
+- Native command telemetry validates Claude counter aliases by presence, type and agreement. Fatal accounting
+  errors freeze the accepted prefix independently of read chunking, including aggregate limits and EOF.
+  Oversized content retains its parsed identity envelope through bounded in-memory string compaction,
+  with UTF-8 and escape validation throughout the discarded text.
 - Activity, route and lab-report totals expose unavailable aggregates when they cannot be represented.
   Reservation comparisons handle large integer operands. Execution and acceptance timeout limits are
   checked before launch within the portable subprocess wait range.
