@@ -464,6 +464,50 @@ class NativeTelemetryTests(unittest.TestCase):
             rows[-1]["total_cost_usd"] = cost
             self.assertEqual(self.parse("claude", rows)["status"], "incomplete")
 
+    def test_recognized_session_initializations_require_one_nonempty_string_id(self):
+        codex_init = {"type": "thread.started", "thread_id": "s"}
+        claude_init = {"type": "system", "subtype": "init", "session_id": "s"}
+        usage = {"input_tokens": 1, "output_tokens": 0}
+        codex_turn = [{"type": "turn.started"}, {"type": "turn.completed", "usage": usage}]
+        claude_result = [{"type": "result", "subtype": "success", "is_error": False,
+                          "session_id": "s", "num_turns": 1, "usage": usage}]
+        control = self.parse("codex", [codex_init, *codex_turn, *codex_turn])
+        self.assertEqual((control["status"], control["usage"]["total_tokens"]), ("complete", 2))
+        for provider, init, key, terminal in (
+                ("codex", codex_init, "thread_id", codex_turn),
+                ("claude", claude_init, "session_id", claude_result)):
+            shape = {k: v for k, v in init.items() if k != key}
+            invalid = [shape, *[dict(shape, **{key: value}) for value in (None, "", 1, "s", "other")]]
+            for duplicate in invalid:
+                with self.subTest(provider=provider, duplicate=duplicate):
+                    before_terminal = self.parse(provider, [init, duplicate, *terminal])
+                    self.assertEqual((before_terminal["status"], before_terminal["problem"]),
+                                     ("incomplete", "ambiguous-session"))
+                    after_terminal = self.parse(provider, [init, *terminal, duplicate, *terminal])
+                    self.assertEqual((after_terminal["status"], after_terminal["problem"]),
+                                     ("incomplete", "ambiguous-session"))
+                    self.assertEqual(after_terminal["usage"]["total_tokens"], 1)
+            for missing in (shape, dict(shape, **{key: None})):
+                with self.subTest(provider=provider, missing=missing):
+                    result = self.parse(provider, [missing, init, *terminal])
+                    self.assertEqual((result["status"], result["problem"]),
+                                     ("incomplete", "ambiguous-session"))
+
+    def test_claude_terminal_session_id_is_checked_without_string_coercion(self):
+        terminal = {"type": "result", "subtype": "success", "is_error": False,
+                    "num_turns": 1, "usage": {"input_tokens": 1, "output_tokens": 0}}
+        for initial, fields in (("1", {"session_id": 1}), ("None", {}),
+                                ("None", {"session_id": None}), ("True", {"session_id": True}),
+                                ("s", {"session_id": "other"}), ("s", {"session_id": ""})):
+            with self.subTest(initial=initial, fields=fields):
+                init = {"type": "system", "subtype": "init", "session_id": initial}
+                control = self.parse("claude", [init, {**terminal, "session_id": initial}])
+                self.assertEqual((control["status"], control["usage"]["total_tokens"]), ("complete", 1))
+                invalid = self.parse("claude", [init, {**terminal, **fields}])
+                self.assertEqual((invalid["status"], invalid["problem"]),
+                                 ("incomplete", "ambiguous-terminal"))
+                self.assertIsNone(invalid["usage"])
+
     def test_invalid_optional_model_cost_does_not_discard_the_valid_total(self):
         result = self.parse("claude", [
             {"type": "system", "subtype": "init", "session_id": "s"},

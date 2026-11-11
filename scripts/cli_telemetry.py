@@ -200,9 +200,10 @@ class NativeTelemetry:
                 thread = row["thread_id"]
                 if not isinstance(thread, str) or self.session != hashlib.sha256(thread.encode()).hexdigest():
                     raise ValueError("foreign-thread-usage")
-            session = row.get("thread_id") if self.provider == "codex" and kind == "thread.started" else (
-                row.get("session_id") if self.provider == "claude" and kind == "system" and row.get("subtype") == "init" else None)
-            if session is not None:
+            codex_init = self.provider == "codex" and kind == "thread.started"
+            claude_init = self.provider == "claude" and kind == "system" and row.get("subtype") == "init"
+            if codex_init or claude_init:
+                session = row.get("thread_id" if codex_init else "session_id")
                 if self.session is not None or not isinstance(session, str) or not session:
                     raise ValueError("ambiguous-session")
                 self.session = hashlib.sha256(session.encode()).hexdigest()
@@ -226,7 +227,9 @@ class NativeTelemetry:
             if self.provider == "codex" and kind in ("error", "turn.failed"):
                 raise ValueError(native_error_class(row))
             if self.provider == "claude" and kind == "result":
-                if self.result_seen or not self.session or self.session != hashlib.sha256(str(row.get("session_id")).encode()).hexdigest():
+                session = row.get("session_id")
+                if (self.result_seen or not isinstance(session, str) or not session
+                        or self.session != hashlib.sha256(session.encode()).hexdigest()):
                     raise ValueError("ambiguous-terminal")
                 self.add_usage(row.get("usage"))
                 self.result_seen = True
