@@ -339,8 +339,10 @@ class LabEndToEnd(unittest.TestCase):
         self.assertIn("margin 3 points", (results / "report.md").read_text())
         config = json.loads(path.read_text())
         path.write_text(json.dumps({**config, "compare": {**config["compare"], "margin": .1}}))
-        self.assertEqual(lab.report(path, results, None)["verdict"]["margin"], .1)
+        changed = lab.report(path, results, None)
+        self.assertEqual((changed["verdict"]["margin"], changed["run_manifest"]), (.1, {"state": "sealed", "compare_changed": True}))
         self.assertIn("margin 10 points", (results / "report.md").read_text())
+        self.assertIn("the comparison or margin changed after the seal", (results / "report.md").read_text())
         path.write_text(json.dumps({**config, "compare": {**config["compare"], "margin": .5}}))
         with self.assertRaises(ValueError):
             lab.report(path, results, None)
@@ -521,6 +523,83 @@ class Budget(unittest.TestCase):
             self.assertEqual((second["stop"], second["calls"]), (None, 5))
             bad = lab.run(path, root / "bad", replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=self.fake(valid=False)[0])
             self.assertEqual((bad["stop"], bad["calls"]), ("invalid-budget", 3))
+
+    def test_resume_refuses_anything_sealed_that_changed_and_resumes_once_restored(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = self.config(root)
+            tool, other = root / "agent", root / "other-agent"
+            tool.write_text("#!/bin/sh\n")
+            other.write_text("#!/bin/sh\necho other\n")
+            link = root / "agent-link"
+            link.symlink_to(tool)
+            config = json.loads(path.read_text())
+            config["agent_command"] = [str(link), "--", str(tool)]
+            path.write_text(json.dumps(config))
+            original = path.read_text()
+            out = root / "out"
+            first = lab.run(path, out, replicates=1, jobs=1, max_calls=1, max_usd=99, stop_usd=1, execute=self.fake()[0])
+            self.assertEqual(first["stop"], "call-budget")
+            manifest = json.loads((out / "run-manifest.json").read_text())
+            self.assertEqual(manifest["cells_before_seal"], 0)
+            self.assertEqual(set(manifest["executables"]), {str(link), str(tool)})
+            dispatched = (out / "dispatch.jsonl").read_text()
+
+            def changed_arm():
+                path.write_text(json.dumps({**config, "arms": {"a": {"effort": "low"}, "b": {}}}))
+
+            def changed_task():
+                path.write_text(json.dumps({**config, "tasks": [{**config["tasks"][0], "prompt": "other"}, *config["tasks"][1:]]}))
+
+            def changed_binary():
+                tool.write_text("#!/bin/sh\nexit 1\n")
+
+            def retargeted_link():
+                link.unlink()
+                link.symlink_to(other)
+
+            for name, change, key in (("arm", changed_arm, "set_sha256"), ("task", changed_task, "set_sha256"),
+                                      ("binary", changed_binary, "executables"), ("symlink", retargeted_link, "executables"),
+                                      ("python", None, "python"), ("framework", None, "framework_sha256")):
+                with self.subTest(change=name):
+                    execute = mock.Mock(side_effect=self.fake()[0])
+                    if name == "python":
+                        with mock.patch.object(lab.sys, "version", "0.0.0 (other)"):
+                            state = lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=99, stop_usd=1, execute=execute)
+                    elif name == "framework":
+                        (root / "fw").mkdir(exist_ok=True)
+                        (root / "fw" / "effort_lab.py").write_text("# another 007\n")
+                        with mock.patch.object(lab, "HERE", root / "fw"):
+                            state = lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=99, stop_usd=1, execute=execute)
+                    else:
+                        change()
+                        state = lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=99, stop_usd=1, execute=execute)
+                    self.assertEqual((state["stop"], state["changed"], state["calls"]), ("manifest-mismatch", [key], 0))
+                    execute.assert_not_called()
+                    self.assertEqual((out / "dispatch.jsonl").read_text(), dispatched)
+                    self.assertFalse((out / "STOP.json").exists())
+                    path.write_text(original)
+                    tool.write_text("#!/bin/sh\n")
+                    link.unlink()
+                    link.symlink_to(tool)
+            resumed = lab.run(path, out, replicates=2, jobs=2, max_calls=99, max_usd=99, stop_usd=1, execute=self.fake()[0])
+            self.assertEqual((resumed["stop"], resumed["calls"]), (None, 15))  # limits and replicates stay adjustable
+
+    def test_results_are_read_only_with_the_set_they_were_sealed_with(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            config = json.loads(path.read_text())
+            self.assertEqual(lab.sealed_state(config, out), {"state": "absent", "compare_changed": None})
+            lab.run(path, out, replicates=1, jobs=1, max_calls=1, max_usd=99, stop_usd=1, execute=self.fake()[0])
+            self.assertEqual(lab.sealed_state(config, out), {"state": "sealed", "compare_changed": False})
+            self.assertEqual(lab.sealed_state({**config, "compare": {"margin": .1}}, out), {"state": "sealed", "compare_changed": True})
+            with self.assertRaisesRegex(ValueError, "different set"):
+                lab.sealed_state({**config, "seed": 2}, out)
+            (out / "run-manifest.json").unlink()  # a directory from before the manifest
+            lab.run(path, out, replicates=1, jobs=1, max_calls=1, max_usd=99, stop_usd=1, execute=self.fake()[0])
+            self.assertEqual(json.loads((out / "run-manifest.json").read_text())["cells_before_seal"], 1)
+            self.assertEqual(lab.sealed_state(config, out)["state"], "sealed-late")
 
     def test_failed_calls_without_a_cost_are_charged_their_reserve_up_to_the_invalid_budget(self):
         with tempfile.TemporaryDirectory() as d:

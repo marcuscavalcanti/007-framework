@@ -411,6 +411,7 @@ def chain(config_path, results, out):
     config = json.loads(config_path.read_text())
     pairs = json.loads((config_path.parent / "pairs.json").read_text())
     tasks = {t["id"]: t for t in config["tasks"]}
+    sealed_state(config, results)
     repo = next(iter(config["repos"].values()))
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     mirror = out / "mirror.git"
@@ -546,6 +547,48 @@ def cost_of(out, cid, row):
     return value if harness_report._valid_money(value) else None
 
 
+RUN_MANIFEST = "run-manifest.json"
+
+
+def _sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def set_sha256(config):
+    """The set as parsed: arms, agent command, tasks with their prompts, bases and oracle hashes. Whitespace does not count, nor
+    `compare` (which arms a report contrasts, at what margin): it changes no attempt, and the report says if it moved after the seal."""
+    treatment = {k: v for k, v in config.items() if k != "compare"}
+    return hashlib.sha256(json.dumps(treatment, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def seal(config):
+    """What a resumed run must find unchanged. Limits (replicates, calls, money, jobs, invalid budget) stay adjustable: they never
+    change an arm. Executables are the agent command's program and every absolute file it names, through symlinks."""
+    tools = {}
+    for index, part in enumerate(config.get("agent_command", [])):
+        found = shutil.which(part) if index == 0 and "/" not in part else part if os.path.isabs(part) else None
+        if found and Path(found).is_file():
+            real = Path(found).resolve()
+            tools[part] = {"path": str(real), "sha256": _sha256(real)}
+    # ponytail: the agent command's files only; compilers and test runners the oracle calls are not sealed yet
+    return {"schema": "007-framework/lab-run-manifest/v1", "set_sha256": set_sha256(config), "executables": tools,
+            "framework_sha256": hashlib.sha256("".join(_sha256(p) for p in sorted(HERE.glob("*.py"))).encode()).hexdigest(),
+            "python": sys.version.split()[0]}
+
+
+def sealed_state(config, results):
+    """state: sealed, sealed-late (a run older than the manifest) or absent; compare_changed: the comparison or margin differs from
+    the one in the set when the run was sealed. Results of a different set are refused, not read."""
+    manifest = results / RUN_MANIFEST
+    if not manifest.is_file():
+        return {"state": "absent", "compare_changed": None}
+    recorded = json.loads(manifest.read_text())
+    if recorded.get("set_sha256") != set_sha256(config):
+        raise ValueError(f"results were run with a different set: {results}")
+    return {"state": "sealed-late" if recorded.get("cells_before_seal") else "sealed",
+            "compare_changed": recorded.get("compare") != config.get("compare")}
+
+
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
     """Serialize controllers sharing an output directory before checking or publishing dispatch history."""
     if not all(harness_report._valid_money(value) for value in (max_usd, stop_usd)):
@@ -590,6 +633,15 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         return {"stop": "unreadable-dispatch-history", "calls": 0}
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
+    sealed, manifest = seal(config), out / RUN_MANIFEST
+    if manifest.is_file():
+        recorded = json.loads(manifest.read_text())
+        changed = sorted(key for key in sealed if recorded.get(key) != sealed[key])
+        if changed:  # not a STOP: restoring what was sealed makes the run resumable again
+            return {"stop": "manifest-mismatch", "changed": changed, "calls": 0}
+    else:  # a directory from before 1.8 is sealed now and reported as sealed-late
+        manifest.write_text(json.dumps({**sealed, "compare": config.get("compare"), "sealed_at": _now(), "cells_before_seal": len(done)},
+                                       indent=1) + "\n")
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
 
     def charge(cost):
@@ -955,6 +1007,7 @@ def verdict(c, ci, *, valid, tasks, split_tasks, sensitive, accepted_share, next
 def report(config_path, results, next_results):
     config = json.loads(config_path.read_text())
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
+    manifest = sealed_state(config, results)
     rows = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
@@ -1006,7 +1059,7 @@ def report(config_path, results, next_results):
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
         tier["thesis"] = "UNPROVEN"
     aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a)) for a in (low, ref)}
-    result = {"schema": "007-lab/report/v6", "at": _now(), "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
+    result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES}
@@ -1027,12 +1080,18 @@ def summary(result, low, ref, attempts):
     interval = f" (mean {points(r['mean'])} points, 95% interval {points(r['ci95'][0])} to {points(r['ci95'][1])}, {r['tasks']} commits)" if r.get("ci95") else ""
     saving = f"{100 * c['reduction']:.0f}% less agent time per accepted change" if c["reduction"] is not None else "agent time not comparable"
     reasoning = result["median_reasoning_tokens"]
+    sealed = result["run_manifest"]
+    binding = {"sealed": "every attempt ran with the set, agent command, 007 and Python sealed before the first dispatch",
+               "sealed-late": "sealed only after some attempts had run: those earlier attempts are not bound to it",
+               "absent": "no run manifest: nothing binds the attempts to one set"}[sealed["state"]]
+    binding += "; the comparison or margin changed after the seal" if sealed["compare_changed"] else ""
     return "\n".join([
         f"# `{low}` vs `{ref}`: {attempts} valid attempts",
         "",
         f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {reasoning[low]:.0f} vs {reasoning[ref]:.0f}.",
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
+        f"- **Run binding:** {binding}.",
         "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits, models or specification forms other than these.",
         f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
         "",
