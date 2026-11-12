@@ -2,13 +2,14 @@
 economic reading. No model. Usage: python3 -I -B analyze_b.py <attempts_dir> [pilot_results_dir out.json]
 - Eligible: a pooled repository with at least 8 tasks in the primary freeze's frozen-reach.json.
 - Margin m = min(0.20, acceptance at `high` x median cost saving of `medium`), from that repository's valid pilot cells
-  (docs/lab.md "Choosing the margin"). m < 0.01: NO-SAVING, reported, never decisive.
+  (docs/lab.md "Choosing the margin"). m < 0.01: NO-SAVING, reported, never decisive. Costs are read as the run reads them
+  (`effort_lab.cost_of`: the cell, else its runner receipt).
 - Attempts: fresh, replicates 1-4 per arm, from <attempts_dir> (the confirmatory block 1 after a GO, else block B).
 - Verdict, readings P and B, the worse decides: KILL if the 95% t interval lies wholly below -m; PROVEN if (mean + m)/se beats
   max(floor_m, c), floor_m simulated from go-json's top-up cells (replicates 1-4) at m with 4 attempts, c from the repository's own
   cells; fewer than 8 signal tasks: NO-INFORMATION; else NOT-PROVEN.
 - Economic reading R = (cost per accepted change at medium) / (same at high), over every dispatched cell; a cell without a cost
-  counts at the US$2 reserve. Task-bootstrap 95% interval, 10,000 draws, seed 20261114.
+  counts at the US$2 reserve only when neither the cell nor its runner receipt has one. Task-bootstrap 95% interval, 10,000 draws, seed 20261114.
 - Per repository: PAYS = PROVEN and R's upper bound < 1; DOES-NOT-PAY = KILL; PROVEN-NOT-ECONOMIC = PROVEN with R reaching 1."""
 import json
 import math
@@ -33,7 +34,8 @@ lab.GATES["draws"] = 100_000
 
 
 def cost(r):
-    return r["cost_usd"] if isinstance(r.get("cost_usd"), (int, float)) else RESERVE
+    value = lab.cost_of(r["_dir"], r["cell"], r) if "_dir" in r else r.get("cost_usd")
+    return value if isinstance(value, (int, float)) else RESERVE
 
 
 def margin(pilot):
@@ -41,7 +43,7 @@ def margin(pilot):
     if not high:
         return None, {}
     accepted = statistics.fmean(bool(r.get("accepted")) for r in high)
-    prices = {a: [r["cost_usd"] for r in pilot if r["arm"] == a and isinstance(r.get("cost_usd"), (int, float))] for a in (LOW, REF)}
+    prices = {a: [cost(r) for r in pilot if r["arm"] == a and isinstance(lab.cost_of(r["_dir"], r["cell"], r), (int, float))] for a in (LOW, REF)}
     saving = 1 - statistics.median(prices[LOW]) / statistics.median(prices[REF]) if prices[LOW] and prices[REF] else None
     m = min(CAP_M, accepted * saving) if saving is not None else None
     return m, {"acceptance_high": accepted, "cost_saving": saving}
@@ -100,8 +102,8 @@ def main():
     out_path = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else HERE / "b-result.json"
     reach = json.loads((HERE / "frozen-reach.json").read_text())
     repo_of = {t["id"]: t["repo"] for t in json.loads((HERE / "pilot-set.json").read_text())["tasks"]}
-    pilot = [r for r in lab.load_cells(pilot_dir) if r["valid"] is True]
-    every = [r for r in lab.load_cells(attempts) if r["replicate"] <= ATTEMPTS]
+    pilot = [{**r, "_dir": pilot_dir} for r in lab.load_cells(pilot_dir) if r["valid"] is True]
+    every = [{**r, "_dir": attempts} for r in lab.load_cells(attempts) if r["replicate"] <= ATTEMPTS]
     rng, result = random.Random(SEED), {}
     for repo in sorted({repo_of[t] for t in reach}):
         tasks = {t for t in reach if repo_of[t] == repo}

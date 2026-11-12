@@ -38,7 +38,8 @@ repository's replay tasks, against a margin declared before spending.
 
 ## Economic reading
 - `R` = cost per accepted change at `medium` ÷ the same at `high`.
-- It counts every dispatched cell. A cell without a cost counts at the US$2 reserve.
+- It counts every dispatched cell. Costs are read as the run reads them: the cell, else its runner receipt. Only a cell with
+  neither counts at the US$2 reserve.
 - Its 95% interval comes from a task bootstrap: 10,000 draws, seed 20261114.
 
 ## Answer per repository
@@ -54,6 +55,10 @@ repository's replay tasks, against a margin declared before spending.
 - **Expected margin:** 0.574 × 0.315 ≈ 0.18.
 - **Expected R over all 8 replicates:** 0.70 to 0.72.
 - Values outside these would mean the script is wrong, and it is corrected before the hash.
+- **First smoke run:** R = 0.663. The script charged the reserve to the top-up's 4 invalid `high` cells, whose cost is only in their
+  runner receipts (US$1.43 in all). It was corrected to read costs as the run does, before this file's final hash.
+- **Second smoke run, on the corrected script:** margin 0.1806; R over all 8 replicates 0.706. On replicates 1 to 4, go-json
+  alone reads PROVEN at 0.18, with R 0.694 [0.628, 0.781]: PAYS. This reading is post hoc, on public data, and decides nothing.
 
 ## Limits stated in advance
 - PROVEN at break-even is not "the same change".
