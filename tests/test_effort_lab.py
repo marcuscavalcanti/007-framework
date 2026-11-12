@@ -333,6 +333,31 @@ class LabEndToEnd(unittest.TestCase):
         self.assertNotIn("Run binding", text)
         self.assertNotIn("Cells,", text)
 
+    def test_a_stage_1_from_before_the_seal_chains_and_reports_and_stage_2_keeps_its_agent_command(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        lab.run(path, results, replicates=1, jobs=2, max_calls=2, max_usd=10, stop_usd=1)
+        (results / "run-manifest.json").unlink()  # a stage 1 run by 1.7.0: no manifest, no digests in its ledger
+        rows = [json.loads(line) for line in (results / "dispatch.jsonl").read_text().splitlines()]
+        (results / "dispatch.jsonl").write_text("".join(json.dumps({k: v for k, v in r.items() if k != "manifest_sha256"}) + "\n" for r in rows))
+        stage2, nxt = self.root / "stage2-legacy", self.root / "next-legacy"
+        lab.chain(path, results, stage2)
+        lab.run(stage2 / "replay-set.json", nxt, replicates=1, jobs=2, max_calls=2, max_usd=10, stop_usd=1)
+        lab.sensitivity(path, 2)
+        report = lab.report(path, results, nxt)
+        self.assertEqual((report["verdict"]["run_binding"], report["verdict"]["next_run_binding"]), ("absent", "sealed"))
+        manifest = nxt / "run-manifest.json"  # a stage 2 whose agent command differs from stage 1's set, its ledger consistent
+        sealed, ledger = manifest.read_text(), (nxt / "dispatch.jsonl").read_text()
+        edited = json.dumps({**json.loads(sealed), "agent_command_sha256": "0" * 64})
+        manifest.write_text(edited)
+        (nxt / "dispatch.jsonl").write_text(ledger.replace(lab.hashlib.sha256(sealed.encode()).hexdigest(), lab.hashlib.sha256(edited.encode()).hexdigest()))
+        with self.assertRaisesRegex(ValueError, "another agent command"):
+            lab.report(path, results, nxt)
+        manifest.unlink()  # a stage 2 that lost the manifest its ledger names
+        with self.assertRaisesRegex(ValueError, "lost the manifest"):
+            lab.report(path, results, nxt)
+
     def test_report_uses_the_shared_classifier_for_receipt_like_arm_names(self):
         self.config["arms"]["high.runner"] = self.config["arms"].pop("high")
         self.config["compare"]["reference"] = "high.runner"
@@ -765,6 +790,7 @@ class Budget(unittest.TestCase):
             (out / "dispatch.jsonl").rmdir()
             (out / "dispatch.jsonl").write_text(ledger)
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads a mode-0 file")
     def test_an_unreadable_sealed_file_is_a_structured_stop(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

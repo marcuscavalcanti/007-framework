@@ -25,7 +25,8 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
   - `arm_accounting`: per arm, planned cells, never dispatched, dispatched without a result, invalid by failure class, valid and
     accepted.
 - **Release preparation keeps annotated tags.** This change was already on `main` after 1.7.0 (`cf3b556`).
-- **Review fixes before release.** Four reviews of earlier candidates returned FIX FIRST, or were stopped. None qualifies this release.
+- **Review fixes before release.** Of five reviews of earlier candidates, four returned FIX FIRST and one was stopped. None qualifies
+  this release.
   - **OpenAI `gpt-6-astra`, `xhigh` requested, candidate `57b0a08`** (before the reviewer decision):
     - the stream completed with an `error` event ("model at capacity, reconnecting"), so its identity level is `failed`;
     - its findings were still checked in the code.
@@ -51,6 +52,18 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
   - **Claude Fable 5.2, `xhigh` requested, candidate `5e9bbbe`:** identity `verified`, US$3.17. FIX FIRST on stage 2 not held to the
     `unbound` rule. Fixed, with a test, along with its should-fix items (unbound results on resume, `run_binding` in the verdict,
     the limits sentence, `unsealed_files` recorded and named, agent-command lineage for stage 2, the four states documented).
+
+  - **Claude Fable 5.2, `xhigh` requested, candidate `6a3abc2`:** identity `verified`, US$2.47. FIX FIRST on one regression the
+    previous round introduced. The stage-2 agent-command check compared with stage 1's manifest, so it refused every stage 2 over an
+    unsealed (1.7.0) stage 1. It now compares with the set in hand, with tests in both directions. Its should-fix items were fixed too:
+    - a stage 2 without a manifest, refused if its ledger names one;
+    - `next_run_binding` in the verdict;
+    - a `partial` ledger;
+    - the Stage 2 label;
+    - the four states listed everywhere;
+    - `chain` refusing an `unbound` stage 1;
+    - `unsealed_files` validated;
+    - the root test skip.
 
   **What the reviews' findings led to:**
   - **Fixed:**
