@@ -6,16 +6,44 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-12
+
+A minor release for `007 lab`: a resumed run is bound to what it started with, and the report accounts for every planned cell
+per arm. Release qualification is recorded in [the release record](evidence/v1.8.0/release-evidence.md).
+
 ### Added
 
-- `007 lab run` seals `run-manifest.json` before its first dispatch: the set, the agent command's program and files (through
-  symlinks), the 007 scripts and the Python version. A resume that finds any of them changed stops with `manifest-mismatch` and
-  dispatches nothing; limits and the `compare` block stay adjustable. Before this, a resumed run re-read the set and could mix
-  treatments under valid receipts.
-- `007 lab report` and `chain` refuse results sealed with a different set. The report gains `run_manifest`
-  (`sealed`, `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
-- `007 lab report` gains `arm_accounting`: per arm, planned cells, never dispatched, dispatched without a result, invalid by
-  failure class, valid and accepted, also in plain words in `report.md`. Invalid and missing cells were named only as one list.
+- `007 lab run` seals `run-manifest.json` before its first dispatch: the set (with its arm order), the agent command's program
+  and absolute files (through symlinks), the 007 scripts and the Python version. Every dispatch records the manifest's digest. A
+  start or resume that finds any of them changed stops with `manifest-mismatch` and dispatches nothing; an unreadable manifest, or
+  one missing after a dispatch named it, stops with `manifest-unreadable` or `manifest-missing`; dispatches after the seal that
+  do not name it stop with `manifest-mismatch` (`unbound-dispatches`). Files the attempts rewrite go in the set's
+  `unsealed_files`. Limits can change at a planned pause. Before this, a resumed run re-read the set and could mix treatments
+  under valid receipts. Results no sealed dispatch produced stop with `manifest-mismatch` (`unbound-cells`), and an unreadable named file with
+  `executable-unreadable`. The binding state is one of `sealed`, `sealed-late`, `unbound` or `absent`, and the printed verdict
+  carries it as `run_binding`. `run`, `report` and `chain` now refuse some inputs 1.7.0 accepted, as listed here.
+- `007 lab report` and `chain` refuse results sealed with a different set or under another manifest; `report --next-results`
+  requires stage 2 to be chained from this sealed run at the reference arm, with the same agent command, and bound to its
+  own seal under the same rules, and publishes `next_run_manifest`; `chain` refuses a `compare` moved since stage 1 was sealed or a different chain set already in its
+  directory. The printed verdict carries `compare_changed_after_seal`. The report gains `run_manifest` (`sealed`,
+  `sealed-late`, `unbound` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
+- `007 lab report` gains `arm_accounting`: per arm, planned cells (every task at the most replicates reached), never dispatched,
+  attempted without a result (a dispatch or a receipt), invalid by failure class, valid and accepted, and whether the dispatch
+  ledger was complete; also in plain words in `report.md`. Invalid cells and orphan receipts were named only as two flat lists.
+  Reports written by 1.7.0 still render.
+
+### Changed
+
+- The README links the published 1.7.0 release and the dashboard's spend ledger (`709bbba`).
+- Reviewer policy (Marcus, 2026-11-12): the reviewer follows the implementer, at `xhigh`. Codex implements: OpenAI
+  `gpt-6-astra` reviews. Claude implements: Claude Fable 5.2 reviews (`AGENTS.md`, `scripts/review_route.py`). This replaces the
+  cross-family rule; release notes state that reviewer and implementer share a model family.
+
+### Fixed
+
+- `docs/lab.md`: the miner's cap is 1,999 hidden tests (the reader's 2,000 outcomes include `__module__`), not 2,000.
+- Release preparation keeps an annotated tag as such, and a failed tag-triggered preparation can be dispatched again on
+  `main` with the existing tag and its exact tag object (`release.yml`, `RELEASING.md`).
 
 ## [1.7.0] - 2026-11-09
 
@@ -637,7 +665,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0
 
 [1.7.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...v1.7.0
 [1.6.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...v1.6.2

@@ -411,7 +411,12 @@ def chain(config_path, results, out):
     config = json.loads(config_path.read_text())
     pairs = json.loads((config_path.parent / "pairs.json").read_text())
     tasks = {t["id"]: t for t in config["tasks"]}
-    sealed_state(config, results)
+    parent_state = sealed_state(config, results)
+    if parent_state["state"] == "unbound":
+        raise ValueError("stage 1 is unbound from its seal: chain refuses to build on it")
+    if parent_state["compare_changed"]:  # compare.reference picks stage 2's arm: it must be the one sealed with stage 1
+        raise ValueError("the comparison changed after stage 1 was sealed: chain refuses to pick stage 2's arm from it")
+    parent = parent_state["sha256"]
     repo = next(iter(config["repos"].values()))
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     mirror = out / "mirror.git"
@@ -429,8 +434,13 @@ def chain(config_path, results, out):
             base = commit_tree(mirror, tree, meta["next"]["base"])
         next_tasks.append({**meta["next"], "id": row["cell"] + "-next", "base": base})
     arm = config["arms"][config["compare"]["reference"]]
-    replay = {**config, "repos": {next(iter(config["repos"])): str(mirror)}, "arms": {"next": arm}, "tasks": next_tasks, "broken_chains": broken}
-    (out / "replay-set.json").write_text(json.dumps(replay, indent=1, ensure_ascii=False))
+    replay = {**config, "repos": {next(iter(config["repos"])): str(mirror)}, "arms": {"next": arm}, "tasks": next_tasks, "broken_chains": broken,
+              "parent_manifest_sha256": parent}
+    data = json.dumps(replay, indent=1, ensure_ascii=False)
+    existing = out / "replay-set.json"
+    if existing.is_file() and json.loads(existing.read_text()) != replay:  # a stage 2 sealed on it would no longer resume
+        raise ValueError(f"a different chain set already exists in {out}: chain into a new directory")
+    existing.write_text(data)
     (out / "pairs.json").write_text("{}")
     return {"tasks": len(next_tasks), "broken": broken}
 
@@ -550,22 +560,76 @@ def cost_of(out, cid, row):
 RUN_MANIFEST = "run-manifest.json"
 
 
+def _version():
+    match = re.search(r"(?m)^  version: (\S+)$", (HERE.parent / "SKILL.md").read_text()) if (HERE.parent / "SKILL.md").is_file() else None
+    return match[1] if match else None
+
+
 def _sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    with open(path, "rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def set_sha256(config):
-    """The set as parsed: arms, agent command, tasks with their prompts, bases and oracle hashes. Whitespace does not count, nor
-    `compare` (which arms a report contrasts, at what margin): it changes no attempt, and the report says if it moved after the seal."""
+    """The set as parsed: arms (and their order, which seeds the dispatch order), agent command, tasks with their prompts, bases and
+    oracle hashes. Whitespace does not count, nor `compare` (which arms a report contrasts, at what margin): it changes no attempt in
+    this run, and the report says if it moved after the seal. A chain's set names its parent manifest, so it is bound to it."""
     treatment = {k: v for k, v in config.items() if k != "compare"}
-    return hashlib.sha256(json.dumps(treatment, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    treatment["__arm_order__"] = list(config.get("arms", {}))
+    return hashlib.sha256(json.dumps(treatment, sort_keys=True).encode()).hexdigest()
+
+
+def _read_manifest(path):
+    """The sealed manifest, None if there is none. Anything else at that path, or bytes that are not one, is refused."""
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("run manifest is not a regular file")
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError("run manifest is unreadable") from error
+    if (not isinstance(value, dict) or value.get("schema") != "007-framework/lab-run-manifest/v1" or not isinstance(value.get("set_sha256"), str)
+            or not isinstance(value.get("executables", {}), dict)):
+        raise ValueError("run manifest is malformed")
+    return value
+
+
+def _ledger(results):
+    """The dispatch ledger's rows, [] when there is none, None when it cannot be read."""
+    if not (results / "dispatch.jsonl").exists():
+        return []
+    try:
+        history, _, _ = replay_eval.load_dispatch_history(results)
+    except (OSError, ValueError):
+        return None
+    return history
+
+
+def _bound_digests(history):
+    """Manifest digests the dispatch ledger recorded: once a dispatch names one, that manifest is the only one the run accepts."""
+    return {row["manifest_sha256"] for row in history if isinstance(row.get("manifest_sha256"), str)}
+
+
+def _unbound(history, digest):
+    """Dispatches that do not name this manifest: before the seal, or by a controller that does not seal (1.7.0)."""
+    return sum("dispatched_at" in row and row.get("manifest_sha256") != digest for row in history)
 
 
 def seal(config):
-    """What a resumed run must find unchanged. Limits (replicates, calls, money, jobs, invalid budget) stay adjustable: they never
-    change an arm. Executables are the agent command's program and every absolute file it names, through symlinks."""
-    tools = {}
+    """What a resumed run must find unchanged, checked each time the run starts or resumes. Limits (replicates, calls, money, jobs,
+    invalid budget) stay adjustable at a planned pause. Executables are the agent command's program (a PATH lookup for the first
+    word) and every absolute file it names, through symlinks. A relative path resolves inside the task's workspace, which the set's
+    base commit fixes; a later PATH lookup (`env agent`), anything the program launches, environment variables and the CLI's own
+    configuration are not sealed, nor the parts the set lists in `unsealed_files` (a log the attempts rewrite). The manifest guards
+    against accidents, not tampering: whoever can write the output directory can rewrite it."""
+    listed = config.get("unsealed_files", [])
+    if not isinstance(listed, list) or not all(isinstance(part, str) for part in listed):
+        raise ValueError("unsealed_files must be a list of strings")
+    tools, skip = {}, set(listed)
     for index, part in enumerate(config.get("agent_command", [])):
+        if part in skip:
+            continue
         found = shutil.which(part) if index == 0 and "/" not in part else part if os.path.isabs(part) else None
         if found and Path(found).is_file():
             real = Path(found).resolve()
@@ -573,20 +637,47 @@ def seal(config):
     # ponytail: the agent command's files only; compilers and test runners the oracle calls are not sealed yet
     return {"schema": "007-framework/lab-run-manifest/v1", "set_sha256": set_sha256(config), "executables": tools,
             "framework_sha256": hashlib.sha256("".join(_sha256(p) for p in sorted(HERE.glob("*.py"))).encode()).hexdigest(),
-            "python": sys.version.split()[0]}
+            "python": sys.version.split()[0], "arms": config.get("arms"), "parent_manifest_sha256": config.get("parent_manifest_sha256"),
+            "program_sealed": bool(config.get("agent_command")) and config["agent_command"][0] in tools, "sealed_parts": sorted(tools),
+            "unsealed_files": sorted(skip),
+            "agent_command_sha256": hashlib.sha256(json.dumps(config.get("agent_command"), sort_keys=True).encode()).hexdigest()}
 
 
 def sealed_state(config, results):
-    """state: sealed, sealed-late (a run older than the manifest) or absent; compare_changed: the comparison or margin differs from
-    the one in the set when the run was sealed. Results of a different set are refused, not read."""
-    manifest = results / RUN_MANIFEST
-    if not manifest.is_file():
-        return {"state": "absent", "compare_changed": None}
-    recorded = json.loads(manifest.read_text())
+    """state: sealed, sealed-late (a run older than the manifest), unbound (see _binding) or absent; compare_changed: the comparison or margin differs from
+    the one in the set when the run was sealed; sha256: the manifest's digest. Results of a different set, a manifest the dispatches
+    do not name, or a missing one they do name, are refused, not read."""
+    recorded, history = _read_manifest(results / RUN_MANIFEST), _ledger(results)
+    if recorded is not None and history is None:
+        raise ValueError(f"the dispatch ledger of a sealed run cannot be read: {results}")
+    bound = _bound_digests(history or [])
+    if recorded is None:
+        if bound:
+            raise ValueError(f"run manifest missing for sealed dispatches: {results}")
+        return {"state": "absent", "compare_changed": None, "sha256": None, "program_sealed": None, "sealed_parts": None,
+                "unbound_dispatches": None, "unbound_cells": None}
+    digest = _sha256(results / RUN_MANIFEST)
+    if bound and bound != {digest}:
+        raise ValueError(f"run manifest changed after dispatch: {results}")
     if recorded.get("set_sha256") != set_sha256(config):
         raise ValueError(f"results were run with a different set: {results}")
-    return {"state": "sealed-late" if recorded.get("cells_before_seal") else "sealed",
-            "compare_changed": recorded.get("compare") != config.get("compare")}
+    state, unbound, unbound_cells = _binding(results, recorded, digest, history)
+    return {"state": state, "compare_changed": recorded.get("compare") != config.get("compare"), "sha256": digest,
+            "program_sealed": recorded.get("program_sealed"), "sealed_parts": recorded.get("sealed_parts"),
+            "unsealed_files": recorded.get("unsealed_files"), "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
+
+
+def _binding(results, recorded, digest, history):
+    """(state, unbound dispatches, unbound results) of a sealed directory. unbound: dispatches after the seal that do not name it
+    (another controller), or results no sealed dispatch produced (cells copied in), beyond what existed when it was sealed. Restoring
+    inputs cannot rebind them: an unbound run stays unbound."""
+    unbound = _unbound(history, digest)
+    bound_cells = {row["cell"] for row in history if row.get("manifest_sha256") == digest}
+    unbound_cells = len(set(replay_eval.read_cell_artifacts(results)[0]) - bound_cells)
+    late = recorded.get("cells_before_seal", 0)
+    if unbound > recorded.get("dispatches_before_seal", 0) or unbound_cells > late:
+        return "unbound", unbound, unbound_cells
+    return ("sealed-late" if unbound or late else "sealed"), unbound, unbound_cells
 
 
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
@@ -633,15 +724,45 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         return {"stop": "unreadable-dispatch-history", "calls": 0}
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
-    sealed, manifest = seal(config), out / RUN_MANIFEST
-    if manifest.is_file():
-        recorded = json.loads(manifest.read_text())
-        changed = sorted(key for key in sealed if recorded.get(key) != sealed[key])
-        if changed:  # not a STOP: restoring what was sealed makes the run resumable again
-            return {"stop": "manifest-mismatch", "changed": changed, "calls": 0}
-    else:  # a directory from before 1.8 is sealed now and reported as sealed-late
-        manifest.write_text(json.dumps({**sealed, "compare": config.get("compare"), "sealed_at": _now(), "cells_before_seal": len(done)},
-                                       indent=1) + "\n")
+    try:
+        sealed = seal(config)
+    except OSError:
+        return {"stop": "executable-unreadable", "calls": 0}
+    manifest = out / RUN_MANIFEST
+    bound = _bound_digests(history)
+    try:
+        recorded = _read_manifest(manifest)
+    except ValueError:
+        return {"stop": "manifest-unreadable", "calls": 0}
+    if recorded is None:
+        if bound:  # dispatches named a manifest that is gone: never re-seal over them
+            return {"stop": "manifest-missing", "calls": 0}
+        # a directory from before 1.8 is sealed now and reported as sealed-late; written whole, then renamed
+        with tempfile.NamedTemporaryFile("w", dir=out, prefix="." + RUN_MANIFEST + ".", delete=False) as handle:
+            handle.write(json.dumps({**sealed, "compare": config.get("compare"), "sealed_at": _now(), "cells_before_seal": len(done),
+                                     "dispatches_before_seal": sum("dispatched_at" in row for row in history),
+                                     "version": _version(), "set_file_sha256": _sha256(config_path)}, indent=1) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(handle.name, manifest)
+    else:
+        # keys a later 007 adds to the seal are compared only once a manifest records them
+        changed = sorted(key for key in sealed if key not in ("executables", "sealed_parts", "program_sealed", "unsealed_files") and key in recorded
+                         and recorded[key] != sealed[key])
+        old, new = recorded.get("executables") or {}, sealed["executables"]
+        parts = sorted(part for part in set(old) | set(new) if old.get(part) != new.get(part))
+        changed += [f"executables:{part}" for part in parts]
+        details = {part: {"sealed": old.get(part), "found": new.get(part)} for part in parts}
+        if bound and bound != {_sha256(manifest)}:
+            changed.append("manifest")
+        binding = _binding(out, recorded, _sha256(manifest), history)
+        if binding[1] > recorded.get("dispatches_before_seal", 0):
+            changed.append("unbound-dispatches")  # a controller that does not seal dispatched after the seal
+        if binding[2] > recorded.get("cells_before_seal", 0):
+            changed.append("unbound-cells")  # results no sealed dispatch produced: copied in, or a lost ledger
+        if changed:  # not a STOP: restoring what was sealed makes the run resumable again, except an unbound one
+            return {"stop": "manifest-mismatch", "changed": changed, "details": details, "calls": 0}
+    sealed_digest = _sha256(manifest)
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
 
     def charge(cost):
@@ -691,7 +812,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                     break
                 calls += 1
                 with ledger.open("a") as handle:
-                    handle.write(json.dumps({"cell": cell_name(cell), "dispatched_at": _now()}) + "\n")
+                    handle.write(json.dumps({"cell": cell_name(cell), "dispatched_at": _now(), "manifest_sha256": sealed_digest}) + "\n")
                 active.add(pool_.submit(one, cell))
             if not active:
                 break
@@ -1004,25 +1125,51 @@ def verdict(c, ci, *, valid, tasks, split_tasks, sensitive, accepted_share, next
     return {"thesis": thesis, "informative_acceptance": informative, "time": "SURVIVES" if survives else "NOT-SURVIVES", "durability": durability, "rework_ok": rework}
 
 
-def arm_accounting(config, results, rows):
-    """Per arm, the fate of every planned cell: never dispatched, dispatched with no result (orphan or in flight), invalid by
-    failure class, valid, accepted. Planned counts every task at the most replicates any cell of this run reached."""
-    history, _, _ = replay_eval.load_dispatch_history(results)
-    dispatched = {row["cell"] for row in history if "dispatched_at" in row}
-    replicates = max([int(m) for cell in dispatched for m in re.findall(r"-r([0-9]{2,})-", cell)] + [r["replicate"] for r in rows], default=0)
+def _decode_cell(cell, task_ids, arms):
+    """(task, arm, replicate) of a cell id, read against the set's own task ids and arm names; None when no reading or several fit."""
+    found = set()
+    for arm in arms:
+        if cell.endswith("-" + arm):
+            match = re.fullmatch(r"(.+)-r([0-9]{2,3})", cell[:-len(arm) - 1])  # a replicate past 999 is unread, not planned
+            if match and match[1] in task_ids:
+                found.add((match[1], arm, int(match[2])))
+    return found.pop() if len(found) == 1 else None
+
+
+def arm_accounting(config, results, rows, receipts):
+    """Per arm, the fate of every planned cell: never dispatched, attempted with no result (a dispatch or a receipt without a result:
+    an orphan or a cell in flight), invalid by failure class, valid, accepted. Planned counts every task at the most replicates any
+    attempted or finished cell of this run reached. `history` says whether the dispatch ledger was complete, absent, damaged or
+    unreadable; without a complete one, a dispatch that left no receipt counts as never dispatched."""
+    bad = ambiguous = None
+    if not (results / "dispatch.jsonl").exists():
+        history, status = [], "absent"
+    else:
+        try:
+            history, bad, ambiguous = replay_eval.load_dispatch_history(results)
+            dispatched_cells = {row["cell"] for row in history if "dispatched_at" in row}
+            status = "damaged" if bad or ambiguous else "partial" if set(r["cell"] for r in rows) - dispatched_cells else "complete"
+        except (OSError, ValueError):
+            history, status = [], "unreadable"
+    attempted = {row["cell"] for row in history if "dispatched_at" in row} | set(receipts)
     by_cell = {r["cell"]: r for r in rows}
+    task_ids, arms = {t["id"] for t in config.get("tasks", [])}, list(config.get("arms", {}))
+    decoded = [_decode_cell(cell, task_ids, arms) for cell in attempted | set(by_cell)]
+    replicates = max((d[2] for d in decoded if d), default=0)
     table = {}
-    for arm in config["arms"]:
-        planned = {replay_eval.cell_id(task, arm, k) for task in config["tasks"] for k in range(1, replicates + 1)}
+    for arm in arms:
+        planned = {replay_eval.cell_id(task, arm, k) for task in config.get("tasks", []) for k in range(1, replicates + 1)}
         done = [by_cell[c] for c in planned if c in by_cell]
         invalid = {}
         for row in done:
-            if row["valid"] is not True:
-                invalid[row.get("failure_class", "unknown")] = invalid.get(row.get("failure_class", "unknown"), 0) + 1
-        table[arm] = {"planned": len(planned), "not_dispatched": len(planned - dispatched - set(by_cell)),
-                      "no_result": len((planned & dispatched) - set(by_cell)), "valid": sum(r["valid"] is True for r in done),
-                      "accepted": sum(r["valid"] is True and bool(r.get("accepted")) for r in done), "invalid": dict(sorted(invalid.items()))}
-    return table
+            if row.get("valid") is not True:
+                kind = row.get("failure_class") if isinstance(row.get("failure_class"), str) else "unknown"
+                invalid[kind] = invalid.get(kind, 0) + 1
+        table[arm] = {"planned": len(planned), "not_dispatched": len(planned - attempted - set(by_cell)),
+                      "no_result": len((planned & attempted) - set(by_cell)), "valid": sum(r.get("valid") is True for r in done),
+                      "accepted": sum(r.get("valid") is True and bool(r.get("accepted")) for r in done), "invalid": dict(sorted(invalid.items()))}
+    return {"history": status, "ledger_invalid_lines": bad, "ledger_ambiguous_cells": ambiguous, "unread_cells": sum(d is None for d in decoded),
+            "arms": table}
 
 
 def report(config_path, results, next_results):
@@ -1030,14 +1177,37 @@ def report(config_path, results, next_results):
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     manifest = sealed_state(config, results)
     rows = load_cells(results)
-    accounting = arm_accounting(config, results, rows)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
+    accounting = arm_accounting(config, results, rows, receipts)
     orphans = sorted(set(receipts) - {r["cell"] for r in rows})
     excluded = sorted(r["cell"] for r in rows if r["valid"] is not True)
     rows = [r for r in rows if r["valid"] is True]
     if not rows:
         raise ValueError(f"no valid cells to report ({len(excluded)} invalid, {len(orphans)} orphan receipts)")
+    stage2 = None
+    if next_results:  # stage 2 must be chained from this sealed run, at the reference arm, and bound to its own seal
+        upstream = _read_manifest(next_results / RUN_MANIFEST)
+        if upstream is None and manifest["sha256"]:
+            raise ValueError(f"next results predate the seal of these results: chain again into a new directory, or report without them")
+        if upstream is None:
+            ledger = _ledger(next_results)
+            if ledger is None or _bound_digests(ledger):
+                raise ValueError(f"next results lost the manifest their dispatches name, or their ledger cannot be read: {next_results}")
+            stage2 = {"state": "absent", "sha256": None, "unbound_dispatches": None, "unbound_cells": None}
+        if upstream is not None and (upstream.get("parent_manifest_sha256") != manifest["sha256"] or upstream.get("arms") != {"next": config["arms"][ref]}):
+            raise ValueError(f"next results are not chained from these results at the reference arm: {next_results}")
+        if upstream is not None:
+            ledger, digest = _ledger(next_results), _sha256(next_results / RUN_MANIFEST)
+            if ledger is None or (_bound_digests(ledger) and _bound_digests(ledger) != {digest}):
+                raise ValueError(f"next results do not match their own seal: {next_results}")
+            command = hashlib.sha256(json.dumps(config.get("agent_command"), sort_keys=True).encode()).hexdigest()
+            if "agent_command_sha256" in upstream and upstream["agent_command_sha256"] != command:
+                raise ValueError(f"next results ran another agent command than these results: {next_results}")
+            state, unbound, unbound_cells = _binding(next_results, upstream, digest, ledger)
+            if state == "unbound":
+                raise ValueError(f"next results are unbound from their own seal (another controller, or cells copied in): {next_results}")
+            stage2 = {"state": state, "sha256": digest, "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
     following = [r for r in load_cells(next_results) if r["valid"] is True] if next_results else []
     next_rows = {r["task"][:-len("-next")]: r for r in following}
     durable = {r["cell"]: bool(r["accepted"] and r["cell"] in next_rows and next_rows[r["cell"]]["accepted"]) for r in rows}
@@ -1073,6 +1243,9 @@ def report(config_path, results, next_results):
     reachable = paired_interval(diffs)
     critical = proven_critical(rows, task_dir, low, ref, config["seed"], margin)
     tier["margin"] = margin
+    tier["compare_changed_after_seal"] = manifest["compare_changed"]
+    tier["run_binding"] = manifest["state"]
+    tier["next_run_binding"] = stage2["state"] if stage2 else None
     tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, margin, critical=math.inf if critical is None else critical)
     proof = {"critical": critical, "statistic": studentized(diffs, margin) if len(diffs) > 1 else None,
              "t975": t975(len(diffs) - 1) if len(diffs) > 1 else None, "t_false_proven": false_proven(rows, task_dir, low, ref, config["seed"], margin)}
@@ -1081,7 +1254,10 @@ def report(config_path, results, next_results):
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
         tier["thesis"] = "UNPROVEN"
     aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a)) for a in (low, ref)}
-    result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "arm_accounting": accounting, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
+    if stage2 is not None:
+        stage2["stage1_cells_chained"] = sum(r["cell"] in next_rows for r in rows)
+        stage2["stage1_cells"] = len(rows)
+    result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "next_run_manifest": stage2, "arm_accounting": accounting, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES}
@@ -1102,21 +1278,34 @@ def summary(result, low, ref, attempts):
     interval = f" (mean {points(r['mean'])} points, 95% interval {points(r['ci95'][0])} to {points(r['ci95'][1])}, {r['tasks']} commits)" if r.get("ci95") else ""
     saving = f"{100 * c['reduction']:.0f}% less agent time per accepted change" if c["reduction"] is not None else "agent time not comparable"
     reasoning = result["median_reasoning_tokens"]
-    sealed = result["run_manifest"]
-    binding = {"sealed": "every attempt ran with the set, agent command, 007 and Python sealed before the first dispatch",
+    sealed = result.get("run_manifest")  # absent from reports written before 1.8
+    binding = {"sealed": "the set, the agent command's sealed files, 007 and Python matched the seal, made before the first dispatch, each time the run started or resumed",
                "sealed-late": "sealed only after some attempts had run: those earlier attempts are not bound to it",
-               "absent": "no run manifest: nothing binds the attempts to one set"}[sealed["state"]]
-    binding += "; the comparison or margin changed after the seal" if sealed["compare_changed"] else ""
+               "unbound": "some attempts after the seal do not name it (another controller, or cells copied in): the seal binds none of them",
+               "absent": "no run manifest: nothing binds the attempts to one set"}[sealed["state"]] if sealed else None
+    if binding and sealed.get("sealed_parts") is not None:
+        binding += f"; sealed files: {', '.join(sealed['sealed_parts']) or 'none'}"
+    if binding and sealed.get("unsealed_files"):
+        binding += f"; left out by the set: {', '.join(sealed['unsealed_files'])}"
+    if binding and sealed.get("program_sealed") is False:
+        binding += "; the agent command's program itself was not sealed (a relative or unresolved path)"
+    if binding and sealed["compare_changed"]:
+        binding += "; the comparison or margin changed after the seal, so the margin was not declared before these attempts"
+    accounting = result.get("arm_accounting")
     return "\n".join([
         f"# `{low}` vs `{ref}`: {attempts} valid attempts",
         "",
         f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {reasoning[low]:.0f} vs {reasoning[ref]:.0f}.",
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
-        f"- **Run binding:** {binding}.",
-        *[f"- **Cells, `{arm}`:** {a['planned']} planned, {a['not_dispatched']} never dispatched, {a['no_result']} dispatched without a result, "
+        *([f"- **Run binding:** {binding}."] if binding else []),
+        *[f"- **Cells, `{arm}`:** {a['planned']} planned, {a['not_dispatched']} never dispatched, {a['no_result']} attempted without a result, "
           f"{sum(a['invalid'].values())} invalid" + (f" ({', '.join(f'{k} {v}' for k, v in a['invalid'].items())})" if a['invalid'] else "")
-          + f", {a['valid']} valid, {a['accepted']} accepted." for arm, a in result["arm_accounting"].items()],
+          + f", {a['valid']} valid, {a['accepted']} accepted." for arm, a in (accounting or {}).get("arms", {}).items()],
+        *([f"- **Dispatch ledger:** {accounting['history']}; the counts above may be incomplete."] if accounting and accounting["history"] != "complete" else []),
+        *([f"- **Stage 2:** {result['next_run_manifest']['state']}; {result['next_run_manifest']['stage1_cells_chained']} of "
+           f"{result['next_run_manifest']['stage1_cells']} valid stage-1 attempts have a valid stage-2 attempt; the others count as not durable."]
+          if result.get("next_run_manifest") else []),
         "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits, models or specification forms other than these.",
         f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
         "",
