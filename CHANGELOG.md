@@ -6,6 +6,16 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Fixed
+
+- `007 lab sensitivity` and `chain` read patches as bytes. Newline translation turned CRLF lines into LF, so a reference or
+  candidate patch touching a CRLF file failed to apply: the task looked reference-failed, or its chain broke. Found by the
+  Codex 5-point pilot's serial re-grade (its Amendment 8).
+- One cell whose controller raises (a refused snapshot, a crash) becomes an invalid cell, `failure_class`
+  `controller-error:<type>`, never retried. Before, the exception ended the whole `007 lab run`. The invalid budget still stops a
+  run where every cell fails.
+- A `--flag=/absolute/file` argument of the agent command is sealed like a bare absolute path. Before, it was silently unsealed.
+
 ## [1.8.0] - 2026-11-12
 
 A minor release for `007 lab`: a resumed run is bound to what it started with, and the report accounts for every planned cell

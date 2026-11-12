@@ -2,6 +2,7 @@
 import difflib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -518,6 +519,26 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual(lab.probe(config, out, task["id"], partial, real_next), (True, None))  # B edits the lines the partial patch left out
 
 
+class CRLFPatches(unittest.TestCase):
+    def test_a_patch_with_crlf_lines_reads_and_applies_intact(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, tree = Path(d) / "repo", Path(d) / "tree"
+            repo.mkdir()
+            git(repo, "init", "-q")
+            (repo / "a.txt").write_bytes(b"x\r\ny\r\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            (repo / "a.txt").write_bytes(b"x\r\nz\r\n")
+            patch = Path(d) / "change.patch"
+            patch.write_bytes(subprocess.run(["git", "-C", str(repo), "diff", "--binary"], capture_output=True, check=True).stdout)
+            self.assertIn(b"\r", patch.read_bytes())
+            git(repo, "checkout", "-q", "--", "a.txt")
+            shutil.copytree(repo, tree, ignore=shutil.ignore_patterns(".git"))
+            self.assertFalse(lab.apply_patch(tree, patch.read_text()))  # newline translation breaks it, as 1.8.0 read it
+            self.assertTrue(lab.apply_patch(tree, lab.read_patch(patch)))
+            self.assertEqual((tree / "a.txt").read_bytes(), b"x\r\nz\r\n")
+
+
 class Budget(unittest.TestCase):
     def test_invalid_budget_operands_are_rejected_before_dispatch(self):
         cases = [(value, 1) for value in (float("nan"), float("inf"), -1, False)]
@@ -803,6 +824,35 @@ class Budget(unittest.TestCase):
                 self.assertEqual((state["stop"], state["calls"]), ("executable-unreadable", 0))
             finally:
                 tool.chmod(0o600)
+
+    def test_one_cells_controller_error_is_an_invalid_cell_not_the_end_of_the_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            good = self.fake()[0]
+
+            def execute(config, task, arm, rep, out_, timeout):
+                if task["id"] == "T1" and arm == "a":
+                    raise RuntimeError("archive entry is not a regular file")  # a refused snapshot, before any agent ran
+                return good(config, task, arm, rep, out_, timeout)
+            state = lab.run(path, out, replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1, execute=execute)
+            self.assertEqual((state["stop"], state["calls"], state["invalid"]), (None, 8, 1))
+            row = json.loads((out / "T1-r01-a.json").read_text())
+            self.assertEqual((row["valid"], row["failure_class"]), (False, "controller-error:RuntimeError"))
+            again = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good)
+            self.assertEqual((again["stop"], again["calls"]), (None, 0))  # recorded, never retried, never an orphan
+            accounting = lab.arm_accounting(json.loads(path.read_text()), out, lab.load_cells(out), {})
+            self.assertEqual(accounting["arms"]["a"]["invalid"], {"controller-error:RuntimeError": 1})
+
+    def test_a_flag_that_names_an_absolute_file_is_sealed(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / "agent.toml"
+            config.write_text("model = 'x'")
+            part = f"--config={config}"
+            sealed = lab.seal({"agent_command": ["/bin/sh", part]})
+            self.assertEqual(sealed["executables"][part]["path"], str(config.resolve()))
+            config.write_text("model = 'y'")
+            self.assertNotEqual(lab.seal({"agent_command": ["/bin/sh", part]})["executables"], sealed["executables"])
 
     def test_the_program_is_sealed_through_path_and_a_relative_one_is_named_unsealed(self):
         with tempfile.TemporaryDirectory() as d:

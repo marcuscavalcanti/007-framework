@@ -383,6 +383,11 @@ def rewound(repo, task, meta, dest):
             overlay(repo, dest, task["base"], [name])
 
 
+def read_patch(path):
+    """A patch as text with its bytes intact: read_text() turns CRLF into LF, and a patch touching CRLF lines then fails to apply."""
+    return Path(path).read_bytes().decode("utf-8", "surrogateescape")
+
+
 def apply_patch(tree, patch_text):
     if not patch_text.strip():
         return True
@@ -428,7 +433,7 @@ def chain(config_path, results, out):
         with tempfile.TemporaryDirectory(prefix="lab-chain-") as scratch:
             tree = Path(scratch) / "tree"
             rewound(repo, task, meta, tree)
-            if not apply_patch(tree, (results / row["candidate_patch"]["path"]).read_text(errors="surrogateescape")):
+            if not apply_patch(tree, read_patch(results / row["candidate_patch"]["path"])):
                 broken.append(row["cell"])
                 continue
             base = commit_tree(mirror, tree, meta["next"]["base"])
@@ -497,7 +502,7 @@ def sensitivity(config_path, jobs, per_task=6):
     for task in config["tasks"]:
         meta = pairs[task["id"]]
         real_next = _git(repo, "diff", "--binary", meta["next"]["base"], meta["next"]["accepted"]).decode("utf-8", "replace") if "next" in meta else ""
-        reference = (out / "tasks" / task["id"] / "reference.patch").read_text()
+        reference = read_patch(out / "tasks" / task["id"] / "reference.patch")
         work.append((task["id"], True, reference, real_next))
         work += [(task["id"], False, m, real_next) for m in mutants(reference, per_task, rng)]
 
@@ -547,6 +552,19 @@ def plan(config, replicates):
         cells += block
     replay_eval.validate_cell_artifacts(config["tasks"], config["arms"], replicates)
     return cells
+
+
+def _controller_failure(out, task, arm, rep, error):
+    """The result of a cell whose controller raised: invalid, never retried, its receipt (if the agent ran) kept and bound."""
+    cid = replay_eval.cell_id(task, arm, rep)
+    path, receipt = out / f"{cid}.json", out / f"{cid}.runner.json"
+    if path.exists():  # the cell finished before the error: its own result stands
+        return json.loads(path.read_text())
+    row = {"schema": "007-framework/replay-cell/v1", "task": task["id"], "arm": arm, "replicate": rep, "valid": False, "accepted": False,
+           "failure_class": f"controller-error:{type(error).__name__}", "cost_usd": "unmeasured", "acceptance_outcomes": "unavailable",
+           "runner_receipt_sha256": hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt.is_file() else "unmeasured"}
+    path.write_text(json.dumps(row))
+    return row
 
 
 def cost_of(out, cid, row):
@@ -630,7 +648,8 @@ def seal(config):
     for index, part in enumerate(config.get("agent_command", [])):
         if part in skip:
             continue
-        found = shutil.which(part) if index == 0 and "/" not in part else part if os.path.isabs(part) else None
+        value = part.split("=", 1)[1] if part.startswith("-") and "=" in part else part  # --config=/abs/file names a file too
+        found = shutil.which(part) if index == 0 and "/" not in part else value if os.path.isabs(value) else None
         if found and Path(found).is_file():
             real = Path(found).resolve()
             tools[part] = {"path": str(real), "sha256": _sha256(real)}
@@ -792,7 +811,10 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
 
     def one(cell):
         task, rep, arm = cell
-        return cell, execute(config, task, arm, rep, out, timeout_s)
+        try:
+            return cell, execute(config, task, arm, rep, out, timeout_s)
+        except Exception as error:  # one cell's failure (a refused snapshot, a crash) is an invalid cell, never the whole run
+            return cell, _controller_failure(out, task, arm, rep, error)
     with ThreadPoolExecutor(jobs) as pool_:
         active, queue = set(), iter(todo)
         while True:
