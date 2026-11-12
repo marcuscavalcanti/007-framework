@@ -179,9 +179,8 @@ about the evidence, not about the maintainer's goal.
     - the per-cell tables;
     - the gate outputs.
   - The same model reviewed this rule and the plan. Its passes are not independent reviews, and the answer says so.
-  - The repository's independent-reviewer route also reviews it: OpenAI `gpt-6-astra` at `xhigh` through the Codex CLI, a
-    different model family from the Claude host (AGENTS.md). Its identity level is recorded. A failed route is recorded as
-    a failed validation, with no substitute.
+  - The maintainer chose Fable for reviews from a Claude host (AGENTS.md revision 2026-11-12). No reviewer from another
+    model family checks this answer, and the answer says so.
 - **Error:**
   - An error counts as confirmed only when the hashed script, re-run on the same files, reproduces it.
   - A confirmed computation or rule-application error is corrected.
@@ -202,5 +201,7 @@ about the evidence, not about the maintainer's goal.
   - When this revision was pushed, the corrected gate re-run had not finished: its output files did not exist.
   - No pilot set existed, and no attempt had been dispatched.
   - Later in revision 1: the independent `gpt-6-astra` review was added to part 5, before any gate output.
+  - Later in revision 1: that `gpt-6-astra` review was removed again after the maintainer's reviewer decision of 2026-11-12,
+    before any gate output.
   - The fixed point moved from "the pilot set is built" to "the first pilot attempt". A set reveals no arm outcome, and the scripts
     this revision requires must be hashed before dispatch.
