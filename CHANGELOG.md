@@ -22,6 +22,11 @@ per arm. Release qualification is recorded in [the release record](evidence/v1.8
 - `007 lab report` gains `arm_accounting`: per arm, planned cells, never dispatched, dispatched without a result, invalid by
   failure class, valid and accepted, also in plain words in `report.md`. Invalid and missing cells were named only as one list.
 
+### Changed
+
+- Reviewer policy (Marcus, 2026-11-12): a Claude host is reviewed by Claude Fable 5.2 at `xhigh`, a same-family exception
+  by decision (`AGENTS.md`, `scripts/review_route.py`). A Codex host keeps Claude Opus 5.5. Release notes state the shared family.
+
 ### Fixed
 
 - Release preparation keeps an annotated tag as such, and a failed tag-triggered preparation can be dispatched again on

@@ -8,11 +8,13 @@ import os
 import shutil
 
 ROUTES = {  # host session -> reviewer
-    "claude": {"provider": "openai", "cli": "codex", "model": "gpt-6-astra", "effort": "xhigh", "budget_control": None},
+    # 2026-11-12 (Marcus): a Claude host is reviewed by Claude Fable 5.2 at xhigh, a same-family exception by decision
+    "claude": {"provider": "anthropic", "cli": "claude", "model": "claude-fable-5-2", "effort": "xhigh", "budget_control": "cli-max-budget-usd"},
     "codex": {"provider": "anthropic", "cli": "claude", "model": "claude-opus-5-5", "effort": "xhigh",
               "budget_control": "cli-max-budget-usd"},
 }
 HOST_FAMILY = {"claude": "anthropic", "codex": "openai"}
+SAME_FAMILY_BY_DECISION = {"claude"}  # hosts whose same-family reviewer the maintainer chose explicitly
 # r33: the Codex reviewer gets only the context on stdin — a read-only sandbox still reads the whole disk, so no shell, web or extensions
 # (the same features Marcus's other reviewer sessions disable on this binary).
 CODEX_REVIEW_DISABLED = ("shell_tool", "unified_exec", "apps", "plugins", "hooks", "memories", "multi_agent", "browser_use",
@@ -36,7 +38,7 @@ def select_reviewer(host=None, *, which=shutil.which, env=None):
     route = ROUTES.get(host)
     if route is None or not which(route["cli"]):
         return None  # fail-closed: the caller records a failed validation and stops; no other model or effort
-    if route["provider"] == HOST_FAMILY[host]:
+    if route["provider"] == HOST_FAMILY[host] and host not in SAME_FAMILY_BY_DECISION:
         raise ValueError("reviewer-same-family")
     return {**route, "host": host, "reason": "primary", "executable": which(route["cli"])}
 

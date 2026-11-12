@@ -78,7 +78,7 @@ class ReviewRouteTests(unittest.TestCase):
     def test_reviewer_is_the_other_family_and_unavailability_fails_closed(self):
         select = self.module().select_reviewer
         cases = [
-            ("claude", ALL, ("openai", "codex", "gpt-6-astra", "xhigh", "primary")),
+            ("claude", ALL, ("anthropic", "claude", "claude-fable-5-2", "xhigh", "primary")),  # 2026-11-12 (Marcus): same family by decision
             ("codex", ALL, ("anthropic", "claude", "claude-opus-5-5", "xhigh", "primary")),
         ]
         for host, available, expected in cases:
@@ -87,9 +87,10 @@ class ReviewRouteTests(unittest.TestCase):
                 self.assertEqual(tuple(route[k] for k in ("provider", "cli", "model", "effort", "reason")), expected)
                 self.assertEqual(route["host"], host)
                 self.assertEqual(route["executable"], available[route["cli"]])
-                self.assertNotEqual(route["provider"], {"claude": "anthropic", "codex": "openai"}[host])
+                if host == "codex":
+                    self.assertNotEqual(route["provider"], "openai")
         # 2026-10-21b (Marcus): no fallback model; a missing primary or an unrecognized host means no route (fail-closed).
-        for host, available in (("claude", {"claude": "/bin/claude", "kimi": "/bin/kimi"}),
+        for host, available in (("claude", {"codex": "/bin/codex", "kimi": "/bin/kimi"}),
                                 ("codex", {"codex": "/bin/codex", "kimi": "/bin/kimi"}), (None, ALL)):
             with self.subTest(host=host, available=sorted(available)):
                 self.assertIsNone(select(host, which=which_from(available), env={}))
@@ -102,7 +103,8 @@ class ReviewRouteTests(unittest.TestCase):
 
     def test_review_argv_is_fresh_read_only_and_capped_where_the_cli_allows(self):
         module = self.module()
-        codex = module.select_reviewer("claude", which=which_from(ALL), env={})
+        # the Codex transport stays for recorded routes (the 1.6.2/1.7.0 Astra reviews); no host selects it since 2026-11-12
+        codex = {"provider": "openai", "cli": "codex", "model": "gpt-6-astra", "effort": "xhigh", "budget_control": None, "executable": "/bin/codex"}
         argv = module.review_argv(codex)
         validate_command("codex", argv)
         for pair in (["-m", "gpt-6-astra"], ["-c", 'model_reasoning_effort="xhigh"'], ["--sandbox", "read-only"]):
@@ -130,6 +132,11 @@ class ReviewRouteTests(unittest.TestCase):
         for budget in (None, 0, -1, True, "6"):
             with self.subTest(budget=budget), self.assertRaisesRegex(ValueError, "^review-budget-required$"):
                 module.review_argv(claude, max_budget_usd=budget)
+        fable = module.select_reviewer("claude", which=which_from(ALL), env={})
+        pairs = [module.review_argv(fable, max_budget_usd=25)[i:i + 2] for i in range(len(module.review_argv(fable, max_budget_usd=25)) - 1)]
+        for pair in (["--model", "claude-fable-5-2"], ["--effort", "xhigh"], ["--permission-mode", "plan"], ["--max-budget-usd", "25"]):
+            self.assertIn(pair, pairs)
+        self.assertEqual(fable["budget_control"], "cli-max-budget-usd")
         forged = {**claude, "cli": "kimi", "model": "kimi-k3", "effort": "high"}
         with self.assertRaisesRegex(ValueError, "^review-route-unknown$"):
             module.review_argv(forged)
