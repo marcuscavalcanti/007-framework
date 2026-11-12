@@ -1004,11 +1004,33 @@ def verdict(c, ci, *, valid, tasks, split_tasks, sensitive, accepted_share, next
     return {"thesis": thesis, "informative_acceptance": informative, "time": "SURVIVES" if survives else "NOT-SURVIVES", "durability": durability, "rework_ok": rework}
 
 
+def arm_accounting(config, results, rows):
+    """Per arm, the fate of every planned cell: never dispatched, dispatched with no result (orphan or in flight), invalid by
+    failure class, valid, accepted. Planned counts every task at the most replicates any cell of this run reached."""
+    history, _, _ = replay_eval.load_dispatch_history(results)
+    dispatched = {row["cell"] for row in history if "dispatched_at" in row}
+    replicates = max([int(m) for cell in dispatched for m in re.findall(r"-r([0-9]{2,})-", cell)] + [r["replicate"] for r in rows], default=0)
+    by_cell = {r["cell"]: r for r in rows}
+    table = {}
+    for arm in config["arms"]:
+        planned = {replay_eval.cell_id(task, arm, k) for task in config["tasks"] for k in range(1, replicates + 1)}
+        done = [by_cell[c] for c in planned if c in by_cell]
+        invalid = {}
+        for row in done:
+            if row["valid"] is not True:
+                invalid[row.get("failure_class", "unknown")] = invalid.get(row.get("failure_class", "unknown"), 0) + 1
+        table[arm] = {"planned": len(planned), "not_dispatched": len(planned - dispatched - set(by_cell)),
+                      "no_result": len((planned & dispatched) - set(by_cell)), "valid": sum(r["valid"] is True for r in done),
+                      "accepted": sum(r["valid"] is True and bool(r.get("accepted")) for r in done), "invalid": dict(sorted(invalid.items()))}
+    return table
+
+
 def report(config_path, results, next_results):
     config = json.loads(config_path.read_text())
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     manifest = sealed_state(config, results)
     rows = load_cells(results)
+    accounting = arm_accounting(config, results, rows)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
     orphans = sorted(set(receipts) - {r["cell"] for r in rows})
@@ -1059,7 +1081,7 @@ def report(config_path, results, next_results):
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
         tier["thesis"] = "UNPROVEN"
     aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a)) for a in (low, ref)}
-    result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
+    result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "arm_accounting": accounting, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES}
@@ -1092,6 +1114,9 @@ def summary(result, low, ref, attempts):
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
         f"- **Run binding:** {binding}.",
+        *[f"- **Cells, `{arm}`:** {a['planned']} planned, {a['not_dispatched']} never dispatched, {a['no_result']} dispatched without a result, "
+          f"{sum(a['invalid'].values())} invalid" + (f" ({', '.join(f'{k} {v}' for k, v in a['invalid'].items())})" if a['invalid'] else "")
+          + f", {a['valid']} valid, {a['accepted']} accepted." for arm, a in result["arm_accounting"].items()],
         "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits, models or specification forms other than these.",
         f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
         "",

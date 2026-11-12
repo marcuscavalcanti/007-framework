@@ -329,6 +329,28 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual(result["excluded_invalid"], [cell.stem])
         self.assertEqual((result["contrast"]["medium"]["units"], result["contrast"]["high"]["units"]), (1, 2))
 
+    def test_the_report_accounts_for_every_planned_cell_per_arm(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        config = json.loads(path.read_text())
+        tasks, arms = config["tasks"], sorted(config["arms"])
+        lab.run(path, results, replicates=1, jobs=2, max_calls=99, max_usd=10, stop_usd=1)
+        lab.sensitivity(path, 2)
+        orphan = lab.replay_eval.cell_id(tasks[0], arms[0], 2)  # replicate 2 dispatched, its controller gone before a result
+        with (results / "dispatch.jsonl").open("a") as handle:
+            handle.write(json.dumps({"cell": orphan, "dispatched_at": lab._now()}) + "\n")
+        accounting = lab.report(path, results, None)["arm_accounting"]
+        self.assertEqual(sorted(accounting), arms)
+        for arm, a in accounting.items():
+            with self.subTest(arm=arm):
+                self.assertEqual(a["planned"], 2 * len(tasks))
+                self.assertEqual(a["valid"] + sum(a["invalid"].values()), len(tasks))
+                self.assertEqual(a["no_result"], int(arm == arms[0]))
+                self.assertEqual(a["not_dispatched"] + a["no_result"] + a["valid"] + sum(a["invalid"].values()), a["planned"])
+                self.assertLessEqual(a["accepted"], a["valid"])
+                self.assertIn(f"- **Cells, `{arm}`:** {2 * len(tasks)} planned", (results / "report.md").read_text())
+
     def test_the_report_reads_the_declared_margin_and_says_it_in_plain_words(self):
         out = self.root / "lab"
         lab.mine(self.config, out, 2)

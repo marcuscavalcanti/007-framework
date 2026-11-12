@@ -14,6 +14,8 @@ schemas, and the dashboard snapshot.
   treatments under valid receipts.
 - `007 lab report` and `chain` refuse results sealed with a different set. The report gains `run_manifest`
   (`sealed`, `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
+- `007 lab report` gains `arm_accounting`: per arm, planned cells, never dispatched, dispatched without a result, invalid by
+  failure class, valid and accepted, also in plain words in `report.md`. Invalid and missing cells were named only as one list.
 
 ## [1.7.0] - 2026-11-09
 
