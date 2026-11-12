@@ -1,0 +1,9 @@
+{
+ "critical_floor": 2.2314867649305863,
+ "from_codex_pool": 2.2314867649305863,
+ "from_claude_run": 2.2269009018455743,
+ "margin": 0.2,
+ "attempts_per_arm": 2,
+ "draws": 100000,
+ "seed": 20261112
+}
