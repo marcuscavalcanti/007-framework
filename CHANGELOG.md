@@ -15,6 +15,9 @@ schemas, and the dashboard snapshot.
 - `evidence/codex-5pp-20261108/DECISIONS.md`, pushed before the gate re-run's result and any pilot attempt: what each pilot
   outcome leads to, the confirmatory cost cap (US$400), and the rules for whether one repository can reach a verdict and
   for adoption after the announcement.
+- Amendment 3 (`evidence/codex-5pp-20261108/AMENDMENT-3.md`), pushed before the gate re-run's output and any pilot attempt, after an
+  adversarial review of the viability rule: the confirmatory pre-registration and analysis at 5 points, a dry run on every pooled
+  task with varied outcomes, a freeze that third parties can re-run with published per-cell tables, and the part-3 script.
 
 ## [1.7.0] - 2026-11-09
 
