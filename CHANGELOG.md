@@ -16,11 +16,14 @@ per arm. Release qualification is recorded in [the release record](evidence/v1.8
 - `007 lab run` seals `run-manifest.json` before its first dispatch: the set (with its arm order), the agent command's program
   and absolute files (through symlinks), the 007 scripts and the Python version. Every dispatch records the manifest's digest. A
   start or resume that finds any of them changed stops with `manifest-mismatch` and dispatches nothing; an unreadable manifest, or
-  one missing after a dispatch named it, stops with `manifest-unreadable` or `manifest-missing`. Limits can change at a planned
-  pause. Before this, a resumed run re-read the set and could mix treatments under valid receipts.
+  one missing after a dispatch named it, stops with `manifest-unreadable` or `manifest-missing`; dispatches after the seal that
+  do not name it stop with `manifest-mismatch` (`unbound-dispatches`). Files the attempts rewrite go in the set's
+  `unsealed_files`. Limits can change at a planned pause. Before this, a resumed run re-read the set and could mix treatments
+  under valid receipts. `run`, `report` and `chain` now refuse some inputs 1.7.0 accepted, as listed here.
 - `007 lab report` and `chain` refuse results sealed with a different set or under another manifest; `report --next-results`
-  requires stage 2 to be the chain of these results at the reference arm, and `chain` refuses a `compare` moved since stage 1
-  was sealed or a different chain set already in its directory. The printed verdict carries `compare_changed_after_seal`. The report gains `run_manifest` (`sealed`,
+  requires stage 2 to be chained from this sealed run at the reference arm and bound to its own seal, and publishes
+  `next_run_manifest`; `chain` refuses a `compare` moved since stage 1 was sealed or a different chain set already in its
+  directory. The printed verdict carries `compare_changed_after_seal`. The report gains `run_manifest` (`sealed`,
   `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
 - `007 lab report` gains `arm_accounting`: per arm, planned cells (every task at the most replicates reached), never dispatched,
   attempted without a result (a dispatch or a receipt), invalid by failure class, valid and accepted, and whether the dispatch
@@ -29,6 +32,7 @@ per arm. Release qualification is recorded in [the release record](evidence/v1.8
 
 ### Changed
 
+- The README links the published 1.7.0 release and the dashboard's spend ledger (`709bbba`).
 - Reviewer policy (Marcus, 2026-11-12): the reviewer follows the implementer, at `xhigh`. Codex implements: OpenAI
   `gpt-6-astra` reviews. Claude implements: Claude Fable 5.2 reviews (`AGENTS.md`, `scripts/review_route.py`). This replaces the
   cross-family rule; release notes state that reviewer and implementer share a model family.

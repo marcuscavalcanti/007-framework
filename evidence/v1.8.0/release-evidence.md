@@ -1,7 +1,7 @@
 # 1.8.0 candidate: `007 lab` run binding and per-arm accounting
 
 Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
-- it adds compatible fields and stop reasons;
+- it adds compatible fields and stop reasons, and `run`, `report` and `chain` refuse some inputs 1.7.0 accepted (CHANGELOG);
 - it removes or renames no command, option or field;
 - the report schema identifier stays `007-lab/report/v6`.
 
@@ -26,10 +26,10 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
     accepted.
 - **Release preparation keeps annotated tags.** This change was already on `main` after 1.7.0 (`cf3b556`).
 - **Review fixes before release.** Two reviews of earlier candidates returned FIX FIRST. Neither qualifies this release.
-  - **OpenAI `gpt-6-astra` at `xhigh`, candidate `57b0a08`** (before the reviewer decision):
+  - **OpenAI `gpt-6-astra`, `xhigh` requested, candidate `57b0a08`** (before the reviewer decision):
     - the stream completed with an `error` event ("model at capacity, reconnecting"), so its identity level is `failed`;
     - its findings were still checked in the code.
-  - **Claude Fable 5.2 at `xhigh`, candidate `2afe370`:**
+  - **Claude Fable 5.2, `xhigh` requested, candidate `2afe370`:**
     - identity `verified`, US$2.40;
     - its findings overlap Astra's and add:
       - `chain` taking stage 2's arm from an unsealed `compare`;
@@ -37,6 +37,14 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
       - `chain` overwriting its set;
       - the printed verdict hiding a moved margin;
       - the review route still stating the cross-family rule.
+  - **Claude Fable 5.2, `xhigh` requested, candidate `3273cf4`:**
+    - identity `verified`, US$2.71;
+    - it confirmed most earlier fixes, and returned FIX FIRST on:
+      - a log the attempts rewrite being sealed (now `unsealed_files`);
+      - `sealed` reported over dispatches that do not name the seal (now `unbound`, refused on resume);
+      - stage 2's own seal;
+      - an absent ledger reported as complete;
+      - and smaller items.
   - **A first Fable review of `8a7a29b`** was stopped when the policy changed again. That makes it an incomplete stream, level
     `failed`, with no findings read.
 
@@ -75,17 +83,24 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
   - a resume after the input is restored, with more replicates;
   - set and manifest refusal through `sealed_state`, the function `report` and `chain` call;
   - a deleted, edited, truncated or non-file manifest;
-  - a stage-2 run at another effort, or of other results;
+  - a stage-2 manifest edited to another effort or another parent;
   - a 1.7.0 report rendered by `summary`;
   - a legacy directory reported as `sealed-late`;
   - the per-arm sums, including a dispatch with no result.
 - **Limit, marked in the code:** the compilers and test runners that an oracle calls are not sealed. Only the agent command's files
   are.
-- **Local suite on the candidate:** recorded with the review in the GitHub release notes.
+- **Test suite:** from `3273cf4` on, the suite runs in CI, not locally. The pilot's Amendment 4 forbids heavy local processes during
+  its gate re-run. The exact-commit CI is recorded in the release notes.
 - **CI and the independent review** of the exact commit are recorded in the GitHub release notes.
 - **Reviewer route:** Claude Fable 5.2 at `xhigh`, requested, because Claude implemented this release (AGENTS.md revision
   2026-11-12). It shares the implementer's model family, by the maintainer's decision. Its identity level and verdict are recorded
   in the release notes.
+
+- **Boundary record (AGENTS.md security workflow):**
+  - `run` now reads every absolute file named in `agent_command`, except the `unsealed_files`;
+  - it writes those files' absolute paths and digests into `run-manifest.json` in the output directory;
+  - no file content leaves the machine;
+  - the docs say to check the manifest before publishing a results directory.
 
 ## Causal evidence
 - This release asserts no new causal result. The frozen experiment reports keep their scope and verdicts.

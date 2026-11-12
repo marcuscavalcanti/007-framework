@@ -3,6 +3,7 @@ import importlib
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from cli_telemetry import validate_command
@@ -88,7 +89,7 @@ class ReviewRouteTests(unittest.TestCase):
                 self.assertEqual(tuple(route[k] for k in ("provider", "cli", "model", "effort", "reason")), expected)
                 self.assertEqual(route["host"], host)
                 self.assertEqual(route["executable"], available[route["cli"]])
-        # 2026-10-21b (Marcus): no fallback model; a missing primary or an unrecognized host means no route (fail-closed).
+        # 2026-10-21b and 2026-11-12 (Marcus): no fallback model; a missing primary or an unrecognized host means no route (fail-closed).
         for host, available in (("claude", {"codex": "/bin/codex", "kimi": "/bin/kimi"}),
                                 ("codex", {"claude": "/bin/claude", "kimi": "/bin/kimi"}), (None, ALL)):
             with self.subTest(host=host, available=sorted(available)):
@@ -99,6 +100,9 @@ class ReviewRouteTests(unittest.TestCase):
             select(which=which_from(ALL), env=both)
         with self.assertRaisesRegex(ValueError, "^host-unknown$"):
             select("gemini", which=which_from(ALL), env={})
+        crossed = {**self.module().ROUTES, "claude": {**self.module().ROUTES["codex"]}}  # a cross-family row in the table
+        with mock.patch.object(self.module(), "ROUTES", crossed), self.assertRaisesRegex(ValueError, "^reviewer-other-family$"):
+            self.module().select_reviewer("claude", which=which_from(ALL), env={})
 
     def test_review_argv_is_fresh_read_only_and_capped_where_the_cli_allows(self):
         module = self.module()

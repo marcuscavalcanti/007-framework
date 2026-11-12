@@ -71,7 +71,9 @@ by the maintainer's decision, and release notes state it. This replaces the
 cross-family rule of revision 2026-10-21b. The host session is taken to be the
 implementer; when another family implemented the change, or several did, the
 maintainer declares the host. The same day an intermediate revision routed a
-Codex host to `claude-opus-5-5`; no review ran under it. `scripts/review_route.py` is the
+Claude host to `claude-fable-5-2` and a Codex host to `claude-opus-5-5`; one
+review was launched under it and stopped (identity level `failed`).
+`scripts/review_route.py` is the
 single implementation of this table; it selects, it never launches. There is no
 fallback model: the route fails closed.
 
