@@ -18,7 +18,7 @@ On go-json-experiment/json's 41 commits that reach new behaviour, does Claude Op
   - the frozen reach set (481 tests);
   - the grading;
   - the arms (`claude-opus-5-5` at `medium` and `xhigh`);
-  - the agent command, with Claude settings pinned by hash `9ee69a3a…f0f0` and the Go cache in the workspace with `GOPROXY=off`.
+  - the agent command, with Claude settings pinned by hash `9ee69a3a8a4b3bf65e75b80133988b5d6bde59a87e9b265e913ca93ec94af8f0` and the Go cache in the workspace with `GOPROXY=off`.
 - **Attempts:** 2 fresh attempts per arm per commit, 164 in all. Two blocks of 82, both arms shuffled inside each block.
 - **Seed:** 20261112.
 - **Code:** the published 007 1.8.1 distribution, pinned by its manifest hash, which carries the rate-limit pause. Its commit and hash are recorded in F-1 before dispatch.
@@ -41,7 +41,7 @@ On go-json-experiment/json's 41 commits that reach new behaviour, does Claude Op
 - **NOT-PROVEN:** anything else.
 
 ## Economic reading
-- `R` = cost per accepted change at `medium` ÷ the same at `high`. It counts every dispatched cell except provider refusals. The 95% interval comes from a task bootstrap: 10,000 draws, seed 20261112.
+- `R` = cost per accepted change at `medium` ÷ the same at `xhigh`. It counts every dispatched cell except provider refusals. The 95% interval comes from a task bootstrap: 10,000 draws, seed 20261112.
 
 ## Answer
 | Answer | When |
