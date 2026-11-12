@@ -20,6 +20,16 @@ schemas, and the dashboard snapshot.
   labelled `provider-rate-limit` and is never retried. In the Codex 5-point pilot a rate limit refused every call for 7 minutes,
   and 1.7.0 ended the paid study with `invalid-budget`.
 
+### Notes
+
+- Erratum to 1.8.0's list of new refusals, which omitted three:
+  - `chain` on an `unbound` stage 1;
+  - `report --next-results` on a stage 2 without a manifest whose ledger names one or cannot be read;
+  - `run` with an `unsealed_files` that is not a list of strings.
+
+  Over an unsealed (1.7.0) stage 1, stage 2's chain is not checked. The 1.8.0 release record also miscounts its earlier reviews (six
+  reviews: five FIX FIRST, one stopped), as its release notes say.
+
 ## [1.8.0] - 2026-11-12
 
 A minor release for `007 lab`: a resumed run is bound to what it started with, and the report accounts for every planned cell

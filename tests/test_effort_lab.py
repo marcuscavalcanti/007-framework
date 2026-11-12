@@ -841,7 +841,8 @@ class Budget(unittest.TestCase):
             self.assertEqual((row["valid"], row["failure_class"]), (False, "controller-error:RuntimeError"))
             again = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good)
             self.assertEqual((again["stop"], again["calls"]), (None, 0))  # recorded, never retried, never an orphan
-            accounting = lab.arm_accounting(json.loads(path.read_text()), out, lab.load_cells(out), {})
+            rows = [{**json.loads(p.read_text()), "cell": p.stem} for p in out.glob("*-r01-*.json") if not p.name.endswith(".runner.json")]
+            accounting = lab.arm_accounting(json.loads(path.read_text()), out, rows, {})
             self.assertEqual(accounting["arms"]["a"]["invalid"], {"controller-error:RuntimeError": 1})
 
     def test_a_provider_rate_limit_pauses_the_run_instead_of_spending_the_invalid_budget(self):
