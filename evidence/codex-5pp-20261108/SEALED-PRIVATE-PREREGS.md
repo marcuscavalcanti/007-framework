@@ -9,3 +9,5 @@ published here before any of their data is read, so their anteriority can be che
 | D | The thesis on the maintainer's own repositories: Codex `medium` against `high`, per repository, at break-even, with the controls of this pilot. Runs after this study ends. | `1a72ff7c0dfd6764e1f9ee2d951ec29202e404cc43d2eb00c3c933d86b9bbb71` |
 
 Only aggregates will be published, anonymized per repository.
+
+| C, analysis script (`analyze_c.py`), hashed before its first read of any log content (2026-11-12) | | `caac6601587f650f207b77260193c12325dc388df10d0025bb2bd6fed86db20f` |
