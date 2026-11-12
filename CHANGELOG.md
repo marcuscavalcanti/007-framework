@@ -6,6 +6,48 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-12
+
+A patch release for `007 lab`, from defects the Codex 5-point pilot found. Release qualification is recorded in
+[the release record](evidence/v1.8.1/release-evidence.md).
+
+### Fixed
+
+- `007 lab sensitivity` and `chain` read patches as bytes. Newline translation turned CRLF lines into LF, so a reference or
+  candidate patch touching a CRLF file failed to apply: the task looked reference-failed, or its chain broke. Found by the
+  Codex 5-point pilot's serial re-grade (its Amendment 8).
+- One cell whose controller raises (a refused snapshot, a crash) becomes an invalid cell, `failure_class`
+  `controller-error:<type>`, never retried. Before, the exception ended the whole `007 lab run`. The invalid budget still stops a
+  run where every cell fails.
+- A `--flag=/absolute/file` argument of the agent command is sealed like a bare absolute path. Before, it was silently unsealed.
+- A provider rate limit no longer spends the invalid budget. A cell whose call the provider refused (receipt
+  `native-error-rate-limit`, no usage reported) is labelled `provider-rate-limit` (the observed class is kept in
+  `failure_class_observed`), is still charged its receipt cost or the `--stop-usd` reserve, does not count toward `--max-invalid`,
+  is never retried, and pauses the run with stop `rate-limit` (no `STOP.json`). A resume within 10 minutes of the last refusal
+  stops with `rate-limit-cooldown`, so a driver that resumes in a loop does not lose cells to the outage. `run` returns the
+  `refused` count. Only refusals that report no usage are covered: cells already working when the limit starts can still fail
+  as invalid, and a limit can hit one arm more than the other. In the Codex 5-point pilot (evidence commit `17d309e`), a rate
+  limit refused every call for 7 minutes and 1.7.0 ended the paid study with `invalid-budget`.
+- Patches are produced and applied losslessly: references and next changes are decoded with `surrogateescape`, references are
+  written as bytes, and `git apply` runs with `--whitespace=nowarn`, so an `apply.whitespace=fix` setting no longer strips CR. A 1.8.0 `sensitivity.json`
+  or chain set over CRLF or non-UTF-8 files should be rebuilt.
+- `chain` skips cells with no candidate patch (controller errors, refused calls) and names them in `broken`.
+- `unsealed_files` can name the file of a `--flag=/file` argument.
+- A controller error prints the cell and the error to stderr. A truncated runner receipt reads as an unknown cost (charged its
+  reserve) instead of ending the run.
+- A run sealed by 1.8.0 does not resume under 1.8.1: the 007 scripts are sealed, so the upgrade reads as `manifest-mismatch`.
+  Finish a sealed run on the version that started it.
+
+### Notes
+
+- Erratum to 1.8.0's list of new refusals, which omitted three:
+  - `chain` on an `unbound` stage 1;
+  - `report --next-results` on a stage 2 without a manifest whose ledger names one or cannot be read;
+  - `run` with an `unsealed_files` that is not a list of strings.
+
+  Over an unsealed (1.7.0) stage 1, stage 2's chain is not checked. The 1.8.0 release record also miscounts its earlier reviews (six
+  reviews: five FIX FIRST, one stopped), as its release notes say.
+
 ## [1.8.0] - 2026-11-12
 
 A minor release for `007 lab`: a resumed run is bound to what it started with, and the report accounts for every planned cell
@@ -665,7 +707,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0
 
 [1.7.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...v1.7.0

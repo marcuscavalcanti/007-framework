@@ -2,6 +2,7 @@
 import difflib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -358,6 +359,21 @@ class LabEndToEnd(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lost the manifest"):
             lab.report(path, results, nxt)
 
+    def test_chain_skips_a_cell_with_no_candidate_patch(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        first = json.loads(path.read_text())["tasks"][0]["id"]
+
+        def failing(config, task, arm, rep, out_, timeout):
+            if task["id"] == first and arm == "high":
+                raise RuntimeError("snapshot refused")
+            return lab.replay_eval.execute_cell(config, task, arm, rep, out_, timeout)
+        state = lab.run(path, results, replicates=1, jobs=1, max_calls=99, max_usd=10, stop_usd=1, execute=failing)
+        self.assertEqual(state["invalid"], 1)
+        chained = lab.chain(path, results, self.root / "stage2-skip")
+        self.assertIn(f"{first}-r01-high", chained["broken"])
+
     def test_report_uses_the_shared_classifier_for_receipt_like_arm_names(self):
         self.config["arms"]["high.runner"] = self.config["arms"].pop("high")
         self.config["compare"]["reference"] = "high.runner"
@@ -516,6 +532,26 @@ class LabEndToEnd(unittest.TestCase):
         partial = "diff --git a/calc.py b/calc.py\n--- a/calc.py\n+++ b/calc.py\n" + "".join(list(difflib.unified_diff(base.splitlines(True), PARTIAL.splitlines(True), n=0))[2:])
         real_next = git(self.repo, "diff", pair["next"]["base"], pair["next"]["accepted"])
         self.assertEqual(lab.probe(config, out, task["id"], partial, real_next), (True, None))  # B edits the lines the partial patch left out
+
+
+class CRLFPatches(unittest.TestCase):
+    def test_a_patch_with_crlf_lines_reads_and_applies_intact(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, tree = Path(d) / "repo", Path(d) / "tree"
+            repo.mkdir()
+            git(repo, "init", "-q")
+            (repo / "a.txt").write_bytes(b"x\r\ny\r\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            (repo / "a.txt").write_bytes(b"x\r\nz\r\n")
+            patch = Path(d) / "change.patch"
+            patch.write_bytes(subprocess.run(["git", "-C", str(repo), "diff", "--binary"], capture_output=True, check=True).stdout)
+            self.assertIn(b"\r", patch.read_bytes())
+            git(repo, "checkout", "-q", "--", "a.txt")
+            shutil.copytree(repo, tree, ignore=shutil.ignore_patterns(".git"))
+            self.assertFalse(lab.apply_patch(tree, patch.read_text()))  # newline translation breaks it, as 1.8.0 read it
+            self.assertTrue(lab.apply_patch(tree, lab.read_patch(patch)))
+            self.assertEqual((tree / "a.txt").read_bytes(), b"x\r\nz\r\n")
 
 
 class Budget(unittest.TestCase):
@@ -803,6 +839,89 @@ class Budget(unittest.TestCase):
                 self.assertEqual((state["stop"], state["calls"]), ("executable-unreadable", 0))
             finally:
                 tool.chmod(0o600)
+
+    def test_one_cells_controller_error_is_an_invalid_cell_not_the_end_of_the_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            good = self.fake()[0]
+
+            def execute(config, task, arm, rep, out_, timeout):
+                if task["id"] == "T1" and arm == "a":
+                    raise RuntimeError("archive entry is not a regular file")  # a refused snapshot, before any agent ran
+                return good(config, task, arm, rep, out_, timeout)
+            state = lab.run(path, out, replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1, execute=execute)
+            self.assertEqual((state["stop"], state["calls"], state["invalid"]), (None, 8, 1))
+            row = json.loads((out / "T1-r01-a.json").read_text())
+            self.assertEqual((row["valid"], row["failure_class"]), (False, "controller-error:RuntimeError"))
+            again = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good)
+            self.assertEqual((again["stop"], again["calls"]), (None, 0))  # recorded, never retried, never an orphan
+            rows = [{**json.loads(p.read_text()), "cell": p.stem} for p in out.glob("*-r01-*.json") if not p.name.endswith(".runner.json")]
+            accounting = lab.arm_accounting(json.loads(path.read_text()), out, rows, {})
+            self.assertEqual(accounting["arms"]["a"]["invalid"], {"controller-error:RuntimeError": 1})
+
+    def test_a_provider_rate_limit_pauses_the_run_instead_of_spending_the_invalid_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            good, calls = self.fake()[0], []
+
+            def limited(config, task, arm, rep, out_, timeout):
+                calls.append(task["id"])
+                if len(calls) <= 3:
+                    return good(config, task, arm, rep, out_, timeout)
+                cid = f"{task['id']}-r{rep:02d}-{arm}"  # refused before any work: no usage, no cost
+                (out_ / f"{cid}.runner.json").write_text(json.dumps({"problem": "native-error-rate-limit", "usage": None, "cost_usd": None}))
+                row = {"valid": False, "cost_usd": "unmeasured", "failure_class": "agent-exit"}
+                (out_ / f"{cid}.json").write_text(json.dumps(row))
+                return row
+            state = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=limited, max_invalid=1)
+            # charged its reserve like any invalid cell (no cost was measured), but not counted toward --max-invalid
+            self.assertEqual((state["stop"], state["calls"], state["invalid"], state["refused"], state["spent"]), ("rate-limit", 4, 0, 1, 4.0))
+            self.assertFalse((out / "STOP.json").exists())  # a planned pause, not a final stop
+            refused = [json.loads(p.read_text()) for p in out.glob("*-r01-*.json") if not p.name.endswith(".runner.json")]
+            self.assertEqual(sum(r.get("failure_class") == "provider-rate-limit" for r in refused), 1)
+            early = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good, max_invalid=1)
+            self.assertEqual((early["stop"], early["calls"]), ("rate-limit-cooldown", 0))  # resuming inside the outage would lose cells
+            with mock.patch.object(lab, "RATE_LIMIT_COOLDOWN_S", 0):
+                resumed = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good, max_invalid=1)
+            self.assertEqual((resumed["stop"], resumed["calls"], resumed["invalid"], resumed["refused"], resumed["spent"]), (None, 4, 0, 1, 8.0))
+
+    def test_resume_charges_what_the_live_run_charged_and_only_the_label_exempts_a_cell(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            good = self.fake()[0]
+
+            def recovered(config, task, arm, rep, out_, timeout):
+                row = good(config, task, arm, rep, out_, timeout)
+                if task["id"] == "T0" and arm == "a":  # a valid cell whose CLI recovered from a 429: its receipt still names it
+                    cid = f"{task['id']}-r{rep:02d}-{arm}"
+                    (out_ / f"{cid}.runner.json").write_text(json.dumps({"problem": "native-error-rate-limit", "cost_usd": 2.0}))
+                    row = {"valid": True, "cost_usd": 2.0}
+                    (out_ / f"{cid}.json").write_text(json.dumps(row))
+                return row
+            live = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=3, execute=recovered)
+            again = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=3, execute=good)
+            self.assertEqual((live["stop"], live["refused"], live["spent"]), (None, 0, 9.0))
+            self.assertEqual((again["calls"], again["spent"]), (0, 9.0))
+
+    def test_unsealed_files_can_name_the_file_of_a_flag(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "agent.log"
+            log.write_text("x")
+            sealed = lab.seal({"agent_command": ["/bin/sh", f"--log={log}"], "unsealed_files": [str(log)]})
+            self.assertEqual(list(sealed["executables"]), ["/bin/sh"])
+
+    def test_a_flag_that_names_an_absolute_file_is_sealed(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / "agent.toml"
+            config.write_text("model = 'x'")
+            part = f"--config={config}"
+            sealed = lab.seal({"agent_command": ["/bin/sh", part]})
+            self.assertEqual(sealed["executables"][part]["path"], str(config.resolve()))
+            config.write_text("model = 'y'")
+            self.assertNotEqual(lab.seal({"agent_command": ["/bin/sh", part]})["executables"], sealed["executables"])
 
     def test_the_program_is_sealed_through_path_and_a_relative_one_is_named_unsealed(self):
         with tempfile.TemporaryDirectory() as d:
