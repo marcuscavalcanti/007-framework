@@ -117,6 +117,10 @@ No experiment answers this part.
   - Between 1 and 2 is reported as such, with no verdict.
 
 ## 5. One answer: yes or no
+
+**Revision 2:** this part is now **answer A**: the pooled 5-point test, reported with its reason. The single yes-or-no answer
+is in [part 6](#6-the-answer-revision-2).
+
 The maintainer asked for a single answer, yes or no, to "is 007 viable?".
 
 **What it is read as:** can `007 lab` settle what the README asks, with a pre-registered verdict that is decisive and robust? And is
@@ -192,6 +196,47 @@ about the evidence, not about the maintainer's goal.
   - Every revision is its own commit.
   - After the first pilot attempt, the file is fixed.
 
+## 6. The answer (revision 2)
+Revision 2 reads "is 007 viable?" as the README's thesis, as written: whether the lower effort pays for the chosen executor on one
+repository's replay tasks, at the break-even margin of `docs/lab.md` ([PREREG-B.md](PREREG-B.md)). Answer A (part 5) stays, and is
+reported next to it.
+
+**YES** only if both hold:
+- **T1, the instrument measures.**
+  - The pilot's decision is not NO-INSTRUMENT (Amendment 5 (d)): the serial re-grade disagrees on at most 2% of cells, and the
+    serial freeze agrees on GO.
+  - The A/A check (Amendment 5 (j)) is within 3% to 8%.
+  - Any confirmatory category used is stable under both robustness re-grades and the 60% check.
+- **T2, the thesis as written.** At least one eligible repository, alone, answers PAYS or DOES-NOT-PAY with fresh attempts
+  (PREREG-B).
+  - DOES-NOT-PAY counts: the instrument decided, and it refutes "pays" on that repository.
+  - The answer names each repository and its answer.
+
+**NO** otherwise, with the first reason that applies:
+1. NO-INSTRUMENT
+2. NO-STOPPED
+3. NO-BUDGET
+4. NO-AA
+5. NO-DECISIVE-REPOSITORY
+
+A NO reads "not shown".
+
+**What follows:**
+- If no eligible repository is decisive, "on your repository" is withdrawn from the README for this executor.
+- PROVEN-NOT-ECONOMIC is reported as evidence that the reachable-scale margin does not measure "pays".
+
+**Expected answer, written before any outcome.** An adversarial review put YES near 55%:
+- P(the pilot freezes) is 0.85;
+- P(the instrument passes) is 0.90;
+- P(at least one decisive repository) is 0.80;
+- P(R agrees) is 0.90.
+
+The same review put answer A's YES near 1%.
+
+**Review:** as in part 5.
+- The answer and its evidence go to Claude Fable 5.2 at maximum effort.
+- A computation error counts only if the hashed script reproduces it.
+
 ## Revisions
 - **Version 0** (`e689040`, 2026-11-12T01:11Z) and **its yes-or-no rule** (`4eef568`, 01:13Z).
   - The corrected gate re-run was still running when they were pushed.
@@ -205,3 +250,11 @@ about the evidence, not about the maintainer's goal.
     before any gate output.
   - The fixed point moved from "the pilot set is built" to "the first pilot attempt". A set reveals no arm outcome, and the scripts
     this revision requires must be hashed before dispatch.
+- **Revision 2** (this commit): part 6, the single answer, now reads the thesis as written. Part 5 becomes answer A. Amendment 5
+  and PREREG-B were added.
+  - **Cause:** an adversarial validation of the post-gate plan (Claude Fable 5.2, `xhigh` requested), and the maintainer's
+    decision to follow it.
+  - **What existed when it was pushed:**
+    - the first gate re-run of klauspost/compress was still running, and yaegi's was inconsistent;
+    - no pilot set existed;
+    - no attempt had been dispatched.

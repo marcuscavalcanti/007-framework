@@ -20,6 +20,10 @@ schemas, and the dashboard snapshot.
   task with varied outcomes, a freeze that third parties can re-run with published per-cell tables, and the part-3 script.
 - Amendment 4 (`evidence/codex-5pp-20261108/AMENDMENT-4.md`), after traefik/yaegi failed the gate re-run's consistency check
   and before any second re-run or pilot attempt: one quiet re-run, then an inconsistent repository leaves the pool.
+- Amendment 5 and PREREG-B (`evidence/codex-5pp-20261108/`), before any pilot attempt, after an adversarial validation of the plan:
+  four oracle controls (reference-failed union, a dry run that checks the reference, a serial re-grade with NO-INSTRUMENT above 2%
+  discordance, one-job robustness re-grades), a load log, an A/A check, and a per-repository test of the thesis as written at the
+  break-even margin. DECISIONS revision 2 makes that test the single answer.
 
 ## [1.7.0] - 2026-11-09
 
