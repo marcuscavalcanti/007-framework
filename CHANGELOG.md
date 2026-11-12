@@ -24,6 +24,8 @@ schemas, and the dashboard snapshot.
   four oracle controls (reference-failed union, a dry run that checks the reference, a serial re-grade with NO-INSTRUMENT above 2%
   discordance, one-job robustness re-grades), a load log, an A/A check, and a per-repository test of the thesis as written at the
   break-even margin. DECISIONS revision 2 makes that test the single answer.
+- Amendment 6 (`evidence/codex-5pp-20261108/AMENDMENT-6.md`), after the dry run failed before any pilot attempt: pierrec/lz4's
+  task bases hold a symlink the pinned snapshot refuses, so it leaves the pool; yaegi left under Amendment 4 (47/68 vs 46/68).
 
 ## [1.7.0] - 2026-11-09
 
