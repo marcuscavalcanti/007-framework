@@ -54,3 +54,27 @@ No experiment answers this part.
     or publish a report, about running `007 lab` on their own repository.
   - **Not viable:** none do.
   - Between 1 and 2 is reported as such, with no verdict.
+
+## 5. One answer: yes or no
+The maintainer asked for a single answer, yes or no, to "is 007 viable?". The question is read as the README's thesis: whether a
+lower reasoning effort pays for the chosen executor on your repository's replay tasks, against a margin declared before spending.
+
+**YES** only if all three hold:
+- **(a)** Part 1 is yes.
+- **(b)** Part 2 is decisive: the confirmatory verdict is PROVEN or KILL. Both count, because each shows whether the lower effort
+  pays. NOT-PROVEN, NO-GO and an early stop count as no.
+- **(c)** Part 3 holds: at least one repository reaches `n80` alone. This is a projection from the pilot's noise, not a verdict
+  shown on one repository, and it is reported as such.
+
+**NO** otherwise.
+
+**Adoption** (part 4) is outside the answer. It cannot be observed before an announcement plus 60 days. It is reported on its own
+and never changes the answer.
+
+**Before the answer is given:**
+- The answer and its evidence go to Claude Fable 5.2 at maximum effort, asked to refute it.
+- A computation or rule-application error that the primary data confirm is corrected.
+- A disagreement about the rule itself does not change the answer: the rule is fixed here, before any outcome. It is reported next
+  to the answer.
+- Before the pilot set is built, this file may still be revised after an adversarial review of the rule. Every revision is its own
+  commit. After the set is built, it is fixed.
