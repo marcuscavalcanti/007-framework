@@ -6,6 +6,11 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-12
+
+A minor release for `007 lab`: a resumed run is bound to what it started with, and the report accounts for every planned cell
+per arm. Release qualification is recorded in [the release record](evidence/v1.8.0/release-evidence.md).
+
 ### Added
 
 - `007 lab run` seals `run-manifest.json` before its first dispatch: the set, the agent command's program and files (through
@@ -16,6 +21,11 @@ schemas, and the dashboard snapshot.
   (`sealed`, `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
 - `007 lab report` gains `arm_accounting`: per arm, planned cells, never dispatched, dispatched without a result, invalid by
   failure class, valid and accepted, also in plain words in `report.md`. Invalid and missing cells were named only as one list.
+
+### Fixed
+
+- Release preparation keeps an annotated tag as such, and a failed tag-triggered preparation can be dispatched again on
+  `main` with the existing tag and its exact tag object (`release.yml`, `RELEASING.md`).
 
 ## [1.7.0] - 2026-11-09
 
@@ -637,7 +647,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0
 
 [1.7.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...v1.7.0
 [1.6.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...v1.6.2
