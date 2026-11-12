@@ -37,9 +37,11 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
   are.
 - **Local suite on the candidate:** 966 native Python tests passed with no skips, and 54 JavaScript tests passed (2026-11-12).
 - **CI and the independent review** of the exact commit are recorded in the GitHub release notes.
-- **Reviewer:** Claude Fable 5.2 at `xhigh` (AGENTS.md revision 2026-11-12). It shares the author's model family, by the
-  maintainer's decision. An OpenAI `gpt-6-astra` review was dispatched on the earlier candidate `57b0a08`, before that
-  decision. It is recorded and does not qualify this release.
+- **Reviewer:** Claude Fable 5.2 at `xhigh`, because Claude implemented this release (AGENTS.md revision 2026-11-12). It shares
+  the implementer's model family, by the maintainer's decision.
+- **Earlier reviews, recorded and not qualifying this release:**
+  - an OpenAI `gpt-6-astra` review, dispatched on the earlier candidate `57b0a08` before that decision;
+  - a Fable review of candidate `8a7a29b`, stopped when the policy changed again.
 
 ## Causal evidence
 - This release asserts no new causal result. The frozen experiment reports keep their scope and verdicts.

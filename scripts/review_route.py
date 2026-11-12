@@ -8,13 +8,12 @@ import os
 import shutil
 
 ROUTES = {  # host session -> reviewer
-    # 2026-11-12 (Marcus): a Claude host is reviewed by Claude Fable 5.2 at xhigh, a same-family exception by decision
+    # 2026-11-12 (Marcus): the reviewer follows the implementer's family, at xhigh: Claude -> Fable 5.2, Codex -> Astra
     "claude": {"provider": "anthropic", "cli": "claude", "model": "claude-fable-5-2", "effort": "xhigh", "budget_control": "cli-max-budget-usd"},
-    "codex": {"provider": "anthropic", "cli": "claude", "model": "claude-opus-5-5", "effort": "xhigh",
-              "budget_control": "cli-max-budget-usd"},
+    "codex": {"provider": "openai", "cli": "codex", "model": "gpt-6-astra", "effort": "xhigh", "budget_control": None},
 }
 HOST_FAMILY = {"claude": "anthropic", "codex": "openai"}
-SAME_FAMILY_BY_DECISION = {"claude"}  # hosts whose same-family reviewer the maintainer chose explicitly
+SAME_FAMILY_BY_DECISION = {"claude", "codex"}  # hosts whose same-family reviewer the maintainer chose explicitly (2026-11-12)
 # r33: the Codex reviewer gets only the context on stdin — a read-only sandbox still reads the whole disk, so no shell, web or extensions
 # (the same features Marcus's other reviewer sessions disable on this binary).
 CODEX_REVIEW_DISABLED = ("shell_tool", "unified_exec", "apps", "plugins", "hooks", "memories", "multi_agent", "browser_use",

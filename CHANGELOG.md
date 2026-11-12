@@ -24,8 +24,9 @@ per arm. Release qualification is recorded in [the release record](evidence/v1.8
 
 ### Changed
 
-- Reviewer policy (Marcus, 2026-11-12): a Claude host is reviewed by Claude Fable 5.2 at `xhigh`, a same-family exception
-  by decision (`AGENTS.md`, `scripts/review_route.py`). A Codex host keeps Claude Opus 5.5. Release notes state the shared family.
+- Reviewer policy (Marcus, 2026-11-12): the reviewer follows the implementer, at `xhigh`. Codex implements: OpenAI
+  `gpt-6-astra` reviews. Claude implements: Claude Fable 5.2 reviews (`AGENTS.md`, `scripts/review_route.py`). This replaces the
+  cross-family rule; release notes state that reviewer and implementer share a model family.
 
 ### Fixed
 

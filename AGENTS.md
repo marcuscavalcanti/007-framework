@@ -64,18 +64,18 @@ Governance:
 
 ## Adversarial review policy
 
-Revision 2026-10-21b (Marcus): the independent reviewer comes from a different
-model family than the host session running the routine. Revision 2026-11-12
-(Marcus): a Claude host is reviewed by Claude Fable 5.2 at `xhigh`, a
-same-family exception chosen by the maintainer; release notes state that the
-reviewer shares the author's model family. `scripts/review_route.py` is the
+Revision 2026-11-12 (Marcus): the reviewer follows the implementer. When Codex
+implements, OpenAI `gpt-6-astra` at `xhigh` reviews; when Claude implements,
+Claude Fable 5.2 at `xhigh` reviews. Both share the implementer's model family,
+by the maintainer's decision, and release notes state it. This replaces the
+cross-family rule of revision 2026-10-21b. `scripts/review_route.py` is the
 single implementation of this table; it selects, it never launches. There is no
 fallback model: the route fails closed.
 
 | Host session (detected) | Reviewer | Transport | Effort |
 | --- | --- | --- | --- |
-| Claude (`CLAUDECODE` set) | Anthropic `claude-fable-5-2` (same family, by decision) | Claude CLI, plan mode, tools disabled, no persistence, CLI budget cap | `xhigh` |
-| Codex (`CODEX_THREAD_ID` set) | Anthropic `claude-opus-5-5` | Claude CLI, plan mode, tools disabled, no persistence, CLI budget cap | `xhigh` |
+| Claude (`CLAUDECODE` set) | Anthropic `claude-fable-5-2` | Claude CLI, plan mode, tools disabled, no persistence, CLI budget cap | `xhigh` |
+| Codex (`CODEX_THREAD_ID` set) | OpenAI `gpt-6-astra` | Codex CLI, `exec`, read-only sandbox, user config ignored | `xhigh` |
 
 - Both host markers present means nested sessions: the caller must declare the
   host; never guess.
@@ -126,7 +126,7 @@ This policy governs the independent reviewer only. It does not change causal
 experiment arms, coding executors, historical receipts, or frozen evidence.
 Historical review evidence is immutable and must retain the model and effort
 that actually produced it (the 1.6.2 and 1.7.0 releases were reviewed by OpenAI
-`gpt-6-astra` at `xhigh` under revision 2026-10-21b; previous policies: Claude CLI `claude-fable-5-1`, effort
+`gpt-6-astra` at `xhigh` under revision 2026-10-21b, whose Codex host was reviewed by `claude-opus-5-5`; previous policies: Claude CLI `claude-fable-5-1`, effort
 `high`, no fallback; revision 2026-10-21 with a Kimi K3 fallback, never used).
 
 (Yes, these rules also apply to agents working on this repository. Especially to them.)
