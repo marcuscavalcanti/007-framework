@@ -6,6 +6,15 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Added
+
+- `007 lab run` seals `run-manifest.json` before its first dispatch: the set, the agent command's program and files (through
+  symlinks), the 007 scripts and the Python version. A resume that finds any of them changed stops with `manifest-mismatch` and
+  dispatches nothing; limits and the `compare` block stay adjustable. Before this, a resumed run re-read the set and could mix
+  treatments under valid receipts.
+- `007 lab report` and `chain` refuse results sealed with a different set. The report gains `run_manifest`
+  (`sealed`, `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
+
 ## [1.7.0] - 2026-11-09
 
 Candidate prepared for independent review. Release qualification is recorded in
