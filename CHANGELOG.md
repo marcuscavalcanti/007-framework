@@ -12,6 +12,9 @@ schemas, and the dashboard snapshot.
   the corrected gate re-run and any pilot attempt. It pins the pilot to the v1.7.0 code, keeps the evaluator embedded in the mined
   tasks, re-runs the corrected planted-defect gate, fixes a blind rule for tasks whose reference fails, uses the floor as written
   and adds a dry run with no model. The original pre-registration, Amendment 1 and their scripts are unchanged.
+- `evidence/codex-5pp-20261108/DECISIONS.md`, pushed before the gate re-run's result and any pilot attempt: what each pilot
+  outcome leads to, the confirmatory cost cap (US$400), and the rules for whether one repository can reach a verdict and
+  for adoption after the announcement.
 
 ## [1.7.0] - 2026-11-09
 
