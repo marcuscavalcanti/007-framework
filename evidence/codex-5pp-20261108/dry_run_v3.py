@@ -66,7 +66,7 @@ def main():
     (DRY / "dry-set.json").write_text(json.dumps({**pilot, "agent_command": command}, indent=1, ensure_ascii=False))
     cells = 4 * len(pilot["tasks"])
     run = subprocess.run([sys.executable, "-B", str(pinned.PINNED / "scripts" / "effort_lab.py"), "run", "--set", str(DRY / "dry-set.json"),
-                          "--out", str(DRY / "results"), "--replicates", "2", "--jobs", "4", "--max-calls", str(cells),
+                          "--out", str(DRY / "results"), "--replicates", "2", "--jobs", "2", "--max-calls", str(cells),
                           "--max-usd", "150", "--stop-usd", "2", "--max-invalid", str(cells)], capture_output=True, text=True)
     (DRY / "freeze").mkdir(exist_ok=True)
     freeze = subprocess.run([sys.executable, "-I", "-B", "-W", "ignore", str(HERE / "freeze_pilot_v3.py"), str(DRY / "results"), str(DRY / "freeze")],

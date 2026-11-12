@@ -14,7 +14,7 @@ SET=$(shasum -a 256 pilot-set.json | cut -d' ' -f1)
 N=$(python3 -I -c 'import json; print(4 * len(json.load(open("pilot-set.json"))["tasks"]))') || exit 1
 CODEX=$("$(python3 -I -c 'import json; c = json.load(open("pilot-set.json"))["agent_command"]; print(c[c.index("--") + 1])')" --version 2>&1)
 echo "{\"pilot\": \"start\", \"cells\": $N, \"at\": \"$(date -u +%FT%TZ)\", \"code_commit\": \"21ba2ffba46a0e0cd6be0616a5582ffcffb24d88\", \"pilot_set_sha256\": \"$SET\", \"sha256sums\": \"$(shasum -a 256 SHA256SUMS | cut -d' ' -f1)\", \"codex_cli\": \"$CODEX\", \"python\": \"$(python3 --version)\"}" >> run.log
-caffeinate -i python3 -B "$PIN/scripts/effort_lab.py" run --set pilot-set.json --out results --replicates 2 --jobs 4 \
+caffeinate -i python3 -B "$PIN/scripts/effort_lab.py" run --set pilot-set.json --out results --replicates 2 --jobs 2 \
   --max-calls "$N" --max-usd 150 --stop-usd 2 --max-invalid $(( (N + 9) / 10 )) > block.out 2>> run.err
 rc=$?
 cat block.out >> run.log

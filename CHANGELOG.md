@@ -26,6 +26,8 @@ schemas, and the dashboard snapshot.
   break-even margin. DECISIONS revision 2 makes that test the single answer.
 - Amendment 6 (`evidence/codex-5pp-20261108/AMENDMENT-6.md`), after the dry run failed before any pilot attempt: pierrec/lz4's
   task bases hold a symlink the pinned snapshot refuses, so it leaves the pool; yaegi left under Amendment 4 (47/68 vs 46/68).
+- Amendment 7 (`evidence/codex-5pp-20261108/AMENDMENT-7.md`), before any pilot attempt: every remaining run uses 2 jobs, after the
+  dry run at 4 jobs drove the load to about 870 and the machine restarted.
 
 ## [1.7.0] - 2026-11-09
 

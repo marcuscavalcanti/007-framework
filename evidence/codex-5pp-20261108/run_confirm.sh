@@ -11,7 +11,7 @@ SET=$(shasum -a 256 confirm-set.json | cut -d' ' -f1)
 T=$(python3 -I -c 'import json; print(len(json.load(open("confirm-set.json"))["tasks"]))') || exit 1
 block() {  # $1 = replicates so far, $2 = look
   echo "{\"confirm\": \"look $2 start\", \"at\": \"$(date -u +%FT%TZ)\", \"confirm_set_sha256\": \"$SET\", \"sha256sums\": \"$(shasum -a 256 SHA256SUMS | cut -d' ' -f1)\"}" >> confirm.log
-  caffeinate -i python3 -B "$PIN/scripts/effort_lab.py" run --set confirm-set.json --out confirm-results --replicates "$1" --jobs 4 \
+  caffeinate -i python3 -B "$PIN/scripts/effort_lab.py" run --set confirm-set.json --out confirm-results --replicates "$1" --jobs 2 \
     --max-calls $(( 2 * T * $1 )) --max-usd 400 --stop-usd 2 --max-invalid $(( (2 * T * $1 + 9) / 10 )) >> confirm.log 2>> confirm.err
   rc=$?
   echo "{\"confirm\": \"look $2 end\", \"exit\": $rc, \"at\": \"$(date -u +%FT%TZ)\"}" >> confirm.log
