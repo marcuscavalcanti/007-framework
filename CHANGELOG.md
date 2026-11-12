@@ -6,6 +6,11 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-12
+
+A patch release for `007 lab`, from defects the Codex 5-point pilot found. Release qualification is recorded in
+[the release record](evidence/v1.8.1/release-evidence.md).
+
 ### Fixed
 
 - `007 lab sensitivity` and `chain` read patches as bytes. Newline translation turned CRLF lines into LF, so a reference or
@@ -689,7 +694,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0
 
 [1.7.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...v1.7.0
