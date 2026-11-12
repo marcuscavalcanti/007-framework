@@ -66,7 +66,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     cells, disagree, unapplied = [], [], []
     for row in rows:  # one at a time: the point is a grade free of the run's own load
-        patch_text = (results / row["candidate_patch"]["path"]).read_text(errors="surrogateescape")
+        # bytes, then decode: read_text() turns CRLF into LF and a patch with CR no longer applies (AMENDMENT-8)
+        patch_text = (results / row["candidate_patch"]["path"]).read_bytes().decode("utf-8", "surrogateescape")
         outcomes = grade(config, tasks[row["task"]], patch_text)
         tests = reach.get(row["task"]) or [k for k in (row["acceptance_outcomes"] or {}) if k != "__module__"]
         before = {k: row["acceptance_outcomes"].get(k) == "pass" for k in tests}

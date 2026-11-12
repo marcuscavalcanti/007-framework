@@ -28,6 +28,8 @@ schemas, and the dashboard snapshot.
   task bases hold a symlink the pinned snapshot refuses, so it leaves the pool; yaegi left under Amendment 4 (47/68 vs 46/68).
 - Amendment 7 (`evidence/codex-5pp-20261108/AMENDMENT-7.md`), before any pilot attempt: every remaining run uses 2 jobs, after the
   dry run at 4 jobs drove the load to about 870 and the machine restarted.
+- Amendment 8 (`evidence/codex-5pp-20261108/AMENDMENT-8.md`), before any pilot attempt: the serial re-grade reads patches as bytes;
+  newline translation had made a CRLF patch unappliable and failed the dry run's serial check.
 
 ## [1.7.0] - 2026-11-09
 
