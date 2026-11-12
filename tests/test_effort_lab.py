@@ -359,6 +359,21 @@ class LabEndToEnd(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lost the manifest"):
             lab.report(path, results, nxt)
 
+    def test_chain_skips_a_cell_with_no_candidate_patch(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        first = json.loads(path.read_text())["tasks"][0]["id"]
+
+        def failing(config, task, arm, rep, out_, timeout):
+            if task["id"] == first and arm == "high":
+                raise RuntimeError("snapshot refused")
+            return lab.replay_eval.execute_cell(config, task, arm, rep, out_, timeout)
+        state = lab.run(path, results, replicates=1, jobs=1, max_calls=99, max_usd=10, stop_usd=1, execute=failing)
+        self.assertEqual(state["invalid"], 1)
+        chained = lab.chain(path, results, self.root / "stage2-skip")
+        self.assertIn(f"{first}-r01-high", chained["broken"])
+
     def test_report_uses_the_shared_classifier_for_receipt_like_arm_names(self):
         self.config["arms"]["high.runner"] = self.config["arms"].pop("high")
         self.config["compare"]["reference"] = "high.runner"
@@ -861,12 +876,42 @@ class Budget(unittest.TestCase):
                 (out_ / f"{cid}.json").write_text(json.dumps(row))
                 return row
             state = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=limited, max_invalid=1)
-            self.assertEqual((state["stop"], state["calls"], state["invalid"], state["spent"]), ("rate-limit", 4, 0, 3.0))
+            # charged its reserve like any invalid cell (no cost was measured), but not counted toward --max-invalid
+            self.assertEqual((state["stop"], state["calls"], state["invalid"], state["refused"], state["spent"]), ("rate-limit", 4, 0, 1, 4.0))
             self.assertFalse((out / "STOP.json").exists())  # a planned pause, not a final stop
             refused = [json.loads(p.read_text()) for p in out.glob("*-r01-*.json") if not p.name.endswith(".runner.json")]
             self.assertEqual(sum(r.get("failure_class") == "provider-rate-limit" for r in refused), 1)
-            resumed = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good, max_invalid=1)
-            self.assertEqual((resumed["stop"], resumed["calls"], resumed["invalid"]), (None, 4, 0))  # the refused cell is not retried
+            early = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good, max_invalid=1)
+            self.assertEqual((early["stop"], early["calls"]), ("rate-limit-cooldown", 0))  # resuming inside the outage would lose cells
+            with mock.patch.object(lab, "RATE_LIMIT_COOLDOWN_S", 0):
+                resumed = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good, max_invalid=1)
+            self.assertEqual((resumed["stop"], resumed["calls"], resumed["invalid"], resumed["refused"], resumed["spent"]), (None, 4, 0, 1, 8.0))
+
+    def test_resume_charges_what_the_live_run_charged_and_only_the_label_exempts_a_cell(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            good = self.fake()[0]
+
+            def recovered(config, task, arm, rep, out_, timeout):
+                row = good(config, task, arm, rep, out_, timeout)
+                if task["id"] == "T0" and arm == "a":  # a valid cell whose CLI recovered from a 429: its receipt still names it
+                    cid = f"{task['id']}-r{rep:02d}-{arm}"
+                    (out_ / f"{cid}.runner.json").write_text(json.dumps({"problem": "native-error-rate-limit", "cost_usd": 2.0}))
+                    row = {"valid": True, "cost_usd": 2.0}
+                    (out_ / f"{cid}.json").write_text(json.dumps(row))
+                return row
+            live = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=3, execute=recovered)
+            again = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=3, execute=good)
+            self.assertEqual((live["stop"], live["refused"], live["spent"]), (None, 0, 9.0))
+            self.assertEqual((again["calls"], again["spent"]), (0, 9.0))
+
+    def test_unsealed_files_can_name_the_file_of_a_flag(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "agent.log"
+            log.write_text("x")
+            sealed = lab.seal({"agent_command": ["/bin/sh", f"--log={log}"], "unsealed_files": [str(log)]})
+            self.assertEqual(list(sealed["executables"]), ["/bin/sh"])
 
     def test_a_flag_that_names_an_absolute_file_is_sealed(self):
         with tempfile.TemporaryDirectory() as d:

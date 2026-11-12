@@ -259,7 +259,7 @@ def oracle(config, commit):
     hidden = [k for k in hidden if k in stable]
     if len(hidden) + 1 > replay_eval.MAX_ACCEPT_OUTCOMES:  # the report adds "__module__"; past the cap every cell's outcomes read "unavailable"
         return "too-many-hidden-tests"
-    reference = _git(repo, "diff", "--binary", parent, sha, "--", ".", *[f":(exclude){f}" for f in hidden_files]).decode("utf-8", "replace")
+    reference = _git(repo, "diff", "--binary", parent, sha, "--", ".", *[f":(exclude){f}" for f in hidden_files]).decode("utf-8", "surrogateescape")
     added = added_source(reference)
     contract = set()
     for name in hidden_files:
@@ -286,7 +286,7 @@ def write_task(config, out, tid, commit, built):
     for name, payload in (("hidden.json", json.dumps(built["hidden"])), ("baseline.json", json.dumps(built["baseline"])), ("lab.json", json.dumps(built["spec"])), ("lab_accept.py", (HERE / "lab_accept.py").read_text())):
         (directory / name).write_text(payload)
         entries.append((directory / name, f"{ACCEPT}/{name}"))
-    (directory / "reference.patch").write_text(built["reference"])
+    (directory / "reference.patch").write_bytes(built["reference"].encode("utf-8", "surrogateescape"))
     # ponytail: Go only, where a redeclared test name breaks the package; other adapters keep the agent's tests until one collides
     reset = {"reset_to_base": ["*_test.go"]} if built["spec"]["adapter"] == "go" else {}
     return {"id": tid, "repo": config.get("repo_key", "source"), "base": commit["parent"], "accepted": commit["sha"], "prompt": prompt_for(config, built["message"], built["contract"]), "acceptance_timeout_s": 900, **reset,
@@ -393,7 +393,9 @@ def apply_patch(tree, patch_text):
         return True
     if not (tree / ".git").exists():
         subprocess.run(["git", "init", "-q"], cwd=tree, check=True, capture_output=True)
-    return subprocess.run(["git", "apply", "--recount", "--binary", "-"], cwd=tree, input=patch_text.encode(errors="surrogateescape"), capture_output=True).returncode == 0
+    env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}  # no operator config (apply.whitespace=fix strips CR)
+    return subprocess.run(["git", "apply", "--recount", "--binary", "--whitespace=nowarn", "-"], cwd=tree, env=env,
+                          input=patch_text.encode(errors="surrogateescape"), capture_output=True).returncode == 0
 
 
 def oracle_passes(directory, tree, spec, sandbox, env):
@@ -430,6 +432,9 @@ def chain(config_path, results, out):
     next_tasks, broken = [], []
     for row in load_cells(results):
         meta, task = pairs[row["task"]], tasks[row["task"]]
+        if not isinstance(row.get("candidate_patch"), dict) or row.get("failure_class") == "provider-rate-limit":
+            broken.append(row["cell"])  # no candidate to chain from: a controller error or a refused call
+            continue
         with tempfile.TemporaryDirectory(prefix="lab-chain-") as scratch:
             tree = Path(scratch) / "tree"
             rewound(repo, task, meta, tree)
@@ -501,7 +506,7 @@ def sensitivity(config_path, jobs, per_task=6):
     repo, rng, work = next(iter(config["repos"].values())), random.Random(config.get("seed", 1)), []
     for task in config["tasks"]:
         meta = pairs[task["id"]]
-        real_next = _git(repo, "diff", "--binary", meta["next"]["base"], meta["next"]["accepted"]).decode("utf-8", "replace") if "next" in meta else ""
+        real_next = _git(repo, "diff", "--binary", meta["next"]["base"], meta["next"]["accepted"]).decode("utf-8", "surrogateescape") if "next" in meta else ""
         reference = read_patch(out / "tasks" / task["id"] / "reference.patch")
         work.append((task["id"], True, reference, real_next))
         work += [(task["id"], False, m, real_next) for m in mutants(reference, per_task, rng)]
@@ -567,9 +572,13 @@ def _controller_failure(out, task, arm, rep, error):
     return row
 
 
+RATE_LIMIT_COOLDOWN_S = 600
+
+
 def refused(out, cid):
-    """The provider refused the call before any work: a rate limit with no usage. An outage that hits both arms alike, not a
-    failed attempt: it costs nothing, does not count toward the invalid budget, and pauses the run (never retried)."""
+    """The provider refused the call: its receipt names a rate limit and reports no usage. It is still charged as any invalid cell
+    (its receipt cost, else the --stop-usd reserve), but it does not count toward --max-invalid and it pauses the run. A limit can
+    be per model, so it can hit one arm more than the other: the report counts refused cells per arm."""
     receipt = out / f"{cid}.runner.json"
     try:
         value = json.loads(receipt.read_text()) if receipt.is_file() else {}
@@ -582,7 +591,10 @@ def cost_of(out, cid, row):
     if harness_report._valid_money(row.get("cost_usd")):
         return row["cost_usd"]
     receipt = out / f"{cid}.runner.json"
-    value = json.loads(receipt.read_text()).get("cost_usd") if receipt.is_file() and receipt.stat().st_size else None
+    try:
+        value = json.loads(receipt.read_text()).get("cost_usd") if receipt.is_file() and receipt.stat().st_size else None
+    except (OSError, ValueError, AttributeError):  # a truncated receipt: unknown cost, charged its reserve
+        value = None
     return value if harness_report._valid_money(value) else None
 
 
@@ -657,9 +669,9 @@ def seal(config):
         raise ValueError("unsealed_files must be a list of strings")
     tools, skip = {}, set(listed)
     for index, part in enumerate(config.get("agent_command", [])):
-        if part in skip:
-            continue
         value = part.split("=", 1)[1] if part.startswith("-") and "=" in part else part  # --config=/abs/file names a file too
+        if part in skip or value in skip:
+            continue
         found = shutil.which(part) if index == 0 and "/" not in part else value if os.path.isabs(value) else None
         if found and Path(found).is_file():
             real = Path(found).resolve()
@@ -752,6 +764,11 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                 orphans.add(row["cell"])
     except (OSError, ValueError):
         return {"stop": "unreadable-dispatch-history", "calls": 0}
+    finished = [row for row in history if "finished_at" in row]
+    if finished and finished[-1].get("refused") is True:  # resuming inside the outage would only lose cells to it
+        age = (datetime.now(timezone.utc) - harness_report._instant(finished[-1]["finished_at"])).total_seconds()
+        if age < RATE_LIMIT_COOLDOWN_S:
+            return {"stop": "rate-limit-cooldown", "calls": 0, "retry_after_s": round(RATE_LIMIT_COOLDOWN_S - age)}
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     try:
@@ -793,7 +810,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         if changed:  # not a STOP: restoring what was sealed makes the run resumable again, except an unbound one
             return {"stop": "manifest-mismatch", "changed": changed, "details": details, "calls": 0}
     sealed_digest = _sha256(manifest)
-    spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
+    spent, invalid, stop, lock, refused_count = 0.0, 0, None, threading.Lock(), 0
 
     def charge(cost):
         nonlocal spent, stop
@@ -806,8 +823,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
 
     for name in done:
         row = json.loads((out / f"{name}.json").read_text())
-        if refused(out, name):
-            continue  # a refused call: no cost, no invalid count
+        rate_limited = row.get("failure_class") == "provider-rate-limit"  # the live decision, never the receipt alone
+        refused_count += rate_limited
         cost = cost_of(out, name, row)
         if cost is None and row.get("valid") is True:
             stop = "cost-unavailable"
@@ -815,7 +832,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
             charge(cost)
             if cost is not None and cost > stop_usd:
                 stop = stop or "cell-over-limit"
-        invalid += row.get("valid") is not True
+        invalid += row.get("valid") is not True and not rate_limited
     if invalid >= max_invalid:
         stop = stop or "invalid-budget"
     cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
@@ -827,6 +844,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         try:
             return cell, execute(config, task, arm, rep, out, timeout_s)
         except Exception as error:  # one cell's failure (a refused snapshot, a crash) is an invalid cell, never the whole run
+            print(f"007 lab: {replay_eval.cell_id(task, arm, rep)}: {type(error).__name__}: {error}", file=sys.stderr)
             return cell, _controller_failure(out, task, arm, rep, error)
     with ThreadPoolExecutor(jobs) as pool_:
         active, queue = set(), iter(todo)
@@ -855,17 +873,19 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
             for future in finished:
                 cell, row = future.result()
                 cid = cell_name(cell)
-                if row.get("valid") is not True and refused(out, cid):
-                    row = {**row, "failure_class": "provider-rate-limit"}
-                    (out / f"{cid}.json").write_text(json.dumps(row))
-                    with lock, ledger.open("a") as handle:
-                        handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": 0, "valid": False}) + "\n")
-                    stop = stop or "rate-limit"  # a planned pause: resume later, the refused cell is not retried
-                    continue
+                rate_limited = row.get("valid") is not True and refused(out, cid)
+                if rate_limited:
+                    row = {**row, "failure_class": "provider-rate-limit", "failure_class_observed": row.get("failure_class")}
+                    with tempfile.NamedTemporaryFile("w", dir=out, prefix=f".{cid}.", delete=False) as handle:
+                        handle.write(json.dumps(row))
+                    os.replace(handle.name, out / f"{cid}.json")
+                    refused_count += 1
+                    stop = "rate-limit" if stop in (None, "call-budget") else stop  # a pause outranks a planned call budget
                 cost = cost_of(out, cid, row)
                 with lock, ledger.open("a") as handle:
-                    handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": cost, "valid": row.get("valid")}) + "\n")
-                invalid += row.get("valid") is not True
+                    handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": cost, "valid": row.get("valid"),
+                                             **({"refused": True} if rate_limited else {})}) + "\n")
+                invalid += row.get("valid") is not True and not rate_limited
                 if cost is None and row.get("valid") is True:
                     stop = "cost-unavailable"
                 else:
@@ -876,7 +896,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                     stop = "invalid-budget"
     if stop and stop not in ("call-budget", "rate-limit"):  # planned pauses: a later run resumes them
         (out / "STOP.json").write_text(json.dumps({"stop": stop, "at": _now(), "spent": spent, "calls": calls}))
-    return {"stop": stop, "calls": calls, "spent": spent, "invalid": invalid, "cells": len(cells)}
+    return {"stop": stop, "calls": calls, "spent": spent, "invalid": invalid, "refused": refused_count, "cells": len(cells)}
 
 
 # ---- score and report

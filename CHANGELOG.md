@@ -20,10 +20,23 @@ A patch release for `007 lab`, from defects the Codex 5-point pilot found. Relea
   `controller-error:<type>`, never retried. Before, the exception ended the whole `007 lab run`. The invalid budget still stops a
   run where every cell fails.
 - A `--flag=/absolute/file` argument of the agent command is sealed like a bare absolute path. Before, it was silently unsealed.
-- A provider rate limit pauses `007 lab run` (stop `rate-limit`, no `STOP.json`; a later run resumes) instead of spending the
-  invalid budget. The refused cell (native `native-error-rate-limit` with no usage) costs nothing, does not count as invalid, is
-  labelled `provider-rate-limit` and is never retried. In the Codex 5-point pilot a rate limit refused every call for 7 minutes,
-  and 1.7.0 ended the paid study with `invalid-budget`.
+- A provider rate limit no longer spends the invalid budget. A cell whose call the provider refused (receipt
+  `native-error-rate-limit`, no usage reported) is labelled `provider-rate-limit` (the observed class is kept in
+  `failure_class_observed`), is still charged its receipt cost or the `--stop-usd` reserve, does not count toward `--max-invalid`,
+  is never retried, and pauses the run with stop `rate-limit` (no `STOP.json`). A resume within 10 minutes of the last refusal
+  stops with `rate-limit-cooldown`, so a driver that resumes in a loop does not lose cells to the outage. `run` returns the
+  `refused` count. Only refusals that report no usage are covered: cells already working when the limit starts can still fail
+  as invalid, and a limit can hit one arm more than the other. In the Codex 5-point pilot (evidence commit `17d309e`), a rate
+  limit refused every call for 7 minutes and 1.7.0 ended the paid study with `invalid-budget`.
+- Patches are produced and applied losslessly: references and next changes are decoded with `surrogateescape`, references are
+  written as bytes, and `git apply` runs without the operator's git config and with `--whitespace=nowarn`. A 1.8.0 `sensitivity.json`
+  or chain set over CRLF or non-UTF-8 files should be rebuilt.
+- `chain` skips cells with no candidate patch (controller errors, refused calls) and names them in `broken`.
+- `unsealed_files` can name the file of a `--flag=/file` argument.
+- A controller error prints the cell and the error to stderr. A truncated runner receipt reads as an unknown cost (charged its
+  reserve) instead of ending the run.
+- A run sealed by 1.8.0 does not resume under 1.8.1: the 007 scripts are sealed, so the upgrade reads as `manifest-mismatch`.
+  Finish a sealed run on the version that started it.
 
 ### Notes
 
