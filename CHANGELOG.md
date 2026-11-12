@@ -18,6 +18,8 @@ schemas, and the dashboard snapshot.
 - Amendment 3 (`evidence/codex-5pp-20261108/AMENDMENT-3.md`), pushed before the gate re-run's output and any pilot attempt, after an
   adversarial review of the viability rule: the confirmatory pre-registration and analysis at 5 points, a dry run on every pooled
   task with varied outcomes, a freeze that third parties can re-run with published per-cell tables, and the part-3 script.
+- Amendment 4 (`evidence/codex-5pp-20261108/AMENDMENT-4.md`), after traefik/yaegi failed the gate re-run's consistency check
+  and before any second re-run or pilot attempt: one quiet re-run, then an inconsistent repository leaves the pool.
 
 ## [1.7.0] - 2026-11-09
 
