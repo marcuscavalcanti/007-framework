@@ -844,6 +844,29 @@ class Budget(unittest.TestCase):
             accounting = lab.arm_accounting(json.loads(path.read_text()), out, lab.load_cells(out), {})
             self.assertEqual(accounting["arms"]["a"]["invalid"], {"controller-error:RuntimeError": 1})
 
+    def test_a_provider_rate_limit_pauses_the_run_instead_of_spending_the_invalid_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            good, calls = self.fake()[0], []
+
+            def limited(config, task, arm, rep, out_, timeout):
+                calls.append(task["id"])
+                if len(calls) <= 3:
+                    return good(config, task, arm, rep, out_, timeout)
+                cid = f"{task['id']}-r{rep:02d}-{arm}"  # refused before any work: no usage, no cost
+                (out_ / f"{cid}.runner.json").write_text(json.dumps({"problem": "native-error-rate-limit", "usage": None, "cost_usd": None}))
+                row = {"valid": False, "cost_usd": "unmeasured", "failure_class": "agent-exit"}
+                (out_ / f"{cid}.json").write_text(json.dumps(row))
+                return row
+            state = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=limited, max_invalid=1)
+            self.assertEqual((state["stop"], state["calls"], state["invalid"], state["spent"]), ("rate-limit", 4, 0, 3.0))
+            self.assertFalse((out / "STOP.json").exists())  # a planned pause, not a final stop
+            refused = [json.loads(p.read_text()) for p in out.glob("*-r01-*.json") if not p.name.endswith(".runner.json")]
+            self.assertEqual(sum(r.get("failure_class") == "provider-rate-limit" for r in refused), 1)
+            resumed = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=good, max_invalid=1)
+            self.assertEqual((resumed["stop"], resumed["calls"], resumed["invalid"]), (None, 4, 0))  # the refused cell is not retried
+
     def test_a_flag_that_names_an_absolute_file_is_sealed(self):
         with tempfile.TemporaryDirectory() as d:
             config = Path(d) / "agent.toml"

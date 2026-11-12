@@ -567,6 +567,17 @@ def _controller_failure(out, task, arm, rep, error):
     return row
 
 
+def refused(out, cid):
+    """The provider refused the call before any work: a rate limit with no usage. An outage that hits both arms alike, not a
+    failed attempt: it costs nothing, does not count toward the invalid budget, and pauses the run (never retried)."""
+    receipt = out / f"{cid}.runner.json"
+    try:
+        value = json.loads(receipt.read_text()) if receipt.is_file() else {}
+    except (OSError, ValueError):
+        return False
+    return value.get("problem") == "native-error-rate-limit" and not value.get("usage")
+
+
 def cost_of(out, cid, row):
     if harness_report._valid_money(row.get("cost_usd")):
         return row["cost_usd"]
@@ -795,6 +806,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
 
     for name in done:
         row = json.loads((out / f"{name}.json").read_text())
+        if refused(out, name):
+            continue  # a refused call: no cost, no invalid count
         cost = cost_of(out, name, row)
         if cost is None and row.get("valid") is True:
             stop = "cost-unavailable"
@@ -842,6 +855,13 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
             for future in finished:
                 cell, row = future.result()
                 cid = cell_name(cell)
+                if row.get("valid") is not True and refused(out, cid):
+                    row = {**row, "failure_class": "provider-rate-limit"}
+                    (out / f"{cid}.json").write_text(json.dumps(row))
+                    with lock, ledger.open("a") as handle:
+                        handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": 0, "valid": False}) + "\n")
+                    stop = stop or "rate-limit"  # a planned pause: resume later, the refused cell is not retried
+                    continue
                 cost = cost_of(out, cid, row)
                 with lock, ledger.open("a") as handle:
                     handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": cost, "valid": row.get("valid")}) + "\n")
@@ -854,7 +874,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                         stop = "cell-over-limit"
                 if invalid >= max_invalid:
                     stop = "invalid-budget"
-    if stop and stop != "call-budget":  # a call budget is a planned pause: the next stage resumes it
+    if stop and stop not in ("call-budget", "rate-limit"):  # planned pauses: a later run resumes them
         (out / "STOP.json").write_text(json.dumps({"stop": stop, "at": _now(), "spent": spent, "calls": calls}))
     return {"stop": stop, "calls": calls, "spent": spent, "invalid": invalid, "cells": len(cells)}
 

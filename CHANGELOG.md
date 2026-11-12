@@ -15,6 +15,10 @@ schemas, and the dashboard snapshot.
   `controller-error:<type>`, never retried. Before, the exception ended the whole `007 lab run`. The invalid budget still stops a
   run where every cell fails.
 - A `--flag=/absolute/file` argument of the agent command is sealed like a bare absolute path. Before, it was silently unsealed.
+- A provider rate limit pauses `007 lab run` (stop `rate-limit`, no `STOP.json`; a later run resumes) instead of spending the
+  invalid budget. The refused cell (native `native-error-rate-limit` with no usage) costs nothing, does not count as invalid, is
+  labelled `provider-rate-limit` and is never retried. In the Codex 5-point pilot a rate limit refused every call for 7 minutes,
+  and 1.7.0 ended the paid study with `invalid-budget`.
 
 ## [1.8.0] - 2026-11-12
 
