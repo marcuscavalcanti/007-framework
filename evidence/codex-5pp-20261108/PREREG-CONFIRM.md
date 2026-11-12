@@ -68,7 +68,7 @@ It applies only if the pilot's primary freeze decides GO.
 ## Part 3 and publication
 - **Part 3:** `part3.py`, run on the confirmatory results ([DECISIONS.md](DECISIONS.md) part 3).
 - **Published with the result:**
-  - the per-cell table and the hashes of the raw cells (`confirm-published/`);
-  - both look outputs;
+  - the per-cell table and the hashes of the raw cells (`confirm-results-published/`);
+  - both look outputs (`confirm-results-look1.json`, `confirm-results-look2.json`); a re-graded directory gets its own names;
   - `part3.json`.
 - **Early stop:** an early stop of either block ends the run. The answer is then NO-STOPPED (DECISIONS part 5).

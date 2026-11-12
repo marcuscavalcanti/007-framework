@@ -19,7 +19,7 @@ block() {  # $1 = replicates so far, $2 = look
   python3 -I -B -W ignore analyze_confirm.py "$2" > "confirm-look$2.out" 2>> confirm.err || exit 1
 }
 block 4 1
-D=$(python3 -I -c 'import json; print(json.load(open("confirm-look1.json"))["decision"])')
+D=$(python3 -I -c 'import json; print(json.load(open("confirm-results-look1.json"))["decision"])')
 [ "$D" = CONTINUE ] || { echo "look 1: $D" >> confirm.log; exit 0; }
 block 8 2
 python3 -I -B -W ignore part3.py confirm-results > part3.out 2>> confirm.err

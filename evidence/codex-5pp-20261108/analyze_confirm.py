@@ -72,10 +72,10 @@ def main():
            "robustness_60": robustness, "secondary": {"tau2": A.tau2(rows),
                                                       "invalid_per_arm": {a: sum(r["arm"] == a and r["valid"] is not True for r in every
                                                                                   if r["replicate"] <= 4 * LOOK) for a in (A.LOW, A.REF)}}}
-    F.RESULTS, F.OUT = RESULTS, HERE / "confirm-published"  # cells.csv and cells.sha256, no local paths
+    F.RESULTS, F.OUT = RESULTS, HERE / f"{RESULTS.name}-published"  # cells.csv and cells.sha256, no local paths; one set per results dir
     F.OUT.mkdir(exist_ok=True)
     F.publish_cells(every, repo_of)
-    (HERE / f"confirm-look{LOOK}.json").write_text(json.dumps(out, indent=1, default=str))
+    (HERE / f"{RESULTS.name}-look{LOOK}.json").write_text(json.dumps(out, indent=1, default=str))
     print(json.dumps(out, indent=1, default=str))
 
 
