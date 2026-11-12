@@ -32,7 +32,13 @@ Prepared on 2026-11-12 from published 1.8.0.
     resume re-derived the exemption from the receipt. Both are fixed with tests: the cell is charged as any invalid cell, and only
     the live label exempts it. The should-fix items are fixed too: cooldown, refused counts, `chain` skip, lossless patches,
     `unsealed_files` by file, stderr diagnosis, truncated receipts.
-  - The qualifying review of the final head and CI are recorded in the GitHub release notes.
+  - on `945a2ff`: identity `verified`, **SHIP**, final round restricted to the change. Should-fix items stay open (refused counts
+    per arm, untested branches, traceback detail), so "the should-fix items are fixed too" above overstates: several are partly
+    fixed.
+  - **Possible regression N2, checked as the review asked:** with a global `core.autocrlf=true`, `git apply` under a pinned config
+    failed where 1.8.0 applied (`test_sensitivity_catches_the_missing_cap_only_when_b_lands` failed on `945a2ff`, passed on
+    v1.8.0). The reviewer's one-line fix was applied before tagging: `git apply` keeps the operator's config and only adds
+    `--whitespace=nowarn`. Under the same config all 16 end-to-end lab tests then passed, and so did the full suite (980).
 
 - **Upgrade note:** a run sealed by 1.8.0 cannot be resumed by 1.8.1 (the 007 scripts are sealed). The tag's README still
   installs v1.8.0; a follow-up documentation change updates it.

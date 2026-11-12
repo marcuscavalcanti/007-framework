@@ -29,7 +29,7 @@ A patch release for `007 lab`, from defects the Codex 5-point pilot found. Relea
   as invalid, and a limit can hit one arm more than the other. In the Codex 5-point pilot (evidence commit `17d309e`), a rate
   limit refused every call for 7 minutes and 1.7.0 ended the paid study with `invalid-budget`.
 - Patches are produced and applied losslessly: references and next changes are decoded with `surrogateescape`, references are
-  written as bytes, and `git apply` runs without the operator's git config and with `--whitespace=nowarn`. A 1.8.0 `sensitivity.json`
+  written as bytes, and `git apply` runs with `--whitespace=nowarn`, so an `apply.whitespace=fix` setting no longer strips CR. A 1.8.0 `sensitivity.json`
   or chain set over CRLF or non-UTF-8 files should be rebuilt.
 - `chain` skips cells with no candidate patch (controller errors, refused calls) and names them in `broken`.
 - `unsealed_files` can name the file of a `--flag=/file` argument.

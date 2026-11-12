@@ -393,8 +393,9 @@ def apply_patch(tree, patch_text):
         return True
     if not (tree / ".git").exists():
         subprocess.run(["git", "init", "-q"], cwd=tree, check=True, capture_output=True)
-    env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}  # no operator config (apply.whitespace=fix strips CR)
-    return subprocess.run(["git", "apply", "--recount", "--binary", "--whitespace=nowarn", "-"], cwd=tree, env=env,
+    # --whitespace=nowarn overrides apply.whitespace=fix (which strips CR); the rest of the operator's config stays, since the
+    # snapshot was checked out under it too (core.autocrlf)
+    return subprocess.run(["git", "apply", "--recount", "--binary", "--whitespace=nowarn", "-"], cwd=tree,
                           input=patch_text.encode(errors="surrogateescape"), capture_output=True).returncode == 0
 
 
