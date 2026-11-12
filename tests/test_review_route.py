@@ -22,7 +22,7 @@ class ReviewRouteTests(unittest.TestCase):
             self.fail("review route is missing")
 
     def test_identity_level_never_takes_served_identity_from_the_request(self):
-        level, codex, claude = self.module().identity_level, {"cli": "codex", "model": "gpt-6-astra"}, {"cli": "claude", "model": "claude-opus-5-5"}
+        level, codex, claude = self.module().identity_level, {"cli": "codex", "model": "gpt-6-astra"}, {"cli": "claude", "model": "claude-fable-5-2"}
         done = [{"type": "thread.started"}, {"type": "turn.started"}, {"type": "item.completed", "item": {"type": "error", "message": "Code Mode is unavailable"}},
                 {"type": "turn.completed", "usage": {}}]
         self.assertEqual(level(codex, done), "pinned-no-reroute")  # a silent match is pinned, never verified
@@ -30,9 +30,9 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertEqual(level(codex, done[:2] + [rerouted] + done[2:]), "failed")
         self.assertEqual(level(codex, done[:2]), "failed")  # incomplete stream
         self.assertEqual(level(codex, done + [{"type": "turn.failed"}]), "failed")
-        result = {"type": "result", "subtype": "success", "is_error": False, "modelUsage": {"claude-opus-5-5": {}}}
+        result = {"type": "result", "subtype": "success", "is_error": False, "modelUsage": {"claude-fable-5-2": {}}}
         self.assertEqual(level(claude, [result]), "verified")
-        self.assertEqual(level(claude, [{**result, "modelUsage": {"claude-opus-5-5": {}, "claude-haiku-5-5": {}}}]), "failed")
+        self.assertEqual(level(claude, [{**result, "modelUsage": {"claude-fable-5-2": {}, "claude-haiku-5-5": {}}}]), "failed")
         self.assertEqual(level(claude, [{**result, "modelUsage": {}}]), "failed")
         self.assertEqual(level({"cli": "kimi"}, [result]), "failed")
 
@@ -44,27 +44,27 @@ class ReviewRouteTests(unittest.TestCase):
                        done + [{"type": "error"}], [{"type": "turn.completed"}]):
             with self.subTest(stream=stream):
                 self.assertEqual(level(codex, stream), "failed")
-        claude = {"cli": "claude", "model": "claude-opus-5-5"}
+        claude = {"cli": "claude", "model": "claude-fable-5-2"}
         result = {"type": "result", "subtype": "success", "is_error": False,
-                  "modelUsage": {"claude-opus-5-5": {}}}
+                  "modelUsage": {"claude-fable-5-2": {}}}
         for stream in ([result, {"type": "error"}], [result, result],
                        [result, {**result, "modelUsage": {"other": {}}}],
                        [{"type": "system", "model": "other"}, result],
-                       [{"type": "system", "model": "claude-opus-5-5"}, {**result, "modelUsage": {}}]):
+                       [{"type": "system", "model": "claude-fable-5-2"}, {**result, "modelUsage": {}}]):
             with self.subTest(stream=stream):
                 self.assertEqual(level(claude, stream), "failed")
 
     def test_identity_rejects_wrapped_stream_models_and_errors(self):
         level = self.module().identity_level
-        route = {"cli": "claude", "model": "claude-opus-5-5"}
+        route = {"cli": "claude", "model": "claude-fable-5-2"}
         result = {"type": "result", "subtype": "success", "is_error": False,
-                  "modelUsage": {"claude-opus-5-5": {}}}
+                  "modelUsage": {"claude-fable-5-2": {}}}
         for event in ({"type": "message_start", "message": {"model": "other"}},
                       {"type": "error", "error": {"type": "overloaded_error"}}):
             with self.subTest(event=event):
                 self.assertEqual(level(route, [{"type": "stream_event", "event": event}, result]), "failed")
         self.assertEqual(level(route, [{"type": "stream_event", "event":
-            {"type": "message_start", "message": {"model": "claude-opus-5-5"}}}, result]), "verified")
+            {"type": "message_start", "message": {"model": "claude-fable-5-2"}}}, result]), "verified")
 
     def test_host_session_from_markers_and_ambiguity_is_refused(self):
         host = self.module().host_session
@@ -75,7 +75,7 @@ class ReviewRouteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^host-ambiguous$"):
             host({"CLAUDECODE": "1", "CODEX_THREAD_ID": "thread"})
 
-    def test_reviewer_is_the_other_family_and_unavailability_fails_closed(self):
+    def test_reviewer_follows_the_implementer_and_unavailability_fails_closed(self):
         select = self.module().select_reviewer
         cases = [
             # 2026-11-12 (Marcus): the reviewer follows the implementer's family, by decision
@@ -119,15 +119,15 @@ class ReviewRouteTests(unittest.TestCase):
         self.assertIn(["-c", 'web_search="disabled"'], [argv[i:i + 2] for i in range(len(argv) - 1)])
         self.assertIn("--ignore-rules", argv)
         self.assertIsNone(codex["budget_control"])
-        # the Opus transport stays for recorded routes; no host selects it since 2026-11-12
-        claude = {"provider": "anthropic", "cli": "claude", "model": "claude-opus-5-5", "effort": "xhigh", "budget_control": "cli-max-budget-usd",
-                  "executable": "/bin/claude"}
+        claude = module.select_reviewer("claude", which=which_from(ALL), env={})
         argv = module.review_argv(claude, max_budget_usd=6)
         validate_command("claude", argv)
-        pairs = [argv[i:i + 2] for i in range(len(argv) - 1)]
-        for pair in (["--model", "claude-opus-5-5"], ["--effort", "xhigh"], ["--permission-mode", "plan"], ["--max-budget-usd", "6"]):
-            self.assertIn(pair, pairs)
         self.assertIn("--tools=", argv)
+        off_table = {**claude, "model": "claude-opus-5-5"}  # a hand-built route outside the table gets no argv and no level
+        with self.assertRaisesRegex(ValueError, "^review-route-unknown$"):
+            module.review_argv(off_table, max_budget_usd=6)
+        result = {"type": "result", "subtype": "success", "is_error": False, "modelUsage": {"claude-opus-5-5": {}}}
+        self.assertEqual(module.identity_level(off_table, [result]), "failed")
         self.assertEqual(claude["budget_control"], "cli-max-budget-usd")
         for budget in (None, 0, -1, True, "6"):
             with self.subTest(budget=budget), self.assertRaisesRegex(ValueError, "^review-budget-required$"):

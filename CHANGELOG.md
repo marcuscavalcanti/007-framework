@@ -13,14 +13,19 @@ per arm. Release qualification is recorded in [the release record](evidence/v1.8
 
 ### Added
 
-- `007 lab run` seals `run-manifest.json` before its first dispatch: the set, the agent command's program and files (through
-  symlinks), the 007 scripts and the Python version. A resume that finds any of them changed stops with `manifest-mismatch` and
-  dispatches nothing; limits and the `compare` block stay adjustable. Before this, a resumed run re-read the set and could mix
-  treatments under valid receipts.
-- `007 lab report` and `chain` refuse results sealed with a different set. The report gains `run_manifest`
-  (`sealed`, `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
-- `007 lab report` gains `arm_accounting`: per arm, planned cells, never dispatched, dispatched without a result, invalid by
-  failure class, valid and accepted, also in plain words in `report.md`. Invalid and missing cells were named only as one list.
+- `007 lab run` seals `run-manifest.json` before its first dispatch: the set (with its arm order), the agent command's program
+  and absolute files (through symlinks), the 007 scripts and the Python version. Every dispatch records the manifest's digest. A
+  start or resume that finds any of them changed stops with `manifest-mismatch` and dispatches nothing; an unreadable manifest, or
+  one missing after a dispatch named it, stops with `manifest-unreadable` or `manifest-missing`. Limits can change at a planned
+  pause. Before this, a resumed run re-read the set and could mix treatments under valid receipts.
+- `007 lab report` and `chain` refuse results sealed with a different set or under another manifest; `report --next-results`
+  requires stage 2 to be the chain of these results at the reference arm, and `chain` refuses a `compare` moved since stage 1
+  was sealed or a different chain set already in its directory. The printed verdict carries `compare_changed_after_seal`. The report gains `run_manifest` (`sealed`,
+  `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
+- `007 lab report` gains `arm_accounting`: per arm, planned cells (every task at the most replicates reached), never dispatched,
+  attempted without a result (a dispatch or a receipt), invalid by failure class, valid and accepted, and whether the dispatch
+  ledger was complete; also in plain words in `report.md`. Invalid cells and orphan receipts were named only as two flat lists.
+  Reports written by 1.7.0 still render.
 
 ### Changed
 
@@ -30,6 +35,7 @@ per arm. Release qualification is recorded in [the release record](evidence/v1.8
 
 ### Fixed
 
+- `docs/lab.md`: the miner's cap is 1,999 hidden tests (the reader's 2,000 outcomes include `__module__`), not 2,000.
 - Release preparation keeps an annotated tag as such, and a failed tag-triggered preparation can be dispatched again on
   `main` with the existing tag and its exact tag object (`release.yml`, `RELEASING.md`).
 

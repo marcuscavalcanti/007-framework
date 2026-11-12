@@ -1,7 +1,9 @@
-"""Adversarial reviewer route by host session (AGENTS.md revision 2026-10-21b; master plan 3.3).
+"""Adversarial reviewer route by host session (AGENTS.md revision 2026-11-12; master plan 3.3).
 
-Selection only: it never launches a review and never authorizes a call. The reviewer always comes from a different model family
-than the host. Fail-closed: a missing primary CLI or an unrecognized host yields no route (failed validation, stop); no fallback.
+Selection only: it never launches a review and never authorizes a call. The reviewer follows the implementer, taken to be the
+host session, and shares its model family by the maintainer's decision: Claude -> Claude Fable 5.2, Codex -> OpenAI gpt-6-astra,
+both at xhigh. Only routes in this table get an argv or an identity level. Fail-closed: a missing primary CLI or an unrecognized
+host yields no route (failed validation, stop); no fallback.
 """
 import json
 import os
@@ -13,7 +15,6 @@ ROUTES = {  # host session -> reviewer
     "codex": {"provider": "openai", "cli": "codex", "model": "gpt-6-astra", "effort": "xhigh", "budget_control": None},
 }
 HOST_FAMILY = {"claude": "anthropic", "codex": "openai"}
-SAME_FAMILY_BY_DECISION = {"claude", "codex"}  # hosts whose same-family reviewer the maintainer chose explicitly (2026-11-12)
 # r33: the Codex reviewer gets only the context on stdin — a read-only sandbox still reads the whole disk, so no shell, web or extensions
 # (the same features Marcus's other reviewer sessions disable on this binary).
 CODEX_REVIEW_DISABLED = ("shell_tool", "unified_exec", "apps", "plugins", "hooks", "memories", "multi_agent", "browser_use",
@@ -37,13 +38,19 @@ def select_reviewer(host=None, *, which=shutil.which, env=None):
     route = ROUTES.get(host)
     if route is None or not which(route["cli"]):
         return None  # fail-closed: the caller records a failed validation and stops; no other model or effort
-    if route["provider"] == HOST_FAMILY[host] and host not in SAME_FAMILY_BY_DECISION:
-        raise ValueError("reviewer-same-family")
+    if route["provider"] != HOST_FAMILY[host]:  # 2026-11-12: the reviewer follows the implementer's family
+        raise ValueError("reviewer-other-family")
     return {**route, "host": host, "reason": "primary", "executable": which(route["cli"])}
+
+
+def _routed(route, *keys):
+    return any(all(route.get(k) == r[k] for k in keys) for r in ROUTES.values())
 
 
 def review_argv(route, *, max_budget_usd=None):
     """Fresh, read-only, non-interactive argv; the prompt goes on stdin. Context binding and authorization stay with the caller."""
+    if not _routed(route, "cli", "model", "effort"):
+        raise ValueError("review-route-unknown")
     exe, model, effort = route["executable"], route["model"], route["effort"]
     if route["cli"] == "codex":  # ponytail: no USD cap exists in this CLI; the grant must accept that or refuse the call
         return [exe, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
@@ -64,7 +71,7 @@ def identity_level(route, rows):
     """AGENTS.md reviewer identity level from a review's parsed JSON stream rows: "verified", "pinned-no-reroute" or "failed".
     The served identity is never filled from the request; "pinned-no-reroute" qualifies a release only as such."""
     import cli_telemetry  # the one place that knows the Codex reroute item
-    if not rows or any(not isinstance(row, dict) for row in rows):
+    if not _routed(route, "cli", "model") or not rows or any(not isinstance(row, dict) for row in rows):
         return "failed"
     kinds = [row.get("type") for row in rows]
     if any(kind in ("error", "turn.failed") for kind in kinds):

@@ -68,7 +68,10 @@ Revision 2026-11-12 (Marcus): the reviewer follows the implementer. When Codex
 implements, OpenAI `gpt-6-astra` at `xhigh` reviews; when Claude implements,
 Claude Fable 5.2 at `xhigh` reviews. Both share the implementer's model family,
 by the maintainer's decision, and release notes state it. This replaces the
-cross-family rule of revision 2026-10-21b. `scripts/review_route.py` is the
+cross-family rule of revision 2026-10-21b. The host session is taken to be the
+implementer; when another family implemented the change, or several did, the
+maintainer declares the host. The same day an intermediate revision routed a
+Codex host to `claude-opus-5-5`; no review ran under it. `scripts/review_route.py` is the
 single implementation of this table; it selects, it never launches. There is no
 fallback model: the route fails closed.
 
@@ -125,8 +128,9 @@ they never fill served identity from the request. They are not retroactive: the
 This policy governs the independent reviewer only. It does not change causal
 experiment arms, coding executors, historical receipts, or frozen evidence.
 Historical review evidence is immutable and must retain the model and effort
-that actually produced it (the 1.6.2 and 1.7.0 releases were reviewed by OpenAI
-`gpt-6-astra` at `xhigh` under revision 2026-10-21b, whose Codex host was reviewed by `claude-opus-5-5`; previous policies: Claude CLI `claude-fable-5-1`, effort
+that actually produced it (the 1.6.2 and 1.7.0 release reviews were routed to OpenAI
+`gpt-6-astra` at `xhigh` as requested, at the identity level each recorded, under
+revision 2026-10-21b, which routed a Codex host to `claude-opus-5-5`; previous policies: Claude CLI `claude-fable-5-1`, effort
 `high`, no fallback; revision 2026-10-21 with a Kimi K3 fallback, never used).
 
 (Yes, these rules also apply to agents working on this repository. Especially to them.)
