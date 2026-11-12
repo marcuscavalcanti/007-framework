@@ -633,11 +633,13 @@ def seal(config):
     return {"schema": "007-framework/lab-run-manifest/v1", "set_sha256": set_sha256(config), "executables": tools,
             "framework_sha256": hashlib.sha256("".join(_sha256(p) for p in sorted(HERE.glob("*.py"))).encode()).hexdigest(),
             "python": sys.version.split()[0], "arms": config.get("arms"), "parent_manifest_sha256": config.get("parent_manifest_sha256"),
-            "program_sealed": bool(config.get("agent_command")) and config["agent_command"][0] in tools, "sealed_parts": sorted(tools)}
+            "program_sealed": bool(config.get("agent_command")) and config["agent_command"][0] in tools, "sealed_parts": sorted(tools),
+            "unsealed_files": sorted(skip),
+            "agent_command_sha256": hashlib.sha256(json.dumps(config.get("agent_command"), sort_keys=True).encode()).hexdigest()}
 
 
 def sealed_state(config, results):
-    """state: sealed, sealed-late (a run older than the manifest) or absent; compare_changed: the comparison or margin differs from
+    """state: sealed, sealed-late (a run older than the manifest), unbound (see _binding) or absent; compare_changed: the comparison or margin differs from
     the one in the set when the run was sealed; sha256: the manifest's digest. Results of a different set, a manifest the dispatches
     do not name, or a missing one they do name, are refused, not read."""
     recorded, history = _read_manifest(results / RUN_MANIFEST), _ledger(results)
@@ -654,17 +656,23 @@ def sealed_state(config, results):
         raise ValueError(f"run manifest changed after dispatch: {results}")
     if recorded.get("set_sha256") != set_sha256(config):
         raise ValueError(f"results were run with a different set: {results}")
-    unbound = _unbound(history, digest)
-    bound_cells = {row["cell"] for row in history if row.get("manifest_sha256") == digest}
-    unbound_cells = len(set(replay_eval.read_cell_artifacts(results)[0]) - bound_cells)  # results no sealed dispatch produced
-    late = recorded.get("cells_before_seal", 0)
-    if unbound > recorded.get("dispatches_before_seal", 0) or unbound_cells > late:
-        state = "unbound"  # attempts after the seal that do not name it: another controller, or cells copied in
-    else:
-        state = "sealed-late" if unbound or late else "sealed"
+    state, unbound, unbound_cells = _binding(results, recorded, digest, history)
     return {"state": state, "compare_changed": recorded.get("compare") != config.get("compare"), "sha256": digest,
             "program_sealed": recorded.get("program_sealed"), "sealed_parts": recorded.get("sealed_parts"),
-            "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
+            "unsealed_files": recorded.get("unsealed_files"), "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
+
+
+def _binding(results, recorded, digest, history):
+    """(state, unbound dispatches, unbound results) of a sealed directory. unbound: dispatches after the seal that do not name it
+    (another controller), or results no sealed dispatch produced (cells copied in), beyond what existed when it was sealed. Restoring
+    inputs cannot rebind them: an unbound run stays unbound."""
+    unbound = _unbound(history, digest)
+    bound_cells = {row["cell"] for row in history if row.get("manifest_sha256") == digest}
+    unbound_cells = len(set(replay_eval.read_cell_artifacts(results)[0]) - bound_cells)
+    late = recorded.get("cells_before_seal", 0)
+    if unbound > recorded.get("dispatches_before_seal", 0) or unbound_cells > late:
+        return "unbound", unbound, unbound_cells
+    return ("sealed-late" if unbound or late else "sealed"), unbound, unbound_cells
 
 
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
@@ -734,16 +742,21 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         os.replace(handle.name, manifest)
     else:
         # keys a later 007 adds to the seal are compared only once a manifest records them
-        changed = sorted(key for key in sealed if key not in ("executables", "sealed_parts", "program_sealed") and key in recorded
+        changed = sorted(key for key in sealed if key not in ("executables", "sealed_parts", "program_sealed", "unsealed_files") and key in recorded
                          and recorded[key] != sealed[key])
         old, new = recorded.get("executables") or {}, sealed["executables"]
-        changed += sorted(f"executables:{part}" for part in set(old) | set(new) if old.get(part) != new.get(part))
+        parts = sorted(part for part in set(old) | set(new) if old.get(part) != new.get(part))
+        changed += [f"executables:{part}" for part in parts]
+        details = {part: {"sealed": old.get(part), "found": new.get(part)} for part in parts}
         if bound and bound != {_sha256(manifest)}:
             changed.append("manifest")
-        if _unbound(history, _sha256(manifest)) > recorded.get("dispatches_before_seal", 0):
+        binding = _binding(out, recorded, _sha256(manifest), history)
+        if binding[1] > recorded.get("dispatches_before_seal", 0):
             changed.append("unbound-dispatches")  # a controller that does not seal dispatched after the seal
-        if changed:  # not a STOP: restoring what was sealed makes the run resumable again
-            return {"stop": "manifest-mismatch", "changed": changed, "calls": 0}
+        if binding[2] > recorded.get("cells_before_seal", 0):
+            changed.append("unbound-cells")  # results no sealed dispatch produced: copied in, or a lost ledger
+        if changed:  # not a STOP: restoring what was sealed makes the run resumable again, except an unbound one
+            return {"stop": "manifest-mismatch", "changed": changed, "details": details, "calls": 0}
     sealed_digest = _sha256(manifest)
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
 
@@ -1112,7 +1125,7 @@ def _decode_cell(cell, task_ids, arms):
     found = set()
     for arm in arms:
         if cell.endswith("-" + arm):
-            match = re.fullmatch(r"(.+)-r([0-9]{2,6})", cell[:-len(arm) - 1])  # a replicate past 999999 is unread, not planned
+            match = re.fullmatch(r"(.+)-r([0-9]{2,3})", cell[:-len(arm) - 1])  # a replicate past 999 is unread, not planned
             if match and match[1] in task_ids:
                 found.add((match[1], arm, int(match[2])))
     return found.pop() if len(found) == 1 else None
@@ -1177,7 +1190,13 @@ def report(config_path, results, next_results):
             ledger, digest = _ledger(next_results), _sha256(next_results / RUN_MANIFEST)
             if ledger is None or (_bound_digests(ledger) and _bound_digests(ledger) != {digest}):
                 raise ValueError(f"next results do not match their own seal: {next_results}")
-            stage2 = {"sha256": digest, "unbound_dispatches": _unbound(ledger, digest)}
+            parent = _read_manifest(results / RUN_MANIFEST) or {}
+            if "agent_command_sha256" in upstream and upstream["agent_command_sha256"] != parent.get("agent_command_sha256"):
+                raise ValueError(f"next results ran another agent command than these results: {next_results}")
+            state, unbound, unbound_cells = _binding(next_results, upstream, digest, ledger)
+            if state == "unbound":
+                raise ValueError(f"next results are unbound from their own seal (another controller, or cells copied in): {next_results}")
+            stage2 = {"state": state, "sha256": digest, "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
     following = [r for r in load_cells(next_results) if r["valid"] is True] if next_results else []
     next_rows = {r["task"][:-len("-next")]: r for r in following}
     durable = {r["cell"]: bool(r["accepted"] and r["cell"] in next_rows and next_rows[r["cell"]]["accepted"]) for r in rows}
@@ -1214,6 +1233,7 @@ def report(config_path, results, next_results):
     critical = proven_critical(rows, task_dir, low, ref, config["seed"], margin)
     tier["margin"] = margin
     tier["compare_changed_after_seal"] = manifest["compare_changed"]
+    tier["run_binding"] = manifest["state"]
     tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, margin, critical=math.inf if critical is None else critical)
     proof = {"critical": critical, "statistic": studentized(diffs, margin) if len(diffs) > 1 else None,
              "t975": t975(len(diffs) - 1) if len(diffs) > 1 else None, "t_false_proven": false_proven(rows, task_dir, low, ref, config["seed"], margin)}
@@ -1253,6 +1273,8 @@ def summary(result, low, ref, attempts):
                "absent": "no run manifest: nothing binds the attempts to one set"}[sealed["state"]] if sealed else None
     if binding and sealed.get("sealed_parts") is not None:
         binding += f"; sealed files: {', '.join(sealed['sealed_parts']) or 'none'}"
+    if binding and sealed.get("unsealed_files"):
+        binding += f"; left out by the set: {', '.join(sealed['unsealed_files'])}"
     if binding and sealed.get("program_sealed") is False:
         binding += "; the agent command's program itself was not sealed (a relative or unresolved path)"
     if binding and sealed["compare_changed"]:
@@ -1269,8 +1291,9 @@ def summary(result, low, ref, attempts):
           f"{sum(a['invalid'].values())} invalid" + (f" ({', '.join(f'{k} {v}' for k, v in a['invalid'].items())})" if a['invalid'] else "")
           + f", {a['valid']} valid, {a['accepted']} accepted." for arm, a in (accounting or {}).get("arms", {}).items()],
         *([f"- **Dispatch ledger:** {accounting['history']}; the counts above may be incomplete."] if accounting and accounting["history"] != "complete" else []),
-        *([f"- **Stage 2:** {result['next_run_manifest']['stage1_cells_chained']} of {result['next_run_manifest']['stage1_cells']} valid stage-1 "
-           "attempts have a stage-2 attempt; the others count as not durable."] if result.get("next_run_manifest") else []),
+        *([f"- **Stage 2:** {result['next_run_manifest']['state']}; {result['next_run_manifest']['stage1_cells_chained']} of "
+           f"{result['next_run_manifest']['stage1_cells']} valid stage-1 attempts have a stage-2 attempt; the others count as not durable."]
+          if result.get("next_run_manifest") else []),
         "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits, models or specification forms other than these.",
         f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
         "",

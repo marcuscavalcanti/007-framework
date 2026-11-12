@@ -19,10 +19,12 @@ per arm. Release qualification is recorded in [the release record](evidence/v1.8
   one missing after a dispatch named it, stops with `manifest-unreadable` or `manifest-missing`; dispatches after the seal that
   do not name it stop with `manifest-mismatch` (`unbound-dispatches`). Files the attempts rewrite go in the set's
   `unsealed_files`. Limits can change at a planned pause. Before this, a resumed run re-read the set and could mix treatments
-  under valid receipts. `run`, `report` and `chain` now refuse some inputs 1.7.0 accepted, as listed here.
+  under valid receipts. Results no sealed dispatch produced stop with `unbound-cells`, and an unreadable named file with
+  `executable-unreadable`. The binding state is one of `sealed`, `sealed-late`, `unbound` or `absent`, and the printed verdict
+  carries it as `run_binding`. `run`, `report` and `chain` now refuse some inputs 1.7.0 accepted, as listed here.
 - `007 lab report` and `chain` refuse results sealed with a different set or under another manifest; `report --next-results`
-  requires stage 2 to be chained from this sealed run at the reference arm and bound to its own seal, and publishes
-  `next_run_manifest`; `chain` refuses a `compare` moved since stage 1 was sealed or a different chain set already in its
+  requires stage 2 to be chained from this sealed run at the reference arm, with the same agent command, and bound to its
+  own seal under the same rules, and publishes `next_run_manifest`; `chain` refuses a `compare` moved since stage 1 was sealed or a different chain set already in its
   directory. The printed verdict carries `compare_changed_after_seal`. The report gains `run_manifest` (`sealed`,
   `sealed-late` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
 - `007 lab report` gains `arm_accounting`: per arm, planned cells (every task at the most replicates reached), never dispatched,

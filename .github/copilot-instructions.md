@@ -94,7 +94,8 @@ fallback model: the route fails closed.
   per-repository authorization.
 
 Reviews remain bound to the exact sanitized context path and SHA-256 authorized
-by the user. If there is no route, record a failed validation and stop; do not
+by the user. With the Claude route the CLI also adds its own harness prompt (plan mode,
+tools disabled), so the reviewer's input is a superset of that context; the record says so. If there is no route, record a failed validation and stop; do not
 fall back to a different model or effort.
 
 Reviewer identity levels (revision 2026-11-08, Marcus).

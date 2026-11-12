@@ -297,7 +297,18 @@ class LabEndToEnd(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "not chained from these results"):
                     lab.report(path, results, self.root / "next")
         manifest.write_text(sealed)
-        self.assertEqual(lab.report(path, results, self.root / "next")["next_run_manifest"]["stage1_cells_chained"], 2)
+        report = lab.report(path, results, self.root / "next")
+        self.assertEqual((report["next_run_manifest"]["state"], report["next_run_manifest"]["stage1_cells_chained"]), ("sealed", 2))
+        self.assertIn("- **Stage 2:** sealed; 2 of 2", (results / "report.md").read_text())
+        self.assertEqual(report["verdict"]["run_binding"], "sealed")
+        ledger = (self.root / "next" / "dispatch.jsonl").read_text()
+        for name, row, message in (("another digest", {"manifest_sha256": "0" * 64}, "do not match their own seal"),
+                                   ("no digest", {}, "unbound from their own seal")):
+            with self.subTest(stage2_ledger=name):  # stage 2 holds to the same seal rules as stage 1
+                (self.root / "next" / "dispatch.jsonl").write_text(ledger + json.dumps({"cell": "X-r01-next", "dispatched_at": lab._now(), **row}) + "\n")
+                with self.assertRaisesRegex(ValueError, message):
+                    lab.report(path, results, self.root / "next")
+        (self.root / "next" / "dispatch.jsonl").write_text(ledger)
         set_ = json.loads(path.read_text())
         path.write_text(json.dumps({**set_, "seed": set_["seed"] + 1}))  # a changed set, through report and chain themselves
         with self.assertRaisesRegex(ValueError, "different set"):
@@ -313,7 +324,8 @@ class LabEndToEnd(unittest.TestCase):
         (stage2 / "replay-set.json").write_text(json.dumps({**existing, "tasks": []}))  # a set a stage 2 may already be sealed on
         with self.assertRaisesRegex(ValueError, "different chain set already exists"):
             lab.chain(path, results, stage2)
-        for state, phrase in (("absent", "nothing binds the attempts"), ("sealed-late", "sealed only after some attempts")):
+        for state, phrase in (("absent", "nothing binds the attempts"), ("sealed-late", "sealed only after some attempts"),
+                              ("unbound", "the seal binds none of them")):
             text = lab.summary({**result, "run_manifest": {"state": state, "compare_changed": None}}, "medium", "high", 2)
             self.assertIn(phrase, text)
         legacy = {k: v for k, v in result.items() if k not in ("run_manifest", "arm_accounting")}  # a v6 report written by 1.7.0
@@ -727,8 +739,44 @@ class Budget(unittest.TestCase):
             self.assertEqual((lab.sealed_state(config, out)["state"], lab.sealed_state(config, out)["unbound_dispatches"]), ("unbound", 1))
             execute = mock.Mock(side_effect=self.fake()[0])
             state = lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=99, stop_usd=1, execute=execute)
-            self.assertEqual((state["stop"], state["changed"]), ("manifest-mismatch", ["unbound-dispatches"]))
+            self.assertEqual((state["stop"], state["changed"]), ("manifest-mismatch", ["unbound-dispatches", "unbound-cells"]))
             execute.assert_not_called()
+
+    def test_results_no_sealed_dispatch_produced_unbind_the_run_and_a_sealed_ledger_must_be_readable(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, out = self.config(root), root / "out"
+            config = json.loads(path.read_text())
+            lab.run(path, out, replicates=1, jobs=1, max_calls=1, max_usd=99, stop_usd=1, execute=self.fake()[0])
+            done = {json.loads(line)["cell"] for line in (out / "dispatch.jsonl").read_text().splitlines()}
+            cell = next(c for c in (f"T{i}-r01-{a}" for i in range(4) for a in "ab") if c not in done)
+            task, arm = cell.split("-r01-")
+            self.fake()[0](config, {"id": task}, arm, 1, out, 30)  # a result copied in: no dispatch row at all
+            self.assertEqual((lab.sealed_state(config, out)["state"], lab.sealed_state(config, out)["unbound_cells"]), ("unbound", 1))
+            execute = mock.Mock(side_effect=self.fake()[0])
+            state = lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=99, stop_usd=1, execute=execute)
+            self.assertEqual((state["stop"], state["changed"]), ("manifest-mismatch", ["unbound-cells"]))
+            execute.assert_not_called()
+            ledger = (out / "dispatch.jsonl").read_text()
+            (out / "dispatch.jsonl").unlink()
+            (out / "dispatch.jsonl").mkdir()
+            with self.assertRaisesRegex(ValueError, "cannot be read"):
+                lab.sealed_state(config, out)
+            (out / "dispatch.jsonl").rmdir()
+            (out / "dispatch.jsonl").write_text(ledger)
+
+    def test_an_unreadable_sealed_file_is_a_structured_stop(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path, tool = self.config(root), root / "secret-agent"
+            tool.write_text("x")
+            tool.chmod(0)
+            try:
+                path.write_text(json.dumps({**json.loads(path.read_text()), "agent_command": [str(tool)]}))
+                state = lab.run(path, root / "out", replicates=1, jobs=1, max_calls=1, max_usd=99, stop_usd=1, execute=self.fake()[0])
+                self.assertEqual((state["stop"], state["calls"]), ("executable-unreadable", 0))
+            finally:
+                tool.chmod(0o600)
 
     def test_the_program_is_sealed_through_path_and_a_relative_one_is_named_unsealed(self):
         with tempfile.TemporaryDirectory() as d:

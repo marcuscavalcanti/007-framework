@@ -19,13 +19,13 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
   - Only a directory whose dispatches name no manifest (one from before 1.8) is sealed late, and reported as `sealed-late`.
   - Limits can change at a planned pause. `compare` can change for an exploratory reading only.
 - **`report` and `chain` refuse results sealed with another set or under another manifest.** `report --next-results` requires
-  stage 2 to be the chain of these results at the reference arm.
-- **`report` gains two fields**, each with a plain-words line in `report.md`:
+  stage 2 to be chained from this sealed run at the reference arm, with the same agent command, bound to its own seal.
+- **`report` gains `run_manifest`, `next_run_manifest`, `arm_accounting` and `verdict.run_binding` / `verdict.compare_changed_after_seal`**, each with a plain-words line in `report.md`:
   - `run_manifest`: the seal state, and whether the comparison or margin changed after the seal;
   - `arm_accounting`: per arm, planned cells, never dispatched, dispatched without a result, invalid by failure class, valid and
     accepted.
 - **Release preparation keeps annotated tags.** This change was already on `main` after 1.7.0 (`cf3b556`).
-- **Review fixes before release.** Two reviews of earlier candidates returned FIX FIRST. Neither qualifies this release.
+- **Review fixes before release.** Four reviews of earlier candidates returned FIX FIRST, or were stopped. None qualifies this release.
   - **OpenAI `gpt-6-astra`, `xhigh` requested, candidate `57b0a08`** (before the reviewer decision):
     - the stream completed with an `error` event ("model at capacity, reconnecting"), so its identity level is `failed`;
     - its findings were still checked in the code.
@@ -48,7 +48,11 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
   - **A first Fable review of `8a7a29b`** was stopped when the policy changed again. That makes it an incomplete stream, level
     `failed`, with no findings read.
 
-  **What both reviews' findings led to:**
+  - **Claude Fable 5.2, `xhigh` requested, candidate `5e9bbbe`:** identity `verified`, US$3.17. FIX FIRST on stage 2 not held to the
+    `unbound` rule. Fixed, with a test, along with its should-fix items (unbound results on resume, `run_binding` in the verdict,
+    the limits sentence, `unsealed_files` recorded and named, agent-command lineage for stage 2, the four states documented).
+
+  **What the reviews' findings led to:**
   - **Fixed:**
     - stage 2's arm, now bound;
     - `chain` refusals;
@@ -89,7 +93,7 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
   - the per-arm sums, including a dispatch with no result.
 - **Limit, marked in the code:** the compilers and test runners that an oracle calls are not sealed. Only the agent command's files
   are.
-- **Test suite:** from `3273cf4` on, the suite runs in CI, not locally. The pilot's Amendment 4 forbids heavy local processes during
+- **Test suite:** from `3273cf4` on, the suite runs in CI, not locally. The pilot's Amendment 4 (on branch `claude/pilot-amendment-2`) forbids heavy local processes during
   its gate re-run. The exact-commit CI is recorded in the release notes.
 - **CI and the independent review** of the exact commit are recorded in the GitHub release notes.
 - **Reviewer route:** Claude Fable 5.2 at `xhigh`, requested, because Claude implemented this release (AGENTS.md revision
@@ -99,10 +103,11 @@ Prepared on 2026-11-12 from published 1.7.0. This is a minor release:
 - **Boundary record (AGENTS.md security workflow):**
   - `run` now reads every absolute file named in `agent_command`, except the `unsealed_files`;
   - it writes those files' absolute paths and digests into `run-manifest.json` in the output directory;
+  - `report.json` and `report.md` also name those paths (`sealed_parts`, `unsealed_files`);
   - no file content leaves the machine;
   - the docs say to check the manifest before publishing a results directory.
 
 ## Causal evidence
 - This release asserts no new causal result. The frozen experiment reports keep their scope and verdicts.
 - The Codex 5-point pilot and its confirmatory run are pre-registered on the pinned 1.7.0 code. Their Amendments 2 and 3 are
-  published at commit `57d1a06`, on their own branch. This release does not change them.
+  published on their own branch, `claude/pilot-amendment-2` (Amendments 2 to 5 and PREREG-B, latest `3dcb155`). This release does not change them.
