@@ -1,0 +1,189 @@
+{
+ "passed": true,
+ "checks": {
+  "N4_all_imputed_mean_is_minus_1": true,
+  "A_run_exit_0": true,
+  "A_164_cells": true,
+  "A_chunks_of_at_most_20_then_40_marker": true,
+  "A_one_marker": true,
+  "A_quota_gate_per_chunk": true,
+  "A_no_unexpected_invalid": true,
+  "A_ambiguous_in_each_arm": true,
+  "A_usage_limit_is_invalid_not_refused": true,
+  "A_one_stream_and_sidecar_per_cell": true,
+  "A_valid_streams_match_receipts": true,
+  "A_guard_imputes_3": true,
+  "A_analysis_ran": true,
+  "A_regrade_aa_loadlog": true,
+  "A_lock_released": true,
+  "B_holds_after_40": true,
+  "B_analysis_reads_NO_BUDGET": true,
+  "B_restart_refused": true,
+  "C_quota_gate_dispatches_nothing": true,
+  "D_pause_then_regrade_failure_then_completion": true,
+  "D_result_equals_A": true,
+  "D_one_marker_line": true,
+  "D_fourth_start_refused": true,
+  "E_quota_gate_cases": true
+ },
+ "f_set_sha256": "2402907a97fed0fc46ccd429097328e175686a647820b0872356db71aaf1020e",
+ "files": {
+  "pinned_f.py": "fbd85700eb212febd95cc860cad964b11c0c1f7f8b26dfdf0429cf2a5bc90715",
+  "analyze_f.py": "ee9422da9391cfb0a8f6aa738e7ea870b5fac86250e3894b959f14dfafb68a0b",
+  "costcheck_f.py": "1ed8e858347137fabdcbfbf1db01c376c92d00b18e490a4e496c81a104efb80d",
+  "quota_f.py": "8e721613ce29e253397da4af4293793394ab1cddb31d55d69448df5bd4c35e4c",
+  "regrade_f.py": "16b8c68245854f44fa0072e5d489586fedc74f612d1c5f1278449f6c22cfbda0",
+  "aa_f.py": "78c91b2e23e7d54339b6179c5658e4bdfe1da8a34ef103f309ddd976a1810523",
+  "run_f.sh": "4587637f1b7282508f6584bbc7f3fd2ee6936f1cb6766d8353be6c2d20956ffc",
+  "critical-floor.json": "9b61ff3c57972135dd4a97f0772d95f9bf07f482fa4126950cf4fce419d51793",
+  "frozen-reach.json": "60f87b70c6decb139c28c000c917370b3e9a877a63f66b10fadfbd1e14463b28",
+  "shim.template": "83deed4012665008f5179f2f6341ca9b79926cfe57871dc19b5ef73e4321ec22"
+ },
+ "detail": {
+  "N4": {
+   "tasks": 41,
+   "mean": -1.0,
+   "imputed": {
+    "absent": 164
+   }
+  },
+  "A": {
+   "exit": 0,
+   "stderr": "",
+   "chunks": [
+    [
+     0,
+     20,
+     "call-budget"
+    ],
+    [
+     20,
+     20,
+     "call-budget"
+    ],
+    [
+     40,
+     20,
+     "call-budget"
+    ],
+    [
+     60,
+     20,
+     "call-budget"
+    ],
+    [
+     80,
+     20,
+     "call-budget"
+    ],
+    [
+     100,
+     20,
+     "call-budget"
+    ],
+    [
+     120,
+     20,
+     "call-budget"
+    ],
+    [
+     140,
+     20,
+     "call-budget"
+    ],
+    [
+     160,
+     4,
+     ""
+    ]
+   ],
+   "invalid": {
+    "GJ-0580B246-r01-xhigh": "native-error",
+    "GJ-0580B246-r02-medium": "ambiguous-session",
+    "GJ-59D6C4F1-r02-xhigh": "ambiguous-session"
+   },
+   "verdict": "PROVEN",
+   "L0": {
+    "P": [
+     -0.05916963779272345,
+     3.077586815449092,
+     "PROVEN"
+    ],
+    "B": [
+     -0.06064887873754153,
+     2.971610547992741,
+     "PROVEN"
+    ]
+   },
+   "L2": {
+    "P": [
+     -0.08355988169516247,
+     2.8223706764876773,
+     "PROVEN"
+    ],
+    "B": [
+     -0.08355988169516247,
+     2.8223706764876773,
+     "PROVEN"
+    ]
+   },
+   "imputed": {
+    "invalid": 3
+   },
+   "cost_ratio": 0.32040786168169055,
+   "cost_ratio_worst": 0.4052860696517413
+  },
+  "B": {
+   "exit": 1,
+   "cells": 40,
+   "hold": {
+    "at": "2026-11-13T05:29:08.508243+00:00",
+    "cells": {
+     "medium": 20,
+     "xhigh": 20
+    },
+    "spent": 220.0,
+    "projection_usd": 902.0,
+    "hold_above_usd": 360.0
+   },
+   "analysis": "NO-BUDGET",
+   "restart_stderr": "the single look has been taken (f-result.json exists)\n"
+  },
+  "C": {
+   "exit": 4,
+   "stderr": "quota gate failed at 0 cells: paused for the maintainer\n"
+  },
+  "D": {
+   "exits": [
+    4,
+    1,
+    0,
+    1
+   ],
+   "cells": [
+    40,
+    164
+   ],
+   "verdict": "PROVEN",
+   "L0": {
+    "P": 3.077586815449092,
+    "B": 2.971610547992741
+   },
+   "stderr": [
+    "quota gate failed at 40 cells: paused for the maintainer\n",
+    "",
+    "the single look has been taken (f-result.json exists)\n"
+   ]
+  },
+  "E": {
+   "blocked_top_level": 4,
+   "no_windows_seven_day": 0,
+   "no_windows_other_type": 4,
+   "extra_window": 4,
+   "no_event": 4,
+   "headroom_short": 4,
+   "headroom_enough": 0,
+   "second_event_blocked": 4
+  }
+ }
+}
