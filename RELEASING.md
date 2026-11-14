@@ -96,6 +96,8 @@ is the `007` CLI, the receipt and report schemas, and the dashboard snapshot.
      (`git rev-parse vX.Y.Z^{commit} vX.Y.Z^{tree} vX.Y.Z`,
      `git ls-tree -r --name-only vX.Y.Z | wc -l`).
    - **Qualification:** actual-main CI, exact-tag CI, independent review status.
+     The review status names the reviewer route and its identity level, and says
+     that the reviewer shares the implementer's model family (`AGENTS.md`).
 
 The tag-triggered `release.yml` prepares the source archive twice, checks their
 bytes and the extracted manifest, computes SHA256SUMS and attaches GitHub build

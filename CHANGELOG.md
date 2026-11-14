@@ -37,6 +37,152 @@ schemas, and the dashboard snapshot.
   study was selected after an exploratory reading, and the result covers one public repository. Reviewed in two rounds by Claude
   Fable 5.2 at maximum effort.
 
+## [1.9.0] - 2026-11-14
+
+A minor release for `007 lab`: what Claude study F ran by script around 1.8.1 is now native, and most open items of the 1.8.0
+and 1.8.1 qualification records are closed; the record lists the ones that stay open. Every new option is off by default: a run
+or report without them behaves as in 1.8.1, except the fixes below. Release qualification is recorded in
+[the release record](evidence/v1.9.0/release-evidence.md).
+
+### Added
+
+- `007 lab run` options for an unattended study: `--chunk` (dispatch, wait, gate, repeat), `--max-load` and `--load-wait-s` (a
+  5-minute load gate before each chunk, `load.log`), `--quota-gate` (the set's `quota_probe`, judged on Claude's
+  `rate_limit_event` rows, fails closed; `quota.jsonl`), `--cost-marker-at` and `--cost-marker-hold-usd` (one cost projection
+  after the first cells; `HOLD.json` is terminal), `--requeue-refused` (a refused call is set aside under `refused/` and
+  dispatched again after the pause), `--rate-limit-wait-s` (wait out the pause inside the run) and `--over-limit record` (a cell
+  above `--stop-usd` is counted and the run goes on to `--max-usd`). New planned pauses: `machine-busy`, `quota-hold`. New stops:
+  `cost-marker-hold` (terminal), `looked`, `load-sensitive-oracle`. `run` returns `refused_per_arm`, `requeued` and
+  `over_limit_cells`, `quota_probe_usd` and `quota_probes_unmeasured`. A quota probe's cost joins the run's spend (one without a
+  measured cost at the `--stop-usd` reserve), and a probe runs only with room under `--max-usd`.
+- `007 lab report --single-look` takes the results' run lock and writes `LOOK.json`, after which `report` refuses to read the
+  results and `run` refuses to add to them, also between chunks. `--missing-data-guard --reserve-usd X --replicates N` adds F-1's
+  guard: readings P and B, L2 imputed from the plan of N replicates, the cost ratio with its interval and worst case, and an
+  answer (PAYS, PROVEN-NOT-ECONOMIC, DOES-NOT-PAY). `--frozen-reach FILE` fixes the reach set and records its digest.
+  `compare.critical_floor` sets a floor for the guard's critical value. On the published 2026-11-07 and study F results the guard
+  reproduces every statistic, critical value and cost ratio that study F's hashed `analyze_f.py` gives.
+- `native_runner --stream-copy FILE` (placeholder `{stream_copy}`) keeps the raw stream beside the cell, owner-only.
+- The run manifest records the grading `toolchain`: path and version of each acceptance interpreter and of `go`, `node` or
+  `pytest` when an adapter calls them. A change on resume is a `manifest-mismatch`.
+- `sensitivity` grades each control again alone and lists `load_sensitive` tasks, whose grade moved with the load; they leave the
+  measure, and `run` refuses a set that holds them.
+- `--strict-jobs` on every `lab` command refuses a `--jobs` above a quarter of the cores (at least 2); without it, a warning.
+
+### Changed
+
+- The default `--jobs` is a quarter of the cores, at least 2 (was a third).
+- `arm_accounting` gives `refused` per arm and `replicates`; `report.md` names refusals per arm and says when they hit the arms
+  unequally, and the printed verdict carries `refused_unequal`.
+- `run` no longer stops with `usd-budget` when the queue is already empty (1.8.1 checked the budget before the queue).
+- A rate-limit cooldown applies only while planned cells remain.
+
+### Fixed
+
+- A Claude usage limit is a rate limit. The CLI's error result ("usage limit reached") and a rejected `rate_limit_event` read
+  `native-error-rate-limit`, from the error text only, never from usage numbers. Before, they read `native-error` and spent the
+  invalid budget, which study F had to guard with a quota gate.
+- A refused call with a zero-filled `usage` counts as having no usage. The real Claude runner writes one, so in 1.8.1 the
+  rate-limit pause never applied to Claude (the 1.8.1 review's open question, now pinned by a test on the runner's own receipt).
+- A Claude session the CLI reopens for a background task that ended after the result (a second `init` with the same session id,
+  after that task's notification) is one session: usage adds up, the cost is the last, cumulative one, and the receipt counts
+  `continuations`. Before, it read `ambiguous-session`, the cause of F's only invalid cell (`GJ-F5A63B5F-r02-xhigh`, US$2.45),
+  confirmed from its retained stream. Any other repeated `init` still reads `ambiguous-session`.
+- The rate-limit cooldown reads the newest refusal anywhere in the ledger, after the orphan check (1.8.1 review N3).
+- A snapshot's relative symbolic link whose target stays inside the snapshot is materialized as a copy instead of refusing the
+  cell; absolute links, links that leave the snapshot or have no target are still refused.
+- More forms of a file argument are sealed: `KEY=/file`, `--flag=key=/file`, `-f/file`, `@/file`, `--flag=@/file` (1.8.1 review
+  item 6).
+- A snapshot's directory link is copied only after the links inside its target are materialized.
+- A controller error records `controller_error` (type, innermost frame, and the message when the set retains diagnostic text)
+  in the cell and prints them to stderr.
+- A manifest without `toolchain` is not compared on it (a 1.8.1 manifest still stops on the sealed 007 scripts).
+
+### Not in this release
+
+- Measuring the explicit-environment effect (a 2×2 on yaegi) is a paid Codex measurement, pending Codex quota and the
+  maintainer's go.
+
+## [1.8.1] - 2026-11-12
+
+A patch release for `007 lab`, from defects the Codex 5-point pilot found. Release qualification is recorded in
+[the release record](evidence/v1.8.1/release-evidence.md).
+
+### Fixed
+
+- `007 lab sensitivity` and `chain` read patches as bytes. Newline translation turned CRLF lines into LF, so a reference or
+  candidate patch touching a CRLF file failed to apply: the task looked reference-failed, or its chain broke. Found by the
+  Codex 5-point pilot's serial re-grade (its Amendment 8).
+- One cell whose controller raises (a refused snapshot, a crash) becomes an invalid cell, `failure_class`
+  `controller-error:<type>`, never retried. Before, the exception ended the whole `007 lab run`. The invalid budget still stops a
+  run where every cell fails.
+- A `--flag=/absolute/file` argument of the agent command is sealed like a bare absolute path. Before, it was silently unsealed.
+- A provider rate limit no longer spends the invalid budget. A cell whose call the provider refused (receipt
+  `native-error-rate-limit`, no usage reported) is labelled `provider-rate-limit` (the observed class is kept in
+  `failure_class_observed`), is still charged its receipt cost or the `--stop-usd` reserve, does not count toward `--max-invalid`,
+  is never retried, and pauses the run with stop `rate-limit` (no `STOP.json`). A resume within 10 minutes of the last refusal
+  stops with `rate-limit-cooldown`, so a driver that resumes in a loop does not lose cells to the outage. `run` returns the
+  `refused` count. Only refusals that report no usage are covered: cells already working when the limit starts can still fail
+  as invalid, and a limit can hit one arm more than the other. In the Codex 5-point pilot (evidence commit `17d309e`), a rate
+  limit refused every call for 7 minutes and 1.7.0 ended the paid study with `invalid-budget`.
+- Patches are produced and applied losslessly: references and next changes are decoded with `surrogateescape`, references are
+  written as bytes, and `git apply` runs with `--whitespace=nowarn`, so an `apply.whitespace=fix` setting no longer strips CR. A 1.8.0 `sensitivity.json`
+  or chain set over CRLF or non-UTF-8 files should be rebuilt.
+- `chain` skips cells with no candidate patch (controller errors, refused calls) and names them in `broken`.
+- `unsealed_files` can name the file of a `--flag=/file` argument.
+- A controller error prints the cell and the error to stderr. A truncated runner receipt reads as an unknown cost (charged its
+  reserve) instead of ending the run.
+- A run sealed by 1.8.0 does not resume under 1.8.1: the 007 scripts are sealed, so the upgrade reads as `manifest-mismatch`.
+  Finish a sealed run on the version that started it.
+
+### Notes
+
+- Erratum to 1.8.0's list of new refusals, which omitted three:
+  - `chain` on an `unbound` stage 1;
+  - `report --next-results` on a stage 2 without a manifest whose ledger names one or cannot be read;
+  - `run` with an `unsealed_files` that is not a list of strings.
+
+  Over an unsealed (1.7.0) stage 1, stage 2's chain is not checked. The 1.8.0 release record also miscounts its earlier reviews (six
+  reviews: five FIX FIRST, one stopped), as its release notes say.
+
+## [1.8.0] - 2026-11-12
+
+A minor release for `007 lab`: a resumed run is bound to what it started with, and the report accounts for every planned cell
+per arm. Release qualification is recorded in [the release record](evidence/v1.8.0/release-evidence.md).
+
+### Added
+
+- `007 lab run` seals `run-manifest.json` before its first dispatch: the set (with its arm order), the agent command's program
+  and absolute files (through symlinks), the 007 scripts and the Python version. Every dispatch records the manifest's digest. A
+  start or resume that finds any of them changed stops with `manifest-mismatch` and dispatches nothing; an unreadable manifest, or
+  one missing after a dispatch named it, stops with `manifest-unreadable` or `manifest-missing`; dispatches after the seal that
+  do not name it stop with `manifest-mismatch` (`unbound-dispatches`). Files the attempts rewrite go in the set's
+  `unsealed_files`. Limits can change at a planned pause. Before this, a resumed run re-read the set and could mix treatments
+  under valid receipts. Results no sealed dispatch produced stop with `manifest-mismatch` (`unbound-cells`), and an unreadable named file with
+  `executable-unreadable`. The binding state is one of `sealed`, `sealed-late`, `unbound` or `absent`, and the printed verdict
+  carries it as `run_binding`. `run`, `report` and `chain` now refuse some inputs 1.7.0 accepted, as listed here.
+- `007 lab report` and `chain` refuse results sealed with a different set or under another manifest; `report --next-results`
+  requires stage 2 to be chained from this sealed run at the reference arm, with the same agent command, and bound to its
+  own seal under the same rules, and publishes `next_run_manifest`; `chain` refuses a `compare` moved since stage 1 was sealed or a different chain set already in its
+  directory. The printed verdict carries `compare_changed_after_seal`. The report gains `run_manifest` (`sealed`,
+  `sealed-late`, `unbound` or `absent`, and whether the comparison or margin changed after the seal) and says it in plain words.
+- `007 lab report` gains `arm_accounting`: per arm, planned cells (every task at the most replicates reached), never dispatched,
+  attempted without a result (a dispatch or a receipt), invalid by failure class, valid and accepted, and whether the dispatch
+  ledger was complete; also in plain words in `report.md`. Invalid cells and orphan receipts were named only as two flat lists.
+  Reports written by 1.7.0 still render.
+
+### Changed
+
+- The README links the published 1.7.0 release and the dashboard's spend ledger (`709bbba`).
+- Reviewer policy (Marcus, 2026-11-12): the reviewer follows the implementer, at `xhigh`. Codex implements: OpenAI
+  `gpt-6-astra` reviews. Claude implements: Claude Fable 5.2 reviews (`AGENTS.md`, `scripts/review_route.py`). This replaces the
+  cross-family rule; release notes state that reviewer and implementer share a model family.
+
+### Fixed
+
+- `docs/lab.md`: the miner's cap is 1,999 hidden tests (the reader's 2,000 outcomes include `__module__`), not 2,000.
+- Release preparation keeps an annotated tag as such, and a failed tag-triggered preparation can be dispatched again on
+  `main` with the existing tag and its exact tag object (`release.yml`, `RELEASING.md`).
+
 ## [1.7.0] - 2026-11-09
 
 Candidate prepared for independent review. Release qualification is recorded in
@@ -657,7 +803,10 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...v1.9.0
+[1.8.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...v1.8.1
+[1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0
 
 [1.7.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.2...v1.7.0
 [1.6.2]: https://github.com/marcuscavalcanti/007-framework/compare/v1.6.1...v1.6.2

@@ -13,9 +13,11 @@ Durable means the change survives the next change. Agents are an argv template (
 lab_accept.py; nothing here knows a vendor or a language.
 """
 import argparse
+import contextlib
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 import fcntl
+import glob
 import hashlib
 import json
 import math
@@ -29,6 +31,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commit_replay  # noqa: E402
@@ -259,7 +263,7 @@ def oracle(config, commit):
     hidden = [k for k in hidden if k in stable]
     if len(hidden) + 1 > replay_eval.MAX_ACCEPT_OUTCOMES:  # the report adds "__module__"; past the cap every cell's outcomes read "unavailable"
         return "too-many-hidden-tests"
-    reference = _git(repo, "diff", "--binary", parent, sha, "--", ".", *[f":(exclude){f}" for f in hidden_files]).decode("utf-8", "replace")
+    reference = _git(repo, "diff", "--binary", parent, sha, "--", ".", *[f":(exclude){f}" for f in hidden_files]).decode("utf-8", "surrogateescape")
     added = added_source(reference)
     contract = set()
     for name in hidden_files:
@@ -286,7 +290,7 @@ def write_task(config, out, tid, commit, built):
     for name, payload in (("hidden.json", json.dumps(built["hidden"])), ("baseline.json", json.dumps(built["baseline"])), ("lab.json", json.dumps(built["spec"])), ("lab_accept.py", (HERE / "lab_accept.py").read_text())):
         (directory / name).write_text(payload)
         entries.append((directory / name, f"{ACCEPT}/{name}"))
-    (directory / "reference.patch").write_text(built["reference"])
+    (directory / "reference.patch").write_bytes(built["reference"].encode("utf-8", "surrogateescape"))
     # ponytail: Go only, where a redeclared test name breaks the package; other adapters keep the agent's tests until one collides
     reset = {"reset_to_base": ["*_test.go"]} if built["spec"]["adapter"] == "go" else {}
     return {"id": tid, "repo": config.get("repo_key", "source"), "base": commit["parent"], "accepted": commit["sha"], "prompt": prompt_for(config, built["message"], built["contract"]), "acceptance_timeout_s": 900, **reset,
@@ -383,12 +387,20 @@ def rewound(repo, task, meta, dest):
             overlay(repo, dest, task["base"], [name])
 
 
+def read_patch(path):
+    """A patch as text with its bytes intact: read_text() turns CRLF into LF, and a patch touching CRLF lines then fails to apply."""
+    return Path(path).read_bytes().decode("utf-8", "surrogateescape")
+
+
 def apply_patch(tree, patch_text):
     if not patch_text.strip():
         return True
     if not (tree / ".git").exists():
         subprocess.run(["git", "init", "-q"], cwd=tree, check=True, capture_output=True)
-    return subprocess.run(["git", "apply", "--recount", "--binary", "-"], cwd=tree, input=patch_text.encode(errors="surrogateescape"), capture_output=True).returncode == 0
+    # --whitespace=nowarn overrides apply.whitespace=fix (which strips CR); the rest of the operator's config stays, since the
+    # snapshot was checked out under it too (core.autocrlf)
+    return subprocess.run(["git", "apply", "--recount", "--binary", "--whitespace=nowarn", "-"], cwd=tree,
+                          input=patch_text.encode(errors="surrogateescape"), capture_output=True).returncode == 0
 
 
 def oracle_passes(directory, tree, spec, sandbox, env):
@@ -411,6 +423,12 @@ def chain(config_path, results, out):
     config = json.loads(config_path.read_text())
     pairs = json.loads((config_path.parent / "pairs.json").read_text())
     tasks = {t["id"]: t for t in config["tasks"]}
+    parent_state = sealed_state(config, results)
+    if parent_state["state"] == "unbound":
+        raise ValueError("stage 1 is unbound from its seal: chain refuses to build on it")
+    if parent_state["compare_changed"]:  # compare.reference picks stage 2's arm: it must be the one sealed with stage 1
+        raise ValueError("the comparison changed after stage 1 was sealed: chain refuses to pick stage 2's arm from it")
+    parent = parent_state["sha256"]
     repo = next(iter(config["repos"].values()))
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     mirror = out / "mirror.git"
@@ -419,17 +437,25 @@ def chain(config_path, results, out):
     next_tasks, broken = [], []
     for row in load_cells(results):
         meta, task = pairs[row["task"]], tasks[row["task"]]
+        if not isinstance(row.get("candidate_patch"), dict) or row.get("failure_class") == "provider-rate-limit":
+            broken.append(row["cell"])  # no candidate to chain from: a controller error or a refused call
+            continue
         with tempfile.TemporaryDirectory(prefix="lab-chain-") as scratch:
             tree = Path(scratch) / "tree"
             rewound(repo, task, meta, tree)
-            if not apply_patch(tree, (results / row["candidate_patch"]["path"]).read_text(errors="surrogateescape")):
+            if not apply_patch(tree, read_patch(results / row["candidate_patch"]["path"])):
                 broken.append(row["cell"])
                 continue
             base = commit_tree(mirror, tree, meta["next"]["base"])
         next_tasks.append({**meta["next"], "id": row["cell"] + "-next", "base": base})
     arm = config["arms"][config["compare"]["reference"]]
-    replay = {**config, "repos": {next(iter(config["repos"])): str(mirror)}, "arms": {"next": arm}, "tasks": next_tasks, "broken_chains": broken}
-    (out / "replay-set.json").write_text(json.dumps(replay, indent=1, ensure_ascii=False))
+    replay = {**config, "repos": {next(iter(config["repos"])): str(mirror)}, "arms": {"next": arm}, "tasks": next_tasks, "broken_chains": broken,
+              "parent_manifest_sha256": parent}
+    data = json.dumps(replay, indent=1, ensure_ascii=False)
+    existing = out / "replay-set.json"
+    if existing.is_file() and json.loads(existing.read_text()) != replay:  # a stage 2 sealed on it would no longer resume
+        raise ValueError(f"a different chain set already exists in {out}: chain into a new directory")
+    existing.write_text(data)
     (out / "pairs.json").write_text("{}")
     return {"tasks": len(next_tasks), "broken": broken}
 
@@ -485,8 +511,8 @@ def sensitivity(config_path, jobs, per_task=6):
     repo, rng, work = next(iter(config["repos"].values())), random.Random(config.get("seed", 1)), []
     for task in config["tasks"]:
         meta = pairs[task["id"]]
-        real_next = _git(repo, "diff", "--binary", meta["next"]["base"], meta["next"]["accepted"]).decode("utf-8", "replace") if "next" in meta else ""
-        reference = (out / "tasks" / task["id"] / "reference.patch").read_text()
+        real_next = _git(repo, "diff", "--binary", meta["next"]["base"], meta["next"]["accepted"]).decode("utf-8", "surrogateescape") if "next" in meta else ""
+        reference = read_patch(out / "tasks" / task["id"] / "reference.patch")
         work.append((task["id"], True, reference, real_next))
         work += [(task["id"], False, m, real_next) for m in mutants(reference, per_task, rng)]
 
@@ -498,12 +524,18 @@ def sensitivity(config_path, jobs, per_task=6):
             return tid, control, failure_summary(error)
     with ThreadPoolExecutor(jobs) as pool_:
         rows = list(pool_.map(one, work))
-    result = sensitivity_summary(rows)
+    # each control again, one at a time: an oracle whose grade moves with the machine's load (yaegi) is not an instrument
+    serial = {tid: value for tid, _, value in map(one, [item for item in work if item[1]])}
+    unstable = sorted(tid for tid, control, value in rows if control and serial[tid] != value)
+    result = sensitivity_summary(rows, unstable)
     (out / "sensitivity.json").write_text(json.dumps(result, indent=1))
     return result
 
 
-def sensitivity_summary(rows):
+def sensitivity_summary(rows, load_sensitive=()):
+    """`load_sensitive`: tasks whose control graded differently in the parallel pass and the serial repeat. They leave the
+    measure, and `run` refuses a set that still holds them."""
+    rows = [r for r in rows if r[0] not in set(load_sensitive)]
     controls = [r for r in rows if r[1]]
     survivors = [r for r in rows if not r[1] and isinstance(r[2], tuple) and r[2][0] and r[2][1] is not None]
     conflicts = sum(not r[1] and isinstance(r[2], tuple) and r[2][0] and r[2][1] is None for r in rows)
@@ -522,6 +554,7 @@ def sensitivity_summary(rows):
                           "passed": len(tried) >= GATES["min_mutants"] and rejected / len(tried) >= GATES["min_sensitivity"]},
             "mutants": len(rows) - len(controls), "survive_first_oracle": len(survivors), "caught_by_next_change": caught, "sensitivity": caught / len(survivors) if survivors else None,
             "conformant": conformant, "tasks": len(controls), "per_task": per, "errors": sum(isinstance(r[2], str) for r in rows), "unapplied": sum(r[2] is None for r in rows), "conflicts": conflicts,
+            "load_sensitive": sorted(load_sensitive),
             "passed": bool(survivors) and len(survivors) >= GATES["min_survivors"] and caught / len(survivors) >= GATES["min_sensitivity"]}
 
 
@@ -538,22 +571,427 @@ def plan(config, replicates):
     return cells
 
 
+def _error_detail(error, retain=True):
+    """Type, message (first 300 characters; None unless the set retains diagnostic text, as replay cells do) and the innermost
+    traceback frame of a controller error."""
+    frames = traceback.extract_tb(error.__traceback__)
+    where = f"{Path(frames[-1].filename).name}:{frames[-1].lineno} in {frames[-1].name}" if frames else None
+    return {"type": type(error).__name__, "message": str(error)[:300] if retain else None, "where": where}
+
+
+def _controller_failure(out, task, arm, rep, error, retain=True):
+    """The result of a cell whose controller raised: invalid, never retried, its receipt (if the agent ran) kept and bound."""
+    cid = replay_eval.cell_id(task, arm, rep)
+    path, receipt = out / f"{cid}.json", out / f"{cid}.runner.json"
+    if path.exists():  # the cell finished before the error: its own result stands
+        return json.loads(path.read_text())
+    row = {"schema": "007-framework/replay-cell/v1", "task": task["id"], "arm": arm, "replicate": rep, "valid": False, "accepted": False,
+           "failure_class": f"controller-error:{type(error).__name__}", "cost_usd": "unmeasured", "acceptance_outcomes": "unavailable",
+           "runner_receipt_sha256": hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt.is_file() else "unmeasured",
+           "controller_error": _error_detail(error, retain)}
+    path.write_text(json.dumps(row))
+    return row
+
+
+RATE_LIMIT_COOLDOWN_S = 600
+
+
+def refused(out, cid):
+    """The provider refused the call: its receipt names a rate limit and reports no usage. It is still charged as any invalid cell
+    (its receipt cost, else the --stop-usd reserve), but it does not count toward --max-invalid and it pauses the run. A limit can
+    be per model, so it can hit one arm more than the other: the report counts refused cells per arm."""
+    receipt = out / f"{cid}.runner.json"
+    try:
+        value = json.loads(receipt.read_text()) if receipt.is_file() else {}
+    except (OSError, ValueError):
+        return False
+    if not isinstance(value, dict):  # a receipt that is JSON but not an object names no refusal
+        return False
+    usage = value.get("usage")
+    # no usage: absent, or every count zero (the real Claude runner writes a zero-filled one for a refused call)
+    unused = not usage or isinstance(usage, dict) and all(type(n) is int and n == 0 for n in usage.values())
+    return value.get("problem") == "native-error-rate-limit" and unused
+
+
 def cost_of(out, cid, row):
     if harness_report._valid_money(row.get("cost_usd")):
         return row["cost_usd"]
     receipt = out / f"{cid}.runner.json"
-    value = json.loads(receipt.read_text()).get("cost_usd") if receipt.is_file() and receipt.stat().st_size else None
+    try:
+        value = json.loads(receipt.read_text()).get("cost_usd") if receipt.is_file() and receipt.stat().st_size else None
+    except (OSError, ValueError, AttributeError):  # a truncated receipt: unknown cost, charged its reserve
+        value = None
     return value if harness_report._valid_money(value) else None
 
 
-def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3):
-    """Serialize controllers sharing an output directory before checking or publishing dispatch history."""
+RUN_MANIFEST = "run-manifest.json"
+LOOK = "LOOK.json"  # the single look: report --single-look writes it, and nothing runs or reads again
+
+
+def _version():
+    match = re.search(r"(?m)^  version: (\S+)$", (HERE.parent / "SKILL.md").read_text()) if (HERE.parent / "SKILL.md").is_file() else None
+    return match[1] if match else None
+
+
+def _sha256(path):
+    with open(path, "rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def set_sha256(config):
+    """The set as parsed: arms (and their order, which seeds the dispatch order), agent command, tasks with their prompts, bases and
+    oracle hashes. Whitespace does not count, nor `compare` (which arms a report contrasts, at what margin): it changes no attempt in
+    this run, and the report says if it moved after the seal. A chain's set names its parent manifest, so it is bound to it."""
+    treatment = {k: v for k, v in config.items() if k != "compare"}
+    treatment["__arm_order__"] = list(config.get("arms", {}))
+    return hashlib.sha256(json.dumps(treatment, sort_keys=True).encode()).hexdigest()
+
+
+def _read_manifest(path):
+    """The sealed manifest, None if there is none. Anything else at that path, or bytes that are not one, is refused."""
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("run manifest is not a regular file")
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError("run manifest is unreadable") from error
+    if (not isinstance(value, dict) or value.get("schema") != "007-framework/lab-run-manifest/v1" or not isinstance(value.get("set_sha256"), str)
+            or not isinstance(value.get("executables", {}), dict)):
+        raise ValueError("run manifest is malformed")
+    return value
+
+
+def _ledger(results):
+    """The dispatch ledger's rows, [] when there is none, None when it cannot be read."""
+    if not (results / "dispatch.jsonl").exists():
+        return []
+    try:
+        history, _, _ = replay_eval.load_dispatch_history(results)
+    except (OSError, ValueError):
+        return None
+    return history
+
+
+def _bound_digests(history):
+    """Manifest digests the dispatch ledger recorded: once a dispatch names one, that manifest is the only one the run accepts."""
+    return {row["manifest_sha256"] for row in history if isinstance(row.get("manifest_sha256"), str)}
+
+
+def _unbound(history, digest):
+    """Dispatches that do not name this manifest: before the seal, or by a controller that does not seal (1.7.0)."""
+    return sum("dispatched_at" in row and row.get("manifest_sha256") != digest for row in history)
+
+
+def _named_files(part):
+    """Absolute paths an argument may name: itself, after `=` (`--flag=/f`, `KEY=/f`, `--flag=key=/f`), after a short option
+    (`-f/f`) or after `@` (`@/f`)."""
+    names = {part}
+    if "=" in part:
+        names |= {part.split("=", 1)[1], part.rsplit("=", 1)[1]}
+    if len(part) > 2 and part[0] == "-" and part[1] != "-":
+        names.add(part[2:])
+    names |= {name[1:] for name in names if name.startswith("@")}  # `@/f`, `--flag=@/f`
+    return sorted(name for name in names if os.path.isabs(name))
+
+
+TOOL_VERSION = {"go": ["version"], "node": ["--version"], "python": ["--version"], "pytest": ["-m", "pytest", "--version"]}
+
+
+def toolchain(config, root):
+    """Path and version of what grades the attempts: the interpreter each acceptance command starts, and the compiler or test runner
+    its adapter calls (go, node, pytest), found on the acceptance PATH. Recorded at the seal; a change on resume is a mismatch."""
+    adapters = set()
+    for lab_json in sorted((root / "tasks").glob("*/lab.json")) if root else []:
+        try:
+            adapters.add(json.loads(lab_json.read_text()).get("adapter"))
+        except (OSError, ValueError):
+            adapters.add("unreadable")
+    path = (config.get("acceptance_env") or {}).get("PATH", os.environ.get("PATH", ""))
+    found = {name: shutil.which(name, path=path) for name in ("go", "node") if name in adapters}
+    interpreters = {command[0] for task in config.get("tasks", []) for command in task.get("acceptance", [])[:1]
+                    if command and os.path.isabs(command[0])}
+    for index, program in enumerate(sorted(interpreters)):
+        found["python" if index == 0 else f"python{index + 1}"] = program
+        if "pytest" in adapters and index == 0:
+            found["pytest"] = program
+    out = {}
+    for name, program in sorted(found.items()):
+        version = None
+        if program and Path(program).is_file():
+            try:
+                done = subprocess.run([program, *TOOL_VERSION[name.rstrip("0123456789")]], capture_output=True, text=True, timeout=60,
+                                      env={**os.environ, "PATH": path}, stdin=subprocess.DEVNULL)
+                version = (done.stdout or done.stderr).strip().splitlines()[0][:200] if (done.stdout or done.stderr).strip() else None
+            except (OSError, subprocess.TimeoutExpired):
+                version = None
+        out[name] = {"path": str(Path(program).resolve()) if program else None, "version": version}
+    return out
+
+
+def seal(config, root=None):
+    """What a resumed run must find unchanged, checked each time the run starts or resumes. Limits (replicates, calls, money, jobs,
+    invalid budget) stay adjustable at a planned pause. Executables are the agent command's program (a PATH lookup for the first
+    word) and every absolute file it names, through symlinks. A relative path resolves inside the task's workspace, which the set's
+    base commit fixes; a later PATH lookup (`env agent`), anything the program launches, environment variables and the CLI's own
+    configuration are not sealed, nor the parts the set lists in `unsealed_files` (a log the attempts rewrite). Given the set's
+    directory (`root`), the grading toolchain is recorded too (`toolchain`). The manifest guards against accidents, not tampering:
+    whoever can write the output directory can rewrite it."""
+    listed = config.get("unsealed_files", [])
+    if not isinstance(listed, list) or not all(isinstance(part, str) for part in listed):
+        raise ValueError("unsealed_files must be a list of strings")
+    tools, skip = {}, set(listed)
+    for index, part in enumerate(config.get("agent_command", [])):
+        names = _named_files(part)
+        if part in skip or skip & set(names):
+            continue
+        found = [shutil.which(part)] if index == 0 and "/" not in part else names
+        found = [name for name in found if name and Path(name).is_file()]
+        if found:
+            real = Path(found[0]).resolve()
+            tools[part] = {"path": str(real), "sha256": _sha256(real)}
+    return {"toolchain": toolchain(config, root), "schema": "007-framework/lab-run-manifest/v1", "set_sha256": set_sha256(config), "executables": tools,
+            "framework_sha256": hashlib.sha256("".join(_sha256(p) for p in sorted(HERE.glob("*.py"))).encode()).hexdigest(),
+            "python": sys.version.split()[0], "arms": config.get("arms"), "parent_manifest_sha256": config.get("parent_manifest_sha256"),
+            "program_sealed": bool(config.get("agent_command")) and config["agent_command"][0] in tools, "sealed_parts": sorted(tools),
+            "unsealed_files": sorted(skip),
+            "agent_command_sha256": hashlib.sha256(json.dumps(config.get("agent_command"), sort_keys=True).encode()).hexdigest()}
+
+
+def sealed_state(config, results):
+    """state: sealed, sealed-late (a run older than the manifest), unbound (see _binding) or absent; compare_changed: the comparison or margin differs from
+    the one in the set when the run was sealed; sha256: the manifest's digest. Results of a different set, a manifest the dispatches
+    do not name, or a missing one they do name, are refused, not read."""
+    recorded, history = _read_manifest(results / RUN_MANIFEST), _ledger(results)
+    if recorded is not None and history is None:
+        raise ValueError(f"the dispatch ledger of a sealed run cannot be read: {results}")
+    bound = _bound_digests(history or [])
+    if recorded is None:
+        if bound:
+            raise ValueError(f"run manifest missing for sealed dispatches: {results}")
+        return {"state": "absent", "compare_changed": None, "sha256": None, "program_sealed": None, "sealed_parts": None,
+                "unbound_dispatches": None, "unbound_cells": None}
+    digest = _sha256(results / RUN_MANIFEST)
+    if bound and bound != {digest}:
+        raise ValueError(f"run manifest changed after dispatch: {results}")
+    if recorded.get("set_sha256") != set_sha256(config):
+        raise ValueError(f"results were run with a different set: {results}")
+    state, unbound, unbound_cells = _binding(results, recorded, digest, history)
+    return {"state": state, "compare_changed": recorded.get("compare") != config.get("compare"), "sha256": digest,
+            "program_sealed": recorded.get("program_sealed"), "sealed_parts": recorded.get("sealed_parts"),
+            "unsealed_files": recorded.get("unsealed_files"), "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
+
+
+def _binding(results, recorded, digest, history):
+    """(state, unbound dispatches, unbound results) of a sealed directory. unbound: dispatches after the seal that do not name it
+    (another controller), or results no sealed dispatch produced (cells copied in), beyond what existed when it was sealed. Restoring
+    inputs cannot rebind them: an unbound run stays unbound."""
+    unbound = _unbound(history, digest)
+    bound_cells = {row["cell"] for row in history if row.get("manifest_sha256") == digest}
+    unbound_cells = len(set(replay_eval.read_cell_artifacts(results)[0]) - bound_cells)
+    late = recorded.get("cells_before_seal", 0)
+    if unbound > recorded.get("dispatches_before_seal", 0) or unbound_cells > late:
+        return "unbound", unbound, unbound_cells
+    return ("sealed-late" if unbound or late else "sealed"), unbound, unbound_cells
+
+
+def jobs_limit():
+    """Parallel cells this machine takes without loading itself: a quarter of its cores, at least 2. Amendment 7 saw a load of
+    about 870 and a restart from oversubscription; external load also moves grades (yaegi)."""
+    return max(2, (os.cpu_count() or 4) // 4)
+
+
+LOAD_POLL_S, LOAD_LOG_S, QUOTA_TIMEOUT_S = 300, 60, 300
+PLANNED_PAUSES = ("call-budget", "rate-limit", "machine-busy", "quota-hold", "looked")  # no STOP.json; a later run resumes all but `looked`
+
+
+def _log_load(out, step=None):
+    """Append the load averages to load.log; return the 5-minute one."""
+    one, five, fifteen = os.getloadavg()
+    with (out / "load.log").open("a") as handle:
+        handle.write(json.dumps({"at": _now(), "load": [round(one, 2), round(five, 2), round(fifteen, 2)], **({"step": step} if step else {})}) + "\n")
+    return five
+
+
+def quiet(out, max_load, wait_s, step):
+    """True once the 5-minute load is under max_load, polling every LOAD_POLL_S; False if it is not within wait_s."""
+    waited = 0
+    while _log_load(out, step) >= max_load:
+        if waited >= wait_s:
+            return False
+        time.sleep(LOAD_POLL_S)
+        waited += LOAD_POLL_S
+    return True
+
+
+def _load_logger(out, done):
+    while not done.wait(LOAD_LOG_S):
+        _log_load(out)
+
+
+QUOTA_PASSING = ("allowed", "allowed_warning")
+
+
+def quota_judge(events, left, windows=("seven_day",), need=.60, ceiling=.95):
+    """(passes, reason, utilization by window) from a probe's rate_limit_event rows (Claude's rate_limit_info). It passes only if
+    every event's status is allowed or allowed_warning, every window it reports is one of `windows` and allowed, each of those
+    windows' utilization is identified, and each has room: used + need x left <= ceiling, where `left` is the share of the planned
+    cells not yet done and `need` the share of the window the whole run takes. No event, an unknown window or a blocked one fails
+    closed: the run pauses for the operator (F-1's quota_f.py, made native)."""
+    if not events:
+        return False, "no rate_limit_event", {}
+    used, others = {}, set()
+    for info in events:
+        if info.get("status") not in QUOTA_PASSING:
+            return False, f"status {info.get('status')!r}", used
+        unified = info.get("unifiedWindows")
+        if isinstance(unified, dict):
+            for name, window in unified.items():
+                if name not in windows:
+                    others.add(name)
+                elif not isinstance(window, dict) or window.get("status") not in QUOTA_PASSING:
+                    return False, f"{name} status {window.get('status') if isinstance(window, dict) else None!r}", used
+                elif harness_report._valid_money(window.get("utilization")):
+                    used[name] = window["utilization"]
+        elif info.get("rateLimitType") in windows and harness_report._valid_money(info.get("utilization")):
+            used[info["rateLimitType"]] = info["utilization"]
+        elif info.get("rateLimitType") is not None and info.get("rateLimitType") not in windows:
+            others.add(info["rateLimitType"])
+    if others:
+        return False, f"unknown windows {sorted(map(str, others))}", used
+    missing = [w for w in windows if w not in used]
+    if missing:
+        return False, f"utilization not identified: {missing}", used
+    for window in windows:
+        if used[window] + need * left > ceiling:
+            return False, f"{window} at {used[window]} with {left:.0%} of cells left", used
+    return True, "headroom", used
+
+
+def quota_check(config, out, left):
+    """Run the set's quota probe (one minimal call on the study's model, never a cell) and judge its rate_limit_event rows.
+    Appends the decision to quota.jsonl."""
+    validate_quota_probe(config)
+    probe = config["quota_probe"]
+    events, exit_code, cost = [], None, None
+    try:
+        with tempfile.TemporaryDirectory(prefix="007-quota-") as scratch:
+            done = subprocess.run(probe["command"], cwd=scratch, capture_output=True, text=True, timeout=QUOTA_TIMEOUT_S, stdin=subprocess.DEVNULL)
+        exit_code = done.returncode
+        for line in done.stdout.splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("type") == "rate_limit_event" and isinstance(row.get("rate_limit_info"), dict):
+                events.append(row["rate_limit_info"])
+            if isinstance(row, dict) and row.get("type") == "result" and harness_report._valid_money(row.get("total_cost_usd")):
+                cost = row["total_cost_usd"]  # the probe is a real call: its cost joins the run's spend
+    except (OSError, subprocess.TimeoutExpired) as error:
+        exit_code = type(error).__name__
+    ok, reason, used = quota_judge(events, left, tuple(probe.get("windows", ("seven_day",))), probe.get("need", .60), probe.get("ceiling", .95))
+    with (out / "quota.jsonl").open("a") as handle:
+        handle.write(json.dumps({"at": _now(), "ok": ok, "reason": reason, "utilization": used, "cells_left_share": left,
+                                 "probe_exit": exit_code, "probe_cost_usd": cost, "events": events}) + "\n")
+    return ok, reason, cost
+
+
+def validate_quota_probe(config):
+    probe = config.get("quota_probe")
+    if not isinstance(probe, dict) or not isinstance(probe.get("command"), list) or not probe["command"] or not all(isinstance(p, str) for p in probe["command"]):
+        raise ValueError("--quota-gate needs quota_probe.command (an argv list) in the set")
+    windows = probe.get("windows", ["seven_day"])
+    if not isinstance(windows, list) or not windows or not all(isinstance(w, str) for w in windows):
+        raise ValueError("quota_probe.windows must be a nonempty list of names")
+    for key, default in (("need", .60), ("ceiling", .95)):
+        value = probe.get(key, default)
+        if not harness_report._valid_money(value) or value > 1:
+            raise ValueError(f"quota_probe.{key} must be a share between 0 and 1")
+
+
+def probe_costs(out):
+    """(measured cost, probes without a measured cost) of every quota probe this run recorded."""
+    measured, unmeasured = 0.0, 0
+    try:
+        lines = (out / "quota.jsonl").read_text().splitlines()
+    except FileNotFoundError:
+        return measured, unmeasured
+    except OSError as error:
+        raise ValueError(f"quota.jsonl cannot be read: {out}") from error
+    for line in lines:
+        try:
+            value = json.loads(line).get("probe_cost_usd")
+        except (ValueError, AttributeError):
+            unmeasured += 1
+            continue
+        if harness_report._valid_money(value):
+            measured += value
+        else:
+            unmeasured += 1
+    return measured, unmeasured
+
+
+def cost_marker(out, cells, arm_of, stop_usd, hold_usd):
+    """Once, after the first cells: project the run's cost by arm (mean cost per cell x planned cells of the arm) from costs only,
+    never grades. A cell with no measured cost counts at the --stop-usd reserve; refused cells are left out. Above hold_usd, or
+    with an arm that has no cell yet, it writes HOLD.json and the run stops for good (a terminal STOP); else MARKER.json."""
+    results, _ = replay_eval.read_cell_artifacts(out)
+    planned = {}
+    for cell in cells:
+        planned[cell[2]] = planned.get(cell[2], 0) + 1
+    costs = {arm: [] for arm in planned}
+    for name, row in results.items():
+        if row.get("failure_class") == "provider-rate-limit" or name not in arm_of:
+            continue
+        value = cost_of(out, name, row)
+        costs[arm_of[name]].append(value if harness_report._valid_money(value) else stop_usd)
+    projection = sum(sum(v) / len(v) * planned[a] for a, v in costs.items()) if all(costs.values()) else None
+    value = {"at": _now(), "cells": {a: len(v) for a, v in costs.items()}, "spent": sum(map(sum, costs.values())),
+             "projection_usd": projection, "hold_above_usd": hold_usd}
+    held = projection is None or projection > hold_usd
+    (out / ("HOLD.json" if held else "MARKER.json")).write_text(json.dumps(value, indent=1) + "\n")
+    return not held
+
+
+def _set_aside(out, cid):
+    """Move a refused attempt's files to refused/, numbered, so the cell can be dispatched again; nothing is deleted."""
+    store = out / "refused"
+    store.mkdir(mode=0o700, exist_ok=True)
+    attempt = 1
+    while any(store.glob(f"{glob.escape(cid)}.{attempt}.*")):  # a task id may hold dots
+        attempt += 1
+    for suffix in replay_eval.CELL_ARTIFACT_SUFFIXES:
+        source = out / (cid + suffix)
+        if source.exists() or source.is_symlink():
+            os.replace(source, store / f"{cid}.{attempt}{suffix}")
+
+
+def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3,
+        requeue_refused=False, over_limit="stop", chunk=None, max_load=None, load_wait_s=3600, quota_gate=False,
+        cost_marker_at=None, cost_marker_hold_usd=None, rate_limit_wait_s=0, strict_jobs=False):
+    """Serialize controllers sharing an output directory before checking or publishing dispatch history. The options after
+    max_invalid are off by default, so a run without them behaves as in 1.8.1."""
     if not all(harness_report._valid_money(value) for value in (max_usd, stop_usd)):
         raise ValueError("budget values must be finite nonnegative numbers")
-    for name, value, minimum in (("replicates", replicates, 1), ("jobs", jobs, 1),
-                                  ("max_calls", max_calls, 0), ("max_invalid", max_invalid, 1)):
+    for name, value, minimum in (("replicates", replicates, 1), ("jobs", jobs, 1), ("max_calls", max_calls, 0), ("max_invalid", max_invalid, 1),
+                                  ("chunk", 1 if chunk is None else chunk, 1), ("load_wait_s", load_wait_s, 0),
+                                  ("rate_limit_wait_s", rate_limit_wait_s, 0), ("cost_marker_at", 1 if cost_marker_at is None else cost_marker_at, 1)):
         if type(value) is not int or value < minimum:
             raise ValueError(f"{name} limit must be an integer >= {minimum}")
+    if rate_limit_wait_s and not requeue_refused:  # waiting without requeue would lose every refused cell of the outage
+        raise ValueError("rate_limit_wait_s limit needs requeue_refused")
+    if over_limit not in ("stop", "record"):
+        raise ValueError("over_limit limit must be stop or record")
+    if max_load is not None and not (harness_report._valid_money(max_load) and max_load > 0):
+        raise ValueError("max_load limit must be a positive number")
+    if (cost_marker_at is None) != (cost_marker_hold_usd is None) or cost_marker_hold_usd is not None and not harness_report._valid_money(cost_marker_hold_usd):
+        raise ValueError("cost marker limit needs both a cell count and a finite hold amount")
+    if jobs > jobs_limit():
+        message = f"--jobs {jobs} is above {jobs_limit()} (a quarter of this machine's cores, at least 2): load can move grades"
+        if strict_jobs:
+            raise ValueError(f"jobs limit: {message}")
+        print(f"007 lab: warning: {message}", file=sys.stderr)
     timeout_s = replay_eval.validate_timeout(timeout_s)
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (out / ".run.lock").open("a") as handle:
@@ -561,11 +999,14 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {"stop": "run-already-active", "calls": 0}
+        options = {"requeue_refused": requeue_refused, "over_limit": over_limit, "chunk": chunk, "max_load": max_load,
+                   "load_wait_s": load_wait_s, "quota_gate": quota_gate, "cost_marker_at": cost_marker_at,
+                   "cost_marker_hold_usd": cost_marker_hold_usd, "rate_limit_wait_s": rate_limit_wait_s}
         return _run(config_path, out, replicates=replicates, jobs=jobs, max_calls=max_calls, max_usd=max_usd,
-                    stop_usd=stop_usd, timeout_s=timeout_s, execute=execute, max_invalid=max_invalid)
+                    stop_usd=stop_usd, timeout_s=timeout_s, execute=execute, max_invalid=max_invalid, options=options)
 
 
-def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s, execute, max_invalid):
+def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s, execute, max_invalid, options):
     """Spend rule: a cell is dispatched only if the spend so far plus stop_usd for it and for each cell in flight stays under max_usd.
     A failed call that reports no cost is charged stop_usd (its reserve), never zero; only a valid cell without a cost stops the run."""
     config = json.loads(config_path.read_text())
@@ -574,6 +1015,16 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     ledger = out / "dispatch.jsonl"
     cells = plan(config, replicates)
     replay_eval.validate_cell_artifacts(config["tasks"], config["arms"], replicates, directory=out)
+    if (out / LOOK).exists():  # the single look was taken: no attempt may follow it
+        return {"stop": "looked", "calls": 0}
+    if options["quota_gate"]:
+        validate_quota_probe(config)  # before the seal, not at the first gate
+    try:
+        flagged = set(json.loads((config_path.parent / "sensitivity.json").read_text()).get("load_sensitive", []))
+    except (OSError, ValueError, AttributeError):
+        flagged = set()
+    if flagged & {t["id"] for t in config["tasks"]}:  # its grade moved with the load: drop it from the set before any attempt
+        return {"stop": "load-sensitive-oracle", "tasks": sorted(flagged & {t["id"] for t in config["tasks"]}), "calls": 0}
     results, receipts = replay_eval.read_cell_artifacts(out)
     done = set(results)
     orphans = set(receipts) - done
@@ -583,14 +1034,66 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
             return {"stop": "unreadable-dispatch-history", "calls": 0}
         if ambiguous_history:
             return {"stop": "ambiguous-dispatch-history", "calls": 0}
-        for row in history:
-            if row["cell"] not in done:
+        last = {row["cell"]: row for row in history}
+        for row in history:  # a refused attempt set aside for redispatch is not an orphan
+            if row["cell"] not in done and not (last[row["cell"]].get("requeued") is True and "finished_at" in last[row["cell"]]):
                 orphans.add(row["cell"])
     except (OSError, ValueError):
         return {"stop": "unreadable-dispatch-history", "calls": 0}
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
+    refusals = [row for row in history if "finished_at" in row and row.get("refused") is True]
+    remaining = any(replay_eval.cell_id(t, a, r) not in done for t, r, a in cells)
+    if refusals and remaining:  # resuming inside the outage would only lose cells to it (the newest refusal counts); a finished run has none to lose
+        age = (datetime.now(timezone.utc) - max(harness_report._instant(row["finished_at"]) for row in refusals)).total_seconds()
+        if age < RATE_LIMIT_COOLDOWN_S:
+            return {"stop": "rate-limit-cooldown", "calls": 0, "retry_after_s": round(RATE_LIMIT_COOLDOWN_S - age)}
+    try:
+        sealed = seal(config, config_path.parent)
+    except OSError:
+        return {"stop": "executable-unreadable", "calls": 0}
+    manifest = out / RUN_MANIFEST
+    bound = _bound_digests(history)
+    try:
+        recorded = _read_manifest(manifest)
+    except ValueError:
+        return {"stop": "manifest-unreadable", "calls": 0}
+    if recorded is None:
+        if bound:  # dispatches named a manifest that is gone: never re-seal over them
+            return {"stop": "manifest-missing", "calls": 0}
+        # a directory from before 1.8 is sealed now and reported as sealed-late; written whole, then renamed
+        with tempfile.NamedTemporaryFile("w", dir=out, prefix="." + RUN_MANIFEST + ".", delete=False) as handle:
+            handle.write(json.dumps({**sealed, "compare": config.get("compare"), "sealed_at": _now(), "cells_before_seal": len(done),
+                                     "dispatches_before_seal": sum("dispatched_at" in row for row in history),
+                                     "version": _version(), "set_file_sha256": _sha256(config_path)}, indent=1) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(handle.name, manifest)
+    else:
+        # keys a later 007 adds to the seal are compared only once a manifest records them
+        changed = sorted(key for key in sealed if key not in ("executables", "sealed_parts", "program_sealed", "unsealed_files") and key in recorded
+                         and recorded[key] != sealed[key])
+        old, new = recorded.get("executables") or {}, sealed["executables"]
+        parts = sorted(part for part in set(old) | set(new) if old.get(part) != new.get(part))
+        changed += [f"executables:{part}" for part in parts]
+        details = {part: {"sealed": old.get(part), "found": new.get(part)} for part in parts}
+        if "toolchain" in changed:
+            details["toolchain"] = {"sealed": recorded.get("toolchain"), "found": sealed["toolchain"]}
+        if bound and bound != {_sha256(manifest)}:
+            changed.append("manifest")
+        binding = _binding(out, recorded, _sha256(manifest), history)
+        if binding[1] > recorded.get("dispatches_before_seal", 0):
+            changed.append("unbound-dispatches")  # a controller that does not seal dispatched after the seal
+        if binding[2] > recorded.get("cells_before_seal", 0):
+            changed.append("unbound-cells")  # results no sealed dispatch produced: copied in, or a lost ledger
+        if changed:  # not a STOP: restoring what was sealed makes the run resumable again, except an unbound one
+            return {"stop": "manifest-mismatch", "changed": changed, "details": details, "calls": 0}
+    sealed_digest = _sha256(manifest)
+    cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
+    arm_of = {cell_name(c): c[2] for c in cells}
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
+    refused_per_arm = {arm: 0 for arm in config["arms"]}
+    over, requeued = 0, 0
 
     def charge(cost):
         nonlocal spent, stop
@@ -601,67 +1104,160 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                 spent = None
                 stop = stop or "cost-total-unavailable"
 
+    def over_limit(cost, live=False):
+        nonlocal stop, over
+        if cost is not None and cost > stop_usd:
+            if options["over_limit"] == "stop":  # live, as in 1.8.1, it replaces any stop set earlier in the same pass
+                stop = "cell-over-limit" if live else stop or "cell-over-limit"
+            else:
+                over += 1  # recorded; only the total cap stops the run
+
+    probe_usd, probe_unmeasured = probe_costs(out)
+    if probe_usd or probe_unmeasured:
+        charge(probe_usd)  # quota probes this run already made; one without a measured cost at the --stop-usd reserve
+        for _ in range(probe_unmeasured):
+            charge(None)
+    for row in refusals:  # the live decision, recorded in the ledger once per refused attempt
+        if row["cell"] in arm_of:
+            refused_per_arm[arm_of[row["cell"]]] += 1
+        if row.get("requeued") is True:  # its files were set aside: the ledger keeps what it was charged
+            requeued += 1
+            charge(row["cost_usd"] if harness_report._valid_money(row.get("cost_usd")) else None)
     for name in done:
         row = json.loads((out / f"{name}.json").read_text())
+        rate_limited = row.get("failure_class") == "provider-rate-limit"  # the live decision, never the receipt alone
         cost = cost_of(out, name, row)
         if cost is None and row.get("valid") is True:
             stop = "cost-unavailable"
         else:
             charge(cost)
-            if cost is not None and cost > stop_usd:
-                stop = stop or "cell-over-limit"
-        invalid += row.get("valid") is not True
+            over_limit(cost)
+        invalid += row.get("valid") is not True and not rate_limited
     if invalid >= max_invalid:
         stop = stop or "invalid-budget"
-    cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
-    todo = [c for c in cells if cell_name(c) not in done]
-    calls = 0
+    calls, waited = 0, 0
+    marker = options["cost_marker_at"] is not None and not (out / "MARKER.json").exists()
+    logging = threading.Event()
+    if options["max_load"] is not None:
+        threading.Thread(target=_load_logger, args=(out, logging), daemon=True).start()
 
     def one(cell):
         task, rep, arm = cell
-        return cell, execute(config, task, arm, rep, out, timeout_s)
-    with ThreadPoolExecutor(jobs) as pool_:
-        active, queue = set(), iter(todo)
-        while True:
-            while not stop and len(active) < jobs:
+        try:
+            return cell, execute(config, task, arm, rep, out, timeout_s)
+        except Exception as error:  # one cell's failure (a refused snapshot, a crash) is an invalid cell, never the whole run
+            row = _controller_failure(out, task, arm, rep, error, config.get("retain_diagnostic_text", True) is True)
+            detail = row.get("controller_error") or _error_detail(error)
+            text = f": {detail['message']}" if detail["message"] is not None else ""
+            print(f"007 lab: {replay_eval.cell_id(task, arm, rep)}: {detail['type']}{text} (at {detail['where']})", file=sys.stderr)
+            return cell, row
+    try:
+        with ThreadPoolExecutor(jobs) as pool_:
+            while not stop:
+                if marker and len(done) >= options["cost_marker_at"]:  # also on a resume that starts past it
+                    marker = False
+                    if not cost_marker(out, cells, arm_of, stop_usd, options["cost_marker_hold_usd"]):
+                        stop = "cost-marker-hold"
+                        break
+                if (out / LOOK).exists():  # a look taken while this run was paused between chunks
+                    stop = "looked"
+                    break
+                todo = [c for c in cells if cell_name(c) not in done]
+                if not todo:
+                    break
                 if calls >= max_calls:
-                    stop = stop or ("call-budget" if next(queue, None) else None)
+                    stop = "call-budget"
                     break
-                try:
-                    reserved = harness_report._money_sum((spent, stop_usd * (len(active) + 1)))
-                except ValueError:
-                    reserved = None
-                if reserved is None or reserved > harness_report._money_sum((max_usd,)):
-                    stop = "usd-budget"
+                size = len(todo) if options["chunk"] is None else options["chunk"]
+                if marker and len(done) < options["cost_marker_at"]:
+                    size = min(size, options["cost_marker_at"] - len(done))  # the marker reads exactly its first cells
+                if options["max_load"] is not None and not quiet(out, options["max_load"], options["load_wait_s"], f"chunk at {len(done)}"):
+                    stop = "machine-busy"
                     break
-                cell = next(queue, None)
-                if cell is None:
+                if options["quota_gate"]:
+                    try:  # the probe is a paid call: it needs room for its reserve, like a cell
+                        room = spent is not None and harness_report._money_sum((spent, stop_usd)) <= harness_report._money_sum((max_usd,))
+                    except ValueError:
+                        room = False
+                    if not room:
+                        stop = "usd-budget"
+                        break
+                    ok, _, cost = quota_check(config, out, len(todo) / len(cells))
+                    if cost is None:
+                        probe_unmeasured += 1  # charged its reserve, as a cell without a cost
+                    else:
+                        probe_usd += cost
+                    charge(cost)
+                    if not ok:
+                        stop = "quota-hold"
+                        break
+                pending, active, sent = list(todo[:size]), set(), 0
+                while True:
+                    while not stop and len(active) < jobs and pending:
+                        if calls >= max_calls:
+                            stop = "call-budget"
+                            break
+                        try:
+                            reserved = harness_report._money_sum((spent, stop_usd * (len(active) + 1)))
+                        except ValueError:
+                            reserved = None
+                        if reserved is None or reserved > harness_report._money_sum((max_usd,)):
+                            stop = "usd-budget"
+                            break
+                        cell = pending.pop(0)
+                        calls += 1
+                        sent += 1
+                        with ledger.open("a") as handle:
+                            handle.write(json.dumps({"cell": cell_name(cell), "dispatched_at": _now(), "manifest_sha256": sealed_digest}) + "\n")
+                        active.add(pool_.submit(one, cell))
+                    if not active:
+                        break
+                    finished, active = wait(active, return_when=FIRST_COMPLETED)
+                    for future in finished:
+                        cell, row = future.result()
+                        cid = cell_name(cell)
+                        rate_limited = row.get("valid") is not True and refused(out, cid)
+                        if rate_limited:
+                            row = {**row, "failure_class": "provider-rate-limit", "failure_class_observed": row.get("failure_class")}
+                            with tempfile.NamedTemporaryFile("w", dir=out, prefix=f".{cid}.", delete=False) as handle:
+                                handle.write(json.dumps(row))
+                                handle.flush()
+                                os.fsync(handle.fileno())
+                            os.replace(handle.name, out / f"{cid}.json")
+                            refused_per_arm[cell[2]] += 1
+                            stop = "rate-limit" if stop in (None, "call-budget") else stop  # a pause outranks a planned call budget
+                        cost = cost_of(out, cid, row)
+                        again = rate_limited and options["requeue_refused"]
+                        if again:  # dispatched again after the pause; its files kept under refused/
+                            _set_aside(out, cid)
+                            requeued += 1
+                        else:
+                            done.add(cid)
+                        with lock, ledger.open("a") as handle:
+                            handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": cost, "valid": row.get("valid"),
+                                                     **({"refused": True} if rate_limited else {}), **({"requeued": True} if again else {})}) + "\n")
+                        invalid += row.get("valid") is not True and not rate_limited
+                        if cost is None and row.get("valid") is True:
+                            stop = "cost-unavailable"
+                        else:
+                            charge(cost)  # A failed call with no receipt cost is charged its reserve.
+                            over_limit(cost, live=True)
+                        if invalid >= max_invalid:
+                            stop = "invalid-budget"
+                if stop == "rate-limit" and options["rate_limit_wait_s"] and waited + RATE_LIMIT_COOLDOWN_S <= options["rate_limit_wait_s"]:
+                    time.sleep(RATE_LIMIT_COOLDOWN_S)  # wait out the outage inside the run, within the allowance
+                    waited += RATE_LIMIT_COOLDOWN_S
+                    stop = None
+                    continue
+                if not sent and not stop:
                     break
-                calls += 1
-                with ledger.open("a") as handle:
-                    handle.write(json.dumps({"cell": cell_name(cell), "dispatched_at": _now()}) + "\n")
-                active.add(pool_.submit(one, cell))
-            if not active:
-                break
-            finished, active = wait(active, return_when=FIRST_COMPLETED)
-            for future in finished:
-                cell, row = future.result()
-                cid = cell_name(cell)
-                cost = cost_of(out, cid, row)
-                with lock, ledger.open("a") as handle:
-                    handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": cost, "valid": row.get("valid")}) + "\n")
-                invalid += row.get("valid") is not True
-                if cost is None and row.get("valid") is True:
-                    stop = "cost-unavailable"
-                else:
-                    charge(cost)  # A failed call with no receipt cost is charged its reserve.
-                    if cost is not None and cost > stop_usd:
-                        stop = "cell-over-limit"
-                if invalid >= max_invalid:
-                    stop = "invalid-budget"
-    if stop and stop != "call-budget":  # a call budget is a planned pause: the next stage resumes it
+    finally:
+        logging.set()
+    if stop and stop not in PLANNED_PAUSES:
         (out / "STOP.json").write_text(json.dumps({"stop": stop, "at": _now(), "spent": spent, "calls": calls}))
-    return {"stop": stop, "calls": calls, "spent": spent, "invalid": invalid, "cells": len(cells)}
+    return {"stop": stop, "calls": calls, "spent": spent, "invalid": invalid, "refused": sum(refused_per_arm.values()),
+            "refused_per_arm": refused_per_arm, "requeued": requeued, "over_limit_cells": over, "cells": len(cells),
+            "quota_probe_usd": probe_usd, "quota_probes_unmeasured": probe_unmeasured}
 
 
 # ---- score and report
@@ -952,17 +1548,218 @@ def verdict(c, ci, *, valid, tasks, split_tasks, sensitive, accepted_share, next
     return {"thesis": thesis, "informative_acceptance": informative, "time": "SURVIVES" if survives else "NOT-SURVIVES", "durability": durability, "rework_ok": rework}
 
 
-def report(config_path, results, next_results):
+def _decode_cell(cell, task_ids, arms):
+    """(task, arm, replicate) of a cell id, read against the set's own task ids and arm names; None when no reading or several fit."""
+    found = set()
+    for arm in arms:
+        if cell.endswith("-" + arm):
+            match = re.fullmatch(r"(.+)-r([0-9]{2,3})", cell[:-len(arm) - 1])  # a replicate past 999 is unread, not planned
+            if match and match[1] in task_ids:
+                found.add((match[1], arm, int(match[2])))
+    return found.pop() if len(found) == 1 else None
+
+
+def arm_accounting(config, results, rows, receipts):
+    """Per arm, the fate of every planned cell: never dispatched, attempted with no result (a dispatch or a receipt without a result:
+    an orphan or a cell in flight), invalid by failure class, valid, accepted. Planned counts every task at the most replicates any
+    attempted or finished cell of this run reached. `history` says whether the dispatch ledger was complete, absent, damaged or
+    unreadable; without a complete one, a dispatch that left no receipt counts as never dispatched."""
+    bad = ambiguous = None
+    if not (results / "dispatch.jsonl").exists():
+        history, status = [], "absent"
+    else:
+        try:
+            history, bad, ambiguous = replay_eval.load_dispatch_history(results)
+            dispatched_cells = {row["cell"] for row in history if "dispatched_at" in row}
+            status = "damaged" if bad or ambiguous else "partial" if set(r["cell"] for r in rows) - dispatched_cells else "complete"
+        except (OSError, ValueError):
+            history, status = [], "unreadable"
+    attempted = {row["cell"] for row in history if "dispatched_at" in row} | set(receipts)
+    by_cell = {r["cell"]: r for r in rows}
+    task_ids, arms = {t["id"] for t in config.get("tasks", [])}, list(config.get("arms", {}))
+    decoded = [_decode_cell(cell, task_ids, arms) for cell in attempted | set(by_cell)]
+    replicates = max((d[2] for d in decoded if d), default=0)
+    refusals = [row["cell"] for row in history if "finished_at" in row and row.get("refused") is True]
+    table = {}
+    for arm in arms:
+        planned = {replay_eval.cell_id(task, arm, k) for task in config.get("tasks", []) for k in range(1, replicates + 1)}
+        done = [by_cell[c] for c in planned if c in by_cell]
+        invalid = {}
+        for row in done:
+            if row.get("valid") is not True:
+                kind = row.get("failure_class") if isinstance(row.get("failure_class"), str) else "unknown"
+                invalid[kind] = invalid.get(kind, 0) + 1
+        table[arm] = {"planned": len(planned), "not_dispatched": len(planned - attempted - set(by_cell)),
+                      "no_result": len((planned & attempted) - set(by_cell)), "valid": sum(r.get("valid") is True for r in done),
+                      "accepted": sum(r.get("valid") is True and bool(r.get("accepted")) for r in done), "invalid": dict(sorted(invalid.items())),
+                      # attempts the provider refused, each one counted (a requeued cell's set-aside attempts are in the ledger only)
+                      "refused": max(sum(c in planned for c in refusals), invalid.get("provider-rate-limit", 0))}
+    return {"history": status, "ledger_invalid_lines": bad, "ledger_ambiguous_cells": ambiguous, "unread_cells": sum(d is None for d in decoded),
+            "replicates": replicates, "arms": table}
+
+
+VERDICT_ORDER = ["KILL", "NO-INFORMATION", "NOT-PROVEN", "PROVEN"]
+
+
+def _paired(rows, low, ref):
+    """Reading B: only (task, replicate) pairs with a cell of both arms."""
+    arms = {}
+    for r in rows:
+        arms.setdefault((r["task"], r["replicate"]), set()).add(r["arm"])
+    return [r for r in rows if arms[(r["task"], r["replicate"])] >= {low, ref}]
+
+
+def _usable(row):
+    return row is not None and row.get("valid") is True and not row.get("outcomes_unreadable")
+
+
+def _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=True):
+    diffs = reachable_diffs(cells, task_dir, low, ref, reach=reach)
+    s = paired_interval(diffs)
+    e = {"tasks": s["tasks"], "mean": s["mean"], "ci95": s["ci95"], "statistic": studentized(diffs, margin) if s["tasks"] > 1 else None}
+    if s["tasks"] < GATES["min_signal_tasks"] or s["ci95"] is None:
+        e["verdict"] = "NO-INFORMATION"
+    elif s["ci95"][1] < -margin:
+        e["verdict"] = "KILL"
+    elif critical:
+        own = proven_critical(cells, task_dir, low, ref, seed, margin=margin, reach=reach)
+        e.update(critical_own=own, critical=max(floor or -math.inf, math.inf if own is None else own))
+        e["verdict"] = "PROVEN" if e["statistic"] > e["critical"] else "NOT-PROVEN"
+    else:
+        e["verdict"] = "not-computed"  # simulated only where it can change the answer
+    return e
+
+
+def _cost_ratio(cells, results, low, ref, reserve, worst=False):
+    """Cost per accepted change at `low` over the same at `ref`. A cell with no measured cost counts at `reserve`; in the worst
+    case at `reserve` for `low` and zero for `ref`, and an invalid `ref` cell counts as accepted."""
+    def cost(r):
+        value = cost_of(results, r["cell"], r)
+        return value if harness_report._valid_money(value) else (reserve if r["arm"] == low else 0.0) if worst else reserve
+
+    def per(arm):
+        mine = [r for r in cells if r["arm"] == arm]
+        accepted = sum(bool(r.get("accepted")) if r.get("valid") is True else worst and arm == ref for r in mine)
+        return sum(map(cost, mine)) / accepted if accepted else math.inf
+    a, b = per(low), per(ref)
+    return a / b if math.isfinite(a) and math.isfinite(b) and b > 0 else math.inf
+
+
+def _ratio_interval(cells, results, low, ref, reserve, seed, worst):
+    tasks = sorted({r["task"] for r in cells})
+    by, rng, draws = {t: [r for r in cells if r["task"] == t] for t in tasks}, random.Random(seed), []
+    for _ in range(GATES["draws"]):
+        draws.append(_cost_ratio([r for t in (rng.choice(tasks) for _ in tasks) for r in by[t]], results, low, ref, reserve, worst))
+    draws.sort()
+    return [draws[int(.025 * len(draws))], draws[int(.975 * len(draws)) - 1]]
+
+
+def missing_data_guard(config, results, task_dir, every, planned, low, ref, margin, reserve, reach=None):
+    """F-1's missing-data guard, made native (`report --missing-data-guard`). L0 reads the valid cells, in readings P (all) and B
+    (pairs with both arms); the worse decides. L2 takes the plan and imputes every planned cell without a usable valid result
+    (invalid of any class, refused, never dispatched, or valid with unreadable outcomes) as the worst case for `low`: `low` fails
+    every reachable test, `ref` passes every one; its critical value is simulated again. PROVEN needs PROVEN in L0 and L2, in P and
+    B; L0 PROVEN with L2 short of it reads NOT-PROVEN, "not decisive by missing data". KILL follows L0. R is the cost per accepted
+    change at `low` over `ref` (refusals left out), with a task bootstrap, and a worst case. Answer: PAYS (PROVEN and both R upper
+    bounds below 1), PROVEN-NOT-ECONOMIC, DOES-NOT-PAY (KILL), else the verdict. The instrument checks (serial re-grade, A/A) are
+    not part of it."""
+    seed, floor, frozen = config["seed"], (config.get("compare") or {}).get("critical_floor"), reach is not None
+    rows = [r for r in every if r.get("valid") is True]
+    if reach is None:  # the run's own reach, fixed from the valid cells, so imputed cells cannot move the denominator
+        reach = {}
+        for task in sorted({r["task"] for r in rows}):
+            hidden = [k for k in json.loads((task_dir / task / "hidden.json").read_text()) if k != "__module__"]
+            base = set(json.loads((task_dir / task / "baseline.json").read_text()))
+            reach[task] = [k for k in hidden if k not in base and any(c["acceptance_outcomes"].get(k) == "pass" for c in rows if c["task"] == task)]
+    readings = {name: _reading(cells, task_dir, low, ref, margin, seed, reach, floor) for name, cells in (("P", rows), ("B", _paired(rows, low, ref)))}
+    verdict = min((e["verdict"] for e in readings.values()), key=VERDICT_ORDER.index)
+    by = {(r["task"], r["replicate"], r["arm"]): r for r in every}
+    imputed, reasons = [], {}
+    for task, rep, arm in planned:
+        r = by.get((task, rep, arm))
+        if _usable(r):
+            imputed.append(r)
+            continue
+        why = "absent" if r is None else "refused" if r.get("failure_class") == "provider-rate-limit" else "unreadable" if r.get("valid") is True else "invalid"
+        reasons[why] = reasons.get(why, 0) + 1
+        imputed.append({"task": task, "replicate": rep, "arm": arm, "cell": replay_eval.cell_id({"id": task}, arm, rep), "valid": True,
+                        "imputed": why, "acceptance_outcomes": {k: "fail" if arm == low else "pass" for k in reach.get(task, [])}})
+    guard = {"planned": len(planned), "usable": len(planned) - sum(reasons.values()), "imputed_in_L2": reasons, "label": None,
+             "unusable_cells": sorted(r["cell"] for r in every if not _usable(r))}
+    if reasons:
+        guard["L2"] = {name: _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=verdict == "PROVEN")
+                       for name, cells in (("P", imputed), ("B", _paired(imputed, low, ref)))}
+        if verdict == "PROVEN" and any(e["verdict"] != "PROVEN" for e in guard["L2"].values()):
+            verdict, guard["label"] = "NOT-PROVEN", "not decisive by missing data"
+    dispatched = [r for r in every if r.get("failure_class") != "provider-rate-limit"]
+    ratio, ratio_worst = (_cost_ratio(dispatched, results, low, ref, reserve, w) for w in (False, True))
+    ci, ci_worst = (_ratio_interval(dispatched, results, low, ref, reserve, seed, w) for w in (False, True))
+    answer = ("PAYS" if max(ci[1], ci_worst[1]) < 1 else "PROVEN-NOT-ECONOMIC") if verdict == "PROVEN" else "DOES-NOT-PAY" if verdict == "KILL" else verdict
+    return {"verdict": verdict, "answer": answer, "margin": margin, "critical_floor": floor, "reserve_usd": reserve, "readings": readings,
+            "missing_data": guard, "cost_ratio": ratio, "cost_ratio_ci95": ci, "cost_ratio_worst": ratio_worst, "cost_ratio_worst_ci95": ci_worst,
+            "reach_frozen": frozen, "refused": len(every) - len(dispatched)}
+
+
+def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None, planned_replicates=None):
+    """`single_look`: the report may be read once, with no run active on the results; it writes LOOK.json, after which neither
+    `report` nor `run` works on them. `missing_data_guard_reserve` (US$ for a cell with no measured cost, normally the run's
+    --stop-usd) adds the guard, which needs `planned_replicates` (the run's --replicates: the plan is not recorded). `frozen_reach`
+    ({task: [tests]}, fixed before the attempts) replaces the reach the run's own cells would give; its digest is reported."""
+    if (results / LOOK).exists():
+        raise ValueError(f"the single look has been taken ({LOOK} exists): these results are not read again: {results}")
+    if missing_data_guard_reserve is not None and (type(planned_replicates) is not int or planned_replicates < 1):
+        raise ValueError("the missing-data guard needs the run's planned replicates")
+    if not single_look:
+        return _report(config_path, results, next_results, False, missing_data_guard_reserve, frozen_reach, planned_replicates)
+    with contextlib.ExitStack() as locks:  # no run may add cells, to stage 1 or stage 2, while the single look is taken
+        for directory in [results] + ([next_results] if next_results else []):
+            handle = locks.enter_context((directory / ".run.lock").open("a"))
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError(f"a run is active on these results: the single look waits for it: {directory}") from None
+        if (results / LOOK).exists():  # checked again under the lock: two looks cannot both pass
+            raise ValueError(f"the single look has been taken ({LOOK} exists): these results are not read again: {results}")
+        return _report(config_path, results, next_results, True, missing_data_guard_reserve, frozen_reach, planned_replicates)
+
+
+def _report(config_path, results, next_results, single_look, missing_data_guard_reserve, frozen_reach, planned_replicates):
     config = json.loads(config_path.read_text())
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
+    manifest = sealed_state(config, results)
     rows = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
+    accounting = arm_accounting(config, results, rows, receipts)
+    every = rows
     orphans = sorted(set(receipts) - {r["cell"] for r in rows})
     excluded = sorted(r["cell"] for r in rows if r["valid"] is not True)
     rows = [r for r in rows if r["valid"] is True]
     if not rows:
         raise ValueError(f"no valid cells to report ({len(excluded)} invalid, {len(orphans)} orphan receipts)")
+    stage2 = None
+    if next_results:  # stage 2 must be chained from this sealed run, at the reference arm, and bound to its own seal
+        upstream = _read_manifest(next_results / RUN_MANIFEST)
+        if upstream is None and manifest["sha256"]:
+            raise ValueError(f"next results predate the seal of these results: chain again into a new directory, or report without them")
+        if upstream is None:
+            ledger = _ledger(next_results)
+            if ledger is None or _bound_digests(ledger):
+                raise ValueError(f"next results lost the manifest their dispatches name, or their ledger cannot be read: {next_results}")
+            stage2 = {"state": "absent", "sha256": None, "unbound_dispatches": None, "unbound_cells": None}
+        if upstream is not None and (upstream.get("parent_manifest_sha256") != manifest["sha256"] or upstream.get("arms") != {"next": config["arms"][ref]}):
+            raise ValueError(f"next results are not chained from these results at the reference arm: {next_results}")
+        if upstream is not None:
+            ledger, digest = _ledger(next_results), _sha256(next_results / RUN_MANIFEST)
+            if ledger is None or (_bound_digests(ledger) and _bound_digests(ledger) != {digest}):
+                raise ValueError(f"next results do not match their own seal: {next_results}")
+            command = hashlib.sha256(json.dumps(config.get("agent_command"), sort_keys=True).encode()).hexdigest()
+            if "agent_command_sha256" in upstream and upstream["agent_command_sha256"] != command:
+                raise ValueError(f"next results ran another agent command than these results: {next_results}")
+            state, unbound, unbound_cells = _binding(next_results, upstream, digest, ledger)
+            if state == "unbound":
+                raise ValueError(f"next results are unbound from their own seal (another controller, or cells copied in): {next_results}")
+            stage2 = {"state": state, "sha256": digest, "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
     following = [r for r in load_cells(next_results) if r["valid"] is True] if next_results else []
     next_rows = {r["task"][:-len("-next")]: r for r in following}
     durable = {r["cell"]: bool(r["accepted"] and r["cell"] in next_rows and next_rows[r["cell"]]["accepted"]) for r in rows}
@@ -994,24 +1791,42 @@ def report(config_path, results, next_results):
                  "superseded_verdict": same_change(diff, unseen_ci, sum(map(len, tests.values())), len(signal), sensitive)}
     task_dir = config_path.parent / "tasks"
     margin = declared_margin(config)
-    diffs = reachable_diffs(rows, task_dir, low, ref)
+    diffs = reachable_diffs(rows, task_dir, low, ref, reach=frozen_reach)
     reachable = paired_interval(diffs)
-    critical = proven_critical(rows, task_dir, low, ref, config["seed"], margin)
+    critical = proven_critical(rows, task_dir, low, ref, config["seed"], margin, reach=frozen_reach)
     tier["margin"] = margin
+    tier["compare_changed_after_seal"] = manifest["compare_changed"]
+    tier["run_binding"] = manifest["state"]
+    # a limit can be per model: unequal refusals mean the arms' valid cells may cover different commits
+    tier["refused_unequal"] = len({a.get("refused", 0) for a in accounting["arms"].values()}) > 1
+    tier["next_run_binding"] = stage2["state"] if stage2 else None
     tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, margin, critical=math.inf if critical is None else critical)
     proof = {"critical": critical, "statistic": studentized(diffs, margin) if len(diffs) > 1 else None,
-             "t975": t975(len(diffs) - 1) if len(diffs) > 1 else None, "t_false_proven": false_proven(rows, task_dir, low, ref, config["seed"], margin)}
+             "t975": t975(len(diffs) - 1) if len(diffs) > 1 else None, "t_false_proven": false_proven(rows, task_dir, low, ref, config["seed"], margin, reach=frozen_reach)}
     if tier["same_change_reachable"] == "KILL":
         tier["thesis"] = "KILLED"
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
         tier["thesis"] = "UNPROVEN"
-    aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a)) for a in (low, ref)}
-    result = {"schema": "007-lab/report/v6", "at": _now(), "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
+    aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a, reach=frozen_reach)) for a in (low, ref)}
+    guard = None
+    if missing_data_guard_reserve is not None:
+        if planned_replicates < accounting["replicates"]:
+            raise ValueError(f"cells reach replicate {accounting['replicates']}, beyond the {planned_replicates} planned")
+        planned = [(t["id"], rep, arm) for t, rep, arm in plan(config, planned_replicates)]
+        guard = missing_data_guard(config, results, task_dir, every, planned, low, ref, margin, missing_data_guard_reserve, frozen_reach)
+    if stage2 is not None:
+        stage2["stage1_cells_chained"] = sum(r["cell"] in next_rows for r in rows)
+        stage2["stage1_cells"] = len(rows)
+    result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "next_run_manifest": stage2, "arm_accounting": accounting, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
-              "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES}
+              "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES,
+              "missing_data_guard": guard, "reach_frozen": frozen_reach is not None,
+              "frozen_reach_sha256": hashlib.sha256(json.dumps(frozen_reach, sort_keys=True).encode()).hexdigest() if frozen_reach is not None else None}
     (results / "report.json").write_text(json.dumps(result, indent=1) + "\n")
     (results / "report.md").write_text(summary(result, low, ref, len(rows)))
+    if single_look:
+        (results / LOOK).write_text(json.dumps({"at": _now(), "report_sha256": _sha256(results / "report.json")}, indent=1) + "\n")
     return result
 
 
@@ -1027,12 +1842,42 @@ def summary(result, low, ref, attempts):
     interval = f" (mean {points(r['mean'])} points, 95% interval {points(r['ci95'][0])} to {points(r['ci95'][1])}, {r['tasks']} commits)" if r.get("ci95") else ""
     saving = f"{100 * c['reduction']:.0f}% less agent time per accepted change" if c["reduction"] is not None else "agent time not comparable"
     reasoning = result["median_reasoning_tokens"]
+    sealed = result.get("run_manifest")  # absent from reports written before 1.8
+    binding = {"sealed": "the set, the agent command's sealed files, 007 and Python matched the seal, made before the first dispatch, each time the run started or resumed",
+               "sealed-late": "sealed only after some attempts had run: those earlier attempts are not bound to it",
+               "unbound": "some attempts after the seal do not name it (another controller, or cells copied in): the seal binds none of them",
+               "absent": "no run manifest: nothing binds the attempts to one set"}[sealed["state"]] if sealed else None
+    if binding and sealed.get("sealed_parts") is not None:
+        binding += f"; sealed files: {', '.join(sealed['sealed_parts']) or 'none'}"
+    if binding and sealed.get("unsealed_files"):
+        binding += f"; left out by the set: {', '.join(sealed['unsealed_files'])}"
+    if binding and sealed.get("program_sealed") is False:
+        binding += "; the agent command's program itself was not sealed (a relative or unresolved path)"
+    if binding and sealed["compare_changed"]:
+        binding += "; the comparison or margin changed after the seal, so the margin was not declared before these attempts"
+    accounting = result.get("arm_accounting")
     return "\n".join([
         f"# `{low}` vs `{ref}`: {attempts} valid attempts",
         "",
         f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {reasoning[low]:.0f} vs {reasoning[ref]:.0f}.",
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
+        *([f"- **Run binding:** {binding}."] if binding else []),
+        *[f"- **Cells, `{arm}`:** {a['planned']} planned, {a['not_dispatched']} never dispatched, {a['no_result']} attempted without a result, "
+          f"{sum(a['invalid'].values())} invalid" + (f" ({', '.join(f'{k} {v}' for k, v in a['invalid'].items())})" if a['invalid'] else "")
+          + f", {a['valid']} valid, {a['accepted']} accepted" + (f"; {a['refused']} attempts refused by the provider" if a.get('refused') else "")
+          + "." for arm, a in (accounting or {}).get("arms", {}).items()],
+        *(["- **Refusals hit the arms unequally:** a provider limit can be per model, so the arms' valid cells may cover different commits."]
+          if accounting and len({a.get("refused", 0) for a in accounting.get("arms", {}).values()}) > 1 else []),
+        *([f"- **Missing-data guard:** {g['verdict']}" + (f" ({g['missing_data']['label']})" if g["missing_data"]["label"] else "")
+           + f", answer {g['answer']}; {g['missing_data']['usable']} of {g['missing_data']['planned']} planned cells usable; cost per accepted change "
+           f"{g['cost_ratio']:.3f} of `{ref}`'s (95% {g['cost_ratio_ci95'][0]:.3f} to {g['cost_ratio_ci95'][1]:.3f}; worst case "
+           f"{g['cost_ratio_worst']:.3f}, {g['cost_ratio_worst_ci95'][0]:.3f} to {g['cost_ratio_worst_ci95'][1]:.3f}). The instrument checks are not part of it."]
+          if (g := result.get("missing_data_guard")) else []),
+        *([f"- **Dispatch ledger:** {accounting['history']}; the counts above may be incomplete."] if accounting and accounting["history"] != "complete" else []),
+        *([f"- **Stage 2:** {result['next_run_manifest']['state']}; {result['next_run_manifest']['stage1_cells_chained']} of "
+           f"{result['next_run_manifest']['stage1_cells']} valid stage-1 attempts have a valid stage-2 attempt; the others count as not durable."]
+          if result.get("next_run_manifest") else []),
         "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits, models or specification forms other than these.",
         f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
         "",
@@ -1046,17 +1891,34 @@ def main(argv=None):
         sub = commands.add_parser(name)
         sub.add_argument(target, type=Path, required=True, dest="path")
         sub.add_argument("--out", type=Path, required=name in ("mine", "run", "chain"))
-        sub.add_argument("--jobs", type=int, default=max(2, (os.cpu_count() or 4) // 3))
+        sub.add_argument("--jobs", type=int, default=jobs_limit(), help="parallel cells; above a quarter of the cores (at least 2) it warns")
+        sub.add_argument("--strict-jobs", action="store_true", help="refuse --jobs above that limit instead of warning")
         if name == "run":
             sub.add_argument("--replicates", type=int, required=True)
             sub.add_argument("--max-calls", type=int, required=True)
             sub.add_argument("--max-usd", type=float, required=True)
             sub.add_argument("--stop-usd", type=float, default=5.0)
             sub.add_argument("--max-invalid", type=int, default=3, help="stop once this many cells are invalid (never retried)")
+            sub.add_argument("--requeue-refused", action="store_true",
+                             help="a cell the provider refused is set aside under refused/ and dispatched again after the pause")
+            sub.add_argument("--over-limit", choices=("stop", "record"), default="stop",
+                             help="a cell costing more than --stop-usd: stop the run (default) or record it and go on to the --max-usd cap")
+            sub.add_argument("--chunk", type=int, help="dispatch at most this many cells, wait for them, run the gates, then the next chunk")
+            sub.add_argument("--max-load", type=float, help="before each chunk, wait for the 5-minute load to fall under this; logs load.log")
+            sub.add_argument("--load-wait-s", type=int, default=3600, help="how long to wait for --max-load before pausing (machine-busy)")
+            sub.add_argument("--quota-gate", action="store_true", help="before each chunk, run the set's quota_probe and pause (quota-hold) unless it has room")
+            sub.add_argument("--cost-marker-at", type=int, help="after this many cells, project the cost once (needs --cost-marker-hold-usd)")
+            sub.add_argument("--cost-marker-hold-usd", type=float, help="a projection above this holds the run for good (HOLD.json)")
+            sub.add_argument("--rate-limit-wait-s", type=int, default=0, help="wait out rate-limit pauses inside the run, up to this long in all")
         if name in ("chain", "report"):
             sub.add_argument("--results", type=Path, required=True)
         if name == "report":
             sub.add_argument("--next-results", type=Path)
+            sub.add_argument("--single-look", action="store_true", help="write LOOK.json: these results are never read or run again")
+            sub.add_argument("--missing-data-guard", action="store_true", help="add L0/L2 from the plan and the worst-case cost ratio")
+            sub.add_argument("--reserve-usd", type=float, help="with --missing-data-guard: a cell with no measured cost counts at this (the run's --stop-usd)")
+            sub.add_argument("--frozen-reach", type=Path, help="JSON {task: [tests]} fixed before the attempts, instead of the run's own reach")
+            sub.add_argument("--replicates", type=int, help="with --missing-data-guard: the run's --replicates, which fixes the plan")
     plan_ = commands.add_parser("feasibility", help="before spending: tasks a verdict needs, from a pilot or a stated per-task SD")
     plan_.add_argument("--set", type=Path, required=True, dest="path")
     plan_.add_argument("--results", type=Path)
@@ -1077,18 +1939,40 @@ def main(argv=None):
         return 0
     path = args.path.expanduser().resolve()
     out = args.out.expanduser().resolve() if args.out else None
+    if args.command == "run" and args.strict_jobs and args.jobs > jobs_limit():
+        parser.error(f"--jobs {args.jobs} is above {jobs_limit()} (a quarter of this machine's cores, at least 2)")
+    if args.command in ("mine", "sensitivity", "chain") and args.jobs > jobs_limit():  # run checks its own
+        message = f"--jobs {args.jobs} is above {jobs_limit()} (a quarter of this machine's cores, at least 2): load can move grades"
+        if args.strict_jobs:
+            parser.error(message)
+        print(f"007 lab: warning: {message}", file=sys.stderr)
     if args.command == "mine":
         print(json.dumps({"tasks": mine(json.loads(path.read_text()), out, args.jobs)}))
     elif args.command == "sensitivity":
         print(json.dumps(sensitivity(path, args.jobs)))
     elif args.command == "run":
-        result = run(path, out, replicates=args.replicates, jobs=args.jobs, max_calls=args.max_calls, max_usd=args.max_usd, stop_usd=args.stop_usd, max_invalid=args.max_invalid)
+        try:
+            result = run(path, out, replicates=args.replicates, jobs=args.jobs, max_calls=args.max_calls, max_usd=args.max_usd, stop_usd=args.stop_usd,
+                         max_invalid=args.max_invalid, requeue_refused=args.requeue_refused, over_limit=args.over_limit, chunk=args.chunk,
+                         max_load=args.max_load, load_wait_s=args.load_wait_s, quota_gate=args.quota_gate, cost_marker_at=args.cost_marker_at,
+                         cost_marker_hold_usd=args.cost_marker_hold_usd, rate_limit_wait_s=args.rate_limit_wait_s, strict_jobs=args.strict_jobs)
+        except ValueError as error:  # a refusal by the run (its options, set or artifacts) prints as a usage error, exit 2
+            parser.error(str(error))
         print(json.dumps(result))
         return 2 if result.get("stop") else 0
     elif args.command == "chain":
         print(json.dumps(chain(path, args.results.expanduser().resolve(), out)))
     else:
-        print(json.dumps(report(path, args.results.expanduser().resolve(), args.next_results.expanduser().resolve() if args.next_results else None)["verdict"]))
+        if args.replicates is not None and not args.missing_data_guard:
+            parser.error("--replicates on report only fixes the plan of --missing-data-guard")
+        if args.missing_data_guard and (args.reserve_usd is None or args.replicates is None):
+            parser.error("--missing-data-guard needs --reserve-usd (the run's --stop-usd) and --replicates (the run's)")
+        reach = json.loads(args.frozen_reach.expanduser().read_text()) if args.frozen_reach else None
+        result = report(path, args.results.expanduser().resolve(), args.next_results.expanduser().resolve() if args.next_results else None,
+                        single_look=args.single_look, missing_data_guard_reserve=args.reserve_usd if args.missing_data_guard else None,
+                        frozen_reach=reach, planned_replicates=args.replicates)
+        print(json.dumps({**result["verdict"], **({"missing_data_guard": {k: result["missing_data_guard"][k] for k in ("verdict", "answer")}}
+                                                  if result["missing_data_guard"] else {})}))
     return 0
 
 

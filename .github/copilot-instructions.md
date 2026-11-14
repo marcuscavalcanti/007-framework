@@ -64,15 +64,23 @@ Governance:
 
 ## Adversarial review policy
 
-Revision 2026-10-21b (Marcus): the independent reviewer comes from a different
-model family than the host session running the routine. `scripts/review_route.py`
-is the single implementation of this table; it selects, it never launches.
-There is no fallback model: the route fails closed.
+Revision 2026-11-12 (Marcus): the reviewer follows the implementer. When Codex
+implements, OpenAI `gpt-6-astra` at `xhigh` reviews; when Claude implements,
+Claude Fable 5.2 at `xhigh` reviews. Both share the implementer's model family,
+by the maintainer's decision, and release notes state it. This replaces the
+cross-family rule of revision 2026-10-21b. The host session is taken to be the
+implementer; when another family implemented the change, or several did, the
+maintainer declares the host. The same day an intermediate revision routed a
+Claude host to `claude-fable-5-2` and a Codex host to `claude-opus-5-5`; one
+review was launched under it and stopped (identity level `failed`).
+`scripts/review_route.py` is the
+single implementation of this table; it selects, it never launches. There is no
+fallback model: the route fails closed.
 
 | Host session (detected) | Reviewer | Transport | Effort |
 | --- | --- | --- | --- |
-| Claude (`CLAUDECODE` set) | OpenAI `gpt-6-astra` | Codex CLI, `exec`, read-only sandbox, user config ignored | `xhigh` |
-| Codex (`CODEX_THREAD_ID` set) | Anthropic `claude-opus-5-5` | Claude CLI, plan mode, tools disabled, no persistence, CLI budget cap | `xhigh` |
+| Claude (`CLAUDECODE` set) | Anthropic `claude-fable-5-2` | Claude CLI, plan mode, tools disabled, no persistence, CLI budget cap | `xhigh` |
+| Codex (`CODEX_THREAD_ID` set) | OpenAI `gpt-6-astra` | Codex CLI, `exec`, read-only sandbox, user config ignored | `xhigh` |
 
 - Both host markers present means nested sessions: the caller must declare the
   host; never guess.
@@ -86,7 +94,8 @@ There is no fallback model: the route fails closed.
   per-repository authorization.
 
 Reviews remain bound to the exact sanitized context path and SHA-256 authorized
-by the user. If there is no route, record a failed validation and stop; do not
+by the user. With the Claude route the CLI also adds its own harness prompt (plan mode,
+tools disabled), so the reviewer's input is a superset of that context; the record says so. If there is no route, record a failed validation and stop; do not
 fall back to a different model or effort.
 
 Reviewer identity levels (revision 2026-11-08, Marcus).
@@ -122,7 +131,9 @@ they never fill served identity from the request. They are not retroactive: the
 This policy governs the independent reviewer only. It does not change causal
 experiment arms, coding executors, historical receipts, or frozen evidence.
 Historical review evidence is immutable and must retain the model and effort
-that actually produced it (previous policies: Claude CLI `claude-fable-5-1`, effort
+that actually produced it (the 1.6.2 and 1.7.0 release reviews were routed to OpenAI
+`gpt-6-astra` at `xhigh` as requested, at the identity level each recorded, under
+revision 2026-10-21b, which routed a Codex host to `claude-opus-5-5`; previous policies: Claude CLI `claude-fable-5-1`, effort
 `high`, no fallback; revision 2026-10-21 with a Kimi K3 fallback, never used).
 
 (Yes, these rules also apply to agents working on this repository. Especially to them.)

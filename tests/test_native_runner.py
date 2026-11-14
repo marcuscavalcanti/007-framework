@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -20,6 +21,10 @@ FAKE = r"""import json, os, pathlib, sys
 prompt = sys.stdin.read()
 pathlib.Path("answer.txt").write_text(str(len(prompt)))
 mode, name = os.environ.get("FAKE_MODE", "ok"), pathlib.Path(sys.argv[0]).name
+if mode.startswith("limit-once:"):  # the first call anywhere is refused, every later one served
+    marker = pathlib.Path(mode.split(":", 1)[1])
+    mode = "ok" if marker.exists() else "usage-limit"
+    marker.touch()
 sys.stderr.write("PRIVATE-SENTINEL on stderr\n")  # review r25-r32 R5: native stderr must not reach retained evidence
 if name == "codex":
     rows = [{"type": "thread.started", "thread_id": "t1"}, {"type": "turn.started"},
@@ -39,9 +44,16 @@ else:
              "total_cost_usd": 0.01, "modelUsage": {"claude-x": {"inputTokens": 10, "outputTokens": 2, "costUSD": 0.01}}}]
     if mode == "mixed-model":  # review r40 T2: an auxiliary model in the same result
         rows[-1]["modelUsage"]["claude-aux"] = {"inputTokens": 1, "outputTokens": 1, "costUSD": 0.001}
+    if mode == "usage-limit":  # the F-1 shape of a Claude usage limit: no work, zero usage and cost, exit 1
+        rows[-1].update(is_error=True, result="Claude AI usage limit reached|1795039200", total_cost_usd=0.0,
+                        usage={"input_tokens": 0, "output_tokens": 0}, modelUsage={})
+    if mode == "continued":  # a background task ended after the result: the CLI reopens the session for one more turn
+        rows += [{"type": "system", "subtype": "task_notification", "task_id": "b", "status": "completed", "session_id": "s1"},
+                 rows[0], {**rows[-1], "num_turns": 2, "total_cost_usd": 0.03, "usage": {"input_tokens": 1, "output_tokens": 1},
+                           "modelUsage": {"claude-x": {"inputTokens": 11, "outputTokens": 3, "costUSD": 0.03}}}]
 for row in rows:
     print(json.dumps(row), flush=True)
-sys.exit(3 if mode == "fail-exit" else 0)
+sys.exit(3 if mode == "fail-exit" else 1 if mode == "usage-limit" else 0)
 """
 PROVIDER = {"codex": "openai", "claude": "anthropic"}
 CLI = {"codex": ["exec", "--json", "--ephemeral", "--ignore-user-config", "-m", "m", "-c", 'model_reasoning_effort="medium"', "-"],
@@ -181,6 +193,57 @@ class NativeRunnerTests(unittest.TestCase):
         # The gap stays visible: requiring served identity cannot be met without fabricating it.
         strict, _ = self.cell("codex", require=True, replicate=2)
         self.assertEqual((strict["valid"], strict["failure_class"]), (False, "served-provider-mismatch"))
+
+    def test_a_claude_usage_limit_leaves_a_receipt_the_lab_reads_as_a_refusal(self):
+        effort_lab = importlib.import_module("effort_lab")
+        record, receipt = self.cell("claude", mode="usage-limit")
+        self.assertEqual((record["valid"], receipt["problem"], receipt["cost_usd"]), (False, "native-error-rate-limit", 0.0))
+        self.assertEqual(receipt["usage"]["total_tokens"], 0)  # a zero-filled usage, written by the real runner, not by hand
+        self.assertTrue(effort_lab.refused(self.output, "t1-r01-claude"))
+        _, used = self.cell("claude", mode="ok", replicate=2)  # a served cell names no refusal
+        self.assertFalse(effort_lab.refused(self.output, "t2-r02-claude"))
+
+    def test_a_refused_attempt_is_set_aside_and_dispatched_again_through_the_real_cell(self):
+        effort_lab = importlib.import_module("effort_lab")
+        runner = [sys.executable, "-B", str(RUNNER), "--cli", "claude", "--receipt", "{runner_receipt}", "--provider", "anthropic",
+                  "--model", "{model}", "--effort", "{effort}", "--stream-copy", "{stream_copy}", "--", str(self.bin / "claude"), *CLI["claude"]]
+        task = {"id": "t1", "repo": "r", "base": self.base, "accepted": self.base, "prompt": "do the task",
+                "acceptance": [[sys.executable, "-c", "import pathlib; raise SystemExit(0 if pathlib.Path('answer.txt').exists() else 1)"]]}
+        config = {"seed": 1, "repos": {"r": str(self.repo)}, "agent_command": runner, "tasks": [task],
+                  "arms": {"claude": {"provider": "anthropic", "model": "m", "effort": "medium", "doctrine": ""}}}
+        path, out = self.root / "set.json", self.root / "requeue"
+        path.write_text(json.dumps(config))
+        old = os.environ.get("FAKE_MODE")
+        os.environ["FAKE_MODE"] = f"limit-once:{self.root / 'limited'}"
+        try:
+            first = effort_lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=9, stop_usd=1, requeue_refused=True)
+            with mock.patch.object(effort_lab, "RATE_LIMIT_COOLDOWN_S", 0):
+                second = effort_lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=9, stop_usd=1, requeue_refused=True)
+        finally:
+            os.environ.pop("FAKE_MODE") if old is None else os.environ.update(FAKE_MODE=old)
+        self.assertEqual((first["stop"], first["refused"], first["requeued"], first["spent"]), ("rate-limit", 1, 1, 0.0))
+        self.assertEqual((second["stop"], second["calls"], second["spent"]), (None, 1, 0.01))
+        kept = {p.name for p in (out / "refused").iterdir()}  # the refused attempt's files, nothing deleted
+        self.assertLessEqual({"t1-r01-claude.1.json", "t1-r01-claude.1.runner.json", "t1-r01-claude.1.stream.jsonl"}, kept)
+        cell = json.loads((out / "t1-r01-claude.json").read_text())
+        self.assertEqual((cell["valid"], cell["accepted"]), (True, True))
+        self.assertEqual(json.loads((out / "t1-r01-claude.runner.json").read_text())["stream_copy"], "t1-r01-claude.stream.jsonl")
+
+    def test_a_reopened_turn_and_the_opt_in_stream_copy(self):
+        record, receipt = self.cell("claude", mode="continued")
+        self.assertEqual((record["valid"], receipt["continuations"], receipt["cost_usd"]), (True, 1, 0.03))
+        self.assertNotIn("stream_copy", receipt)
+        copy = self.root / "kept.jsonl"
+        work = self.root / "work-copy"
+        work.mkdir()
+        done = self.runner("claude", self.root / "copy.json", cwd=work, runner_args=("--stream-copy", str(copy)))
+        value = json.loads((self.root / "copy.json").read_text())
+        self.assertEqual((done.returncode, value["stream_copy"]), (0, "kept.jsonl"))
+        self.assertEqual(hashlib.sha256(copy.read_bytes()).hexdigest(), value["source_sha256"])
+        self.assertEqual(copy.stat().st_mode & 0o777, 0o600)
+        again = self.runner("claude", self.root / "copy-2.json", cwd=work, runner_args=("--stream-copy", str(copy)))
+        self.assertEqual(again.returncode, 2)  # never overwritten, refused before the CLI runs
+        self.assertFalse((self.root / "copy-2.json").exists())
 
     def test_claude_receipt_keeps_reported_model_and_client_cost_estimate(self):
         _, receipt = self.cell("claude", require=False)

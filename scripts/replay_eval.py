@@ -146,16 +146,20 @@ def new_archive_path(destination):
 
 def extract_archive(archive, destination):
     destination_root = Path(destination).resolve()
+    links = []
     with tarfile.open(archive) as bundle:
         for member in bundle.getmembers():
             target = (destination_root / member.name).resolve()
-            # This containment check is sound only while links and all other
-            # non-regular entry types remain rejected below.
+            # This containment check is sound only while no link exists on disk: hard links and other non-regular entries are
+            # rejected below, and symbolic links are only materialized as copies, after every regular entry is written.
             if destination_root not in target.parents and target != destination_root:
                 raise RuntimeError(f"unsafe archive member: {member.name}")
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
                 target.chmod(0o755)
+                continue
+            if member.issym():
+                links.append(member)
                 continue
             if not member.isfile():
                 raise RuntimeError(f"archive entry is not a regular file: {member.name}")
@@ -166,6 +170,36 @@ def extract_archive(archive, destination):
             with source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
             target.chmod(0o755 if member.mode & 0o111 else 0o644)
+    materialize_links(links, destination_root)
+
+
+def materialize_links(links, root):
+    """A relative symbolic link whose target stays inside the snapshot becomes a copy of that target (a file, or a directory
+    without links); links to links resolve in later passes. An absolute link, one that leaves the snapshot, one that contains its
+    own target, or one whose target never appears is refused: the snapshot never holds a link."""
+    pending = list(links)
+    while pending:
+        later, names = [], {root / member.name for member in pending}  # once per pass: links not yet materialized
+        for member in pending:
+            target = root / member.name
+            if os.path.isabs(member.linkname):
+                raise RuntimeError(f"archive link is absolute: {member.name}")
+            source = Path(os.path.normpath(target.parent / member.linkname))
+            if root not in source.parents and source != root:
+                raise RuntimeError(f"archive link leaves the snapshot: {member.name}")
+            if not source.exists() or source.is_dir() and any(source in path.parents for path in names - {target}):
+                later.append(member)  # its target, or a link inside the directory it copies, is not materialized yet
+                continue
+            if source.is_dir():
+                if target == source or source in target.parents:
+                    raise RuntimeError(f"archive link contains its own target: {member.name}")
+                shutil.copytree(source, target, symlinks=False)
+            else:
+                shutil.copyfile(source, target)
+                target.chmod(source.stat().st_mode & 0o777)
+        if len(later) == len(pending):
+            raise RuntimeError(f"archive link has no target in the snapshot: {later[0].name}")
+        pending = later
 
 
 def export_snapshot(repo, revision, destination):
@@ -525,7 +559,7 @@ def is_cell_id(value):
     return isinstance(value, str) and re.fullmatch(r".+-r[0-9]{2,}-.+", value) is not None
 
 
-CELL_ARTIFACT_SUFFIXES = (".json", ".runner.json", ".observation.json", ".prompt.txt", ".candidate.patch")
+CELL_ARTIFACT_SUFFIXES = (".json", ".runner.json", ".observation.json", ".prompt.txt", ".candidate.patch", ".stream.jsonl")
 
 
 def artifact_case_sensitive(directory):
@@ -584,6 +618,8 @@ def load_dispatch_history(directory):
         lines = []
     rows, invalid, ambiguous = [], 0, 0
     seen = {"dispatched_at": {}, "finished_at": {}}
+    # a refused attempt set aside (`requeued`) may be dispatched once more, and that dispatch finished once more
+    again = {"dispatched_at": set(), "finished_at": set()}
     for line in lines:
         if not line.strip():
             continue
@@ -597,8 +633,15 @@ def load_dispatch_history(directory):
             invalid += 1
             continue
         for key, stamp in times.items():
-            ambiguous += row["cell"] in seen[key]
+            if row["cell"] in again[key]:
+                again[key].discard(row["cell"])
+                if key == "dispatched_at":
+                    again["finished_at"].add(row["cell"])
+            else:
+                ambiguous += row["cell"] in seen[key]
             seen[key][row["cell"]] = stamp
+        if "finished_at" in times and row.get("requeued") is True:
+            again["dispatched_at"].add(row["cell"])
         rows.append(row)
     for cell in seen["dispatched_at"].keys() & seen["finished_at"].keys():
         invalid += seen["finished_at"][cell] < seen["dispatched_at"][cell]
@@ -707,6 +750,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             "{cwd}": str(workspace), "{prompt_file}": str(prompt),
             "{model}": policy["model"], "{effort}": policy["effort"],
             "{runner_receipt}": str(runner_receipt),
+            "{stream_copy}": str(output_dir / f"{attempt_id}.stream.jsonl"),  # native_runner --stream-copy, opt-in
         }
         argv = []
         for part in config["agent_command"]:
