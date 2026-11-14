@@ -1,0 +1,119 @@
+{
+ "verdict": "PROVEN",
+ "answer": "PAYS",
+ "t1": {
+  "discordance": 0.006134969325153374,
+  "aa_ci_excludes_zero": 0.0355,
+  "passed": true
+ },
+ "margin": 0.2,
+ "floor": 2.2314867649305863,
+ "readings": {
+  "P": {
+   "tasks": 41,
+   "mean": 0.00848210644074907,
+   "ci95": [
+    -0.03038469678457225,
+    0.047348909666070395
+   ],
+   "statistic": 10.841074958446045,
+   "critical_own": 2.2788332867422456,
+   "critical": 2.2788332867422456,
+   "verdict": "PROVEN"
+  },
+  "B": {
+   "tasks": 41,
+   "mean": 0.00848210644074907,
+   "ci95": [
+    -0.03038469678457225,
+    0.047348909666070395
+   ],
+   "statistic": 10.841074958446045,
+   "critical_own": 2.2866033430093493,
+   "critical": 2.2866033430093493,
+   "verdict": "PROVEN"
+  }
+ },
+ "missing_data_guard": {
+  "planned": 164,
+  "usable": 163,
+  "imputed_in_L2": {
+   "invalid": 1
+  },
+  "unusable_cells": [
+   {
+    "cell": "GJ-F5A63B5F-r02-xhigh",
+    "arm": "xhigh",
+    "task": "GJ-F5A63B5F",
+    "failure_class": "runner-invalid",
+    "agent_wall_s": 1027.74
+   }
+  ],
+  "watch_GJ-A9CFAE7F_medium": [],
+  "L2": {
+   "P": {
+    "tasks": 41,
+    "mean": 0.00848210644074907,
+    "ci95": [
+     -0.03038469678457225,
+     0.047348909666070395
+    ],
+    "statistic": 10.841074958446045,
+    "critical_own": 2.2701602228764868,
+    "critical": 2.2701602228764868,
+    "verdict": "PROVEN"
+   },
+   "B": {
+    "tasks": 41,
+    "mean": 0.00848210644074907,
+    "ci95": [
+     -0.03038469678457225,
+     0.047348909666070395
+    ],
+    "statistic": 10.841074958446045,
+    "critical_own": 2.2701602228764868,
+    "critical": 2.2701602228764868,
+    "verdict": "PROVEN"
+   }
+  },
+  "L1_reported_only": {
+   "P": {
+    "tasks": 41,
+    "mean": 0.00848210644074907,
+    "ci95": [
+     -0.03038469678457225,
+     0.047348909666070395
+    ],
+    "statistic": 10.841074958446045,
+    "verdict": "not-computed"
+   },
+   "B": {
+    "tasks": 41,
+    "mean": 0.00848210644074907,
+    "ci95": [
+     -0.03038469678457225,
+     0.047348909666070395
+    ],
+    "statistic": 10.841074958446045,
+    "verdict": "not-computed"
+   }
+  }
+ },
+ "cost_ratio_worst": 0.2676051822390295,
+ "cost_ratio_worst_ci95": [
+  0.22903821611791375,
+  0.31690672167361805
+ ],
+ "cost_ratio": 0.263288969622271,
+ "cost_ratio_ci95": [
+  0.2244005782000348,
+  0.31297507891316
+ ],
+ "cells": 164,
+ "valid": 163,
+ "refused": 0,
+ "invalid_per_arm": {
+  "medium": 0,
+  "xhigh": 1
+ }
+}

@@ -30,6 +30,12 @@ schemas, and the dashboard snapshot.
   dry run at 4 jobs drove the load to about 870 and the machine restarted.
 - Amendment 8 (`evidence/codex-5pp-20261108/AMENDMENT-8.md`), before any pilot attempt: the serial re-grade reads patches as bytes;
   newline translation had made a CRLF patch unappliable and failed the dry run's serial check.
+- Study F result (`evidence/go-json-claude-f-20261112/RESULT-F.md`): on go-json, Claude Opus 5.5 requested at `medium` against
+  `xhigh` reads PAYS under PREREG-F and Amendment F-1 (reach difference +0.8 points, 95% interval −3.0 to +4.7, margin 20 points;
+  cost per accepted change 0.26 of `xhigh`'s, worst case up to 0.32), with whole-change acceptance 56/82 against 61/81. DECISIONS
+  part 6 reads YES for this executor on this repository; T1's third bullet was completed after the look by a demote-only step. The
+  study was selected after an exploratory reading, and the result covers one public repository. Reviewed in two rounds by Claude
+  Fable 5.2 at maximum effort.
 
 ## [1.7.0] - 2026-11-09
 
