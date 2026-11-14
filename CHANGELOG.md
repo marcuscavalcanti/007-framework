@@ -22,7 +22,8 @@ or report without them behaves as in 1.8.1, except the fixes below. Release qual
   dispatched again after the pause), `--rate-limit-wait-s` (wait out the pause inside the run) and `--over-limit record` (a cell
   above `--stop-usd` is counted and the run goes on to `--max-usd`). New planned pauses: `machine-busy`, `quota-hold`. New stops:
   `cost-marker-hold` (terminal), `looked`, `load-sensitive-oracle`. `run` returns `refused_per_arm`, `requeued` and
-  `over_limit_cells`, `quota_probe_usd` and `quota_probes_unmeasured`. A quota probe's cost joins the run's spend.
+  `over_limit_cells`, `quota_probe_usd` and `quota_probes_unmeasured`. A quota probe's cost joins the run's spend (one without a
+  measured cost at the `--stop-usd` reserve), and a probe runs only with room under `--max-usd`.
 - `007 lab report --single-look` takes the results' run lock and writes `LOOK.json`, after which `report` refuses to read the
   results and `run` refuses to add to them, also between chunks. `--missing-data-guard --reserve-usd X --replicates N` adds F-1's
   guard: readings P and B, L2 imputed from the plan of N replicates, the cost ratio with its interval and worst case, and an
@@ -58,11 +59,12 @@ or report without them behaves as in 1.8.1, except the fixes below. Release qual
 - The rate-limit cooldown reads the newest refusal anywhere in the ledger, after the orphan check (1.8.1 review N3).
 - A snapshot's relative symbolic link whose target stays inside the snapshot is materialized as a copy instead of refusing the
   cell; absolute links, links that leave the snapshot or have no target are still refused.
-- More forms of a file argument are sealed: `KEY=/file`, `--flag=key=/file`, `-f/file`, `@/file` (1.8.1 review item 6).
+- More forms of a file argument are sealed: `KEY=/file`, `--flag=key=/file`, `-f/file`, `@/file`, `--flag=@/file` (1.8.1 review
+  item 6).
 - A snapshot's directory link is copied only after the links inside its target are materialized.
 - A controller error records `controller_error` (type, innermost frame, and the message when the set retains diagnostic text)
   in the cell and prints them to stderr.
-- More forms of a file argument are sealed, also `--flag=@/file`; a pre-1.9 manifest without `toolchain` resumes.
+- A manifest without `toolchain` is not compared on it (a 1.8.1 manifest still stops on the sealed 007 scripts).
 
 ### Not in this release
 

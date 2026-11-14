@@ -1,8 +1,9 @@
-# 1.9.0 candidate: study F's scripts made native, and the open qualification items closed
+# 1.9.0 candidate: study F's scripts made native, and most open qualification items closed
 
 Prepared on 2026-11-14 from published 1.8.1, after Claude study F (evidence on branch `claude/pilot-amendment-2`, commit
 `ffe304c4e209c4e30bb9feaebf55956eb243855f`).
-- **Kind:** a minor release. Every new option is off by default, so a run or report without them behaves as in 1.8.1. No command,
+- **Kind:** a minor release. Every new option is off by default, so a run or report without them behaves as in 1.8.1 except for
+  the behaviour changes listed next. No command,
   option or field is removed or renamed; `arm_accounting` gains `refused` and `replicates`, and the run manifest gains `toolchain`.
 - **New stop reasons:** planned pauses `machine-busy` and `quota-hold`; `cost-marker-hold` (terminal), `looked` and
   `load-sensitive-oracle` (refusals before any dispatch).
@@ -54,7 +55,7 @@ records, not in this repository; study F's published `f-result.json` is on branc
 
 ## Engineering evidence
 
-- **Local suite:** after the round-1 fixes, 1,014 Python tests and 54 JavaScript tests passed on a tree left unchanged during the
+- **Local suite:** after the round-2 fixes, 1,014 Python tests and 54 JavaScript tests passed on a tree left unchanged during the
   run (macOS, Python 3.14.7). A first full run failed one version test because the tree was edited while it ran; it was run
   again on a frozen tree.
 - **CI:** to be filled.
@@ -82,12 +83,29 @@ records, not in this repository; study F's published `f-result.json` is on branc
   - **Erratum to the 1.8.1 record (N1):** its line saying a refused call "costs nothing" is wrong: a refused cell is charged its
     receipt cost or the `--stop-usd` reserve. The 1.8.1 record is hashed in its tag and stays as published.
 
+- **Round 2** on `29c8d28`, restricted to the change, US$2.40: **SHIP**, no blocker; B1 to B3 fixed. Its should-fix items, all
+  taken before the tag:
+  - D1: live, a cell above `--stop-usd` replaces any stop set earlier in the pass, as in 1.8.1 (the round-1 fix had kept
+    `usd-budget`); tested with every new option off.
+  - D2: a probe without a measured cost is charged the reserve, and no probe runs without room for it under `--max-usd`.
+  - D3, D4: the single look also locks stage 2, and checks `LOOK.json` again under the lock.
+  - D5: `run`'s refusals print as usage errors.
+  - D6: a test with `retain_diagnostic_text: false`.
+  - D7: link materialization builds its pending set once per pass.
+  - D8: this record and the changelog; a receipt that is JSON but not an object names no refusal; the label rewrite is fsynced;
+    `report --replicates` without the guard is refused; the driver retry advice is in `docs/lab.md`.
+
 ## Still open
 
 - 1.8.1 review item 10: `except Exception` around one cell still catches every error a controller raises (a `KeyboardInterrupt`
   is not caught).
 - A file argument naming two files seals only the first.
 - `sensitivity.json` is not sealed, and the toolchain's `--version` runs outside the acceptance sandbox.
+- 1.8.1 review item 3, in part: refusals are counted per arm and flagged, but the readings still pool what each arm has.
+- 1.8.1 review item 11: study F's evidence is on a branch, not in a tag (PR #18, unmerged).
+- The guard's validation script covers the go-json runs only (two replicates, arms `medium` and `xhigh`), and its inputs are not
+  in this repository.
+- `report --single-look` cannot show it was the first read: earlier plain reads leave no trace.
 
 ## Not in this release
 

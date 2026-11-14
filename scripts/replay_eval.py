@@ -179,7 +179,7 @@ def materialize_links(links, root):
     own target, or one whose target never appears is refused: the snapshot never holds a link."""
     pending = list(links)
     while pending:
-        later = []
+        later, names = [], {root / member.name for member in pending}  # once per pass: links not yet materialized
         for member in pending:
             target = root / member.name
             if os.path.isabs(member.linkname):
@@ -187,8 +187,7 @@ def materialize_links(links, root):
             source = Path(os.path.normpath(target.parent / member.linkname))
             if root not in source.parents and source != root:
                 raise RuntimeError(f"archive link leaves the snapshot: {member.name}")
-            waiting = {root / other.name for other in pending if other is not member} | {root / other.name for other in later}
-            if not source.exists() or source.is_dir() and any(source in path.parents for path in waiting):
+            if not source.exists() or source.is_dir() and any(source in path.parents for path in names - {target}):
                 later.append(member)  # its target, or a link inside the directory it copies, is not materialized yet
                 continue
             if source.is_dir():

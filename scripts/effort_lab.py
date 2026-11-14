@@ -13,6 +13,7 @@ Durable means the change survives the next change. Agents are an argv template (
 lab_accept.py; nothing here knows a vendor or a language.
 """
 import argparse
+import contextlib
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta, timezone
 import fcntl
@@ -604,6 +605,8 @@ def refused(out, cid):
         value = json.loads(receipt.read_text()) if receipt.is_file() else {}
     except (OSError, ValueError):
         return False
+    if not isinstance(value, dict):  # a receipt that is JSON but not an object names no refusal
+        return False
     usage = value.get("usage")
     # no usage: absent, or every count zero (the real Claude runner writes a zero-filled one for a refused call)
     unused = not usage or isinstance(usage, dict) and all(type(n) is int and n == 0 for n in usage.values())
@@ -800,7 +803,7 @@ def jobs_limit():
 
 
 LOAD_POLL_S, LOAD_LOG_S, QUOTA_TIMEOUT_S = 300, 60, 300
-PLANNED_PAUSES = ("call-budget", "rate-limit", "machine-busy", "quota-hold", "looked")  # a later run resumes them; no STOP.json
+PLANNED_PAUSES = ("call-budget", "rate-limit", "machine-busy", "quota-hold", "looked")  # no STOP.json; a later run resumes all but `looked`
 
 
 def _log_load(out, step=None):
@@ -914,6 +917,8 @@ def probe_costs(out):
         lines = (out / "quota.jsonl").read_text().splitlines()
     except FileNotFoundError:
         return measured, unmeasured
+    except OSError as error:
+        raise ValueError(f"quota.jsonl cannot be read: {out}") from error
     for line in lines:
         try:
             value = json.loads(line).get("probe_cost_usd")
@@ -1039,7 +1044,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     refusals = [row for row in history if "finished_at" in row and row.get("refused") is True]
     remaining = any(replay_eval.cell_id(t, a, r) not in done for t, r, a in cells)
-    if refusals and remaining:  # a finished run has nothing to lose to the outage  # resuming inside the outage would only lose cells to it; the newest refusal anywhere in the ledger counts
+    if refusals and remaining:  # resuming inside the outage would only lose cells to it (the newest refusal counts); a finished run has none to lose
         age = (datetime.now(timezone.utc) - max(harness_report._instant(row["finished_at"]) for row in refusals)).total_seconds()
         if age < RATE_LIMIT_COOLDOWN_S:
             return {"stop": "rate-limit-cooldown", "calls": 0, "retry_after_s": round(RATE_LIMIT_COOLDOWN_S - age)}
@@ -1099,17 +1104,19 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                 spent = None
                 stop = stop or "cost-total-unavailable"
 
-    def over_limit(cost):
+    def over_limit(cost, live=False):
         nonlocal stop, over
         if cost is not None and cost > stop_usd:
-            if options["over_limit"] == "stop":  # final: it outranks a planned pause set earlier in the same pass
-                stop = "cell-over-limit" if stop in (None, *PLANNED_PAUSES) else stop
+            if options["over_limit"] == "stop":  # live, as in 1.8.1, it replaces any stop set earlier in the same pass
+                stop = "cell-over-limit" if live else stop or "cell-over-limit"
             else:
                 over += 1  # recorded; only the total cap stops the run
 
     probe_usd, probe_unmeasured = probe_costs(out)
-    if probe_usd:
-        charge(probe_usd)  # quota probes this run already made
+    if probe_usd or probe_unmeasured:
+        charge(probe_usd)  # quota probes this run already made; one without a measured cost at the --stop-usd reserve
+        for _ in range(probe_unmeasured):
+            charge(None)
     for row in refusals:  # the live decision, recorded in the ledger once per refused attempt
         if row["cell"] in arm_of:
             refused_per_arm[arm_of[row["cell"]]] += 1
@@ -1141,7 +1148,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         except Exception as error:  # one cell's failure (a refused snapshot, a crash) is an invalid cell, never the whole run
             row = _controller_failure(out, task, arm, rep, error, config.get("retain_diagnostic_text", True) is True)
             detail = row.get("controller_error") or _error_detail(error)
-            print(f"007 lab: {replay_eval.cell_id(task, arm, rep)}: {detail['type']}: {detail['message']} (at {detail['where']})", file=sys.stderr)
+            text = f": {detail['message']}" if detail["message"] is not None else ""
+            print(f"007 lab: {replay_eval.cell_id(task, arm, rep)}: {detail['type']}{text} (at {detail['where']})", file=sys.stderr)
             return cell, row
     try:
         with ThreadPoolExecutor(jobs) as pool_:
@@ -1167,12 +1175,19 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                     stop = "machine-busy"
                     break
                 if options["quota_gate"]:
+                    try:  # the probe is a paid call: it needs room for its reserve, like a cell
+                        room = spent is not None and harness_report._money_sum((spent, stop_usd)) <= harness_report._money_sum((max_usd,))
+                    except ValueError:
+                        room = False
+                    if not room:
+                        stop = "usd-budget"
+                        break
                     ok, _, cost = quota_check(config, out, len(todo) / len(cells))
                     if cost is None:
-                        probe_unmeasured += 1  # reported, not guessed: a probe is one minimal call
+                        probe_unmeasured += 1  # charged its reserve, as a cell without a cost
                     else:
                         probe_usd += cost
-                        charge(cost)
+                    charge(cost)
                     if not ok:
                         stop = "quota-hold"
                         break
@@ -1206,6 +1221,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                             row = {**row, "failure_class": "provider-rate-limit", "failure_class_observed": row.get("failure_class")}
                             with tempfile.NamedTemporaryFile("w", dir=out, prefix=f".{cid}.", delete=False) as handle:
                                 handle.write(json.dumps(row))
+                                handle.flush()
+                                os.fsync(handle.fileno())
                             os.replace(handle.name, out / f"{cid}.json")
                             refused_per_arm[cell[2]] += 1
                             stop = "rate-limit" if stop in (None, "call-budget") else stop  # a pause outranks a planned call budget
@@ -1224,7 +1241,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                             stop = "cost-unavailable"
                         else:
                             charge(cost)  # A failed call with no receipt cost is charged its reserve.
-                            over_limit(cost)
+                            over_limit(cost, live=True)
                         if invalid >= max_invalid:
                             stop = "invalid-budget"
                 if stop == "rate-limit" and options["rate_limit_wait_s"] and waited + RATE_LIMIT_COOLDOWN_S <= options["rate_limit_wait_s"]:
@@ -1694,11 +1711,15 @@ def report(config_path, results, next_results, *, single_look=False, missing_dat
         raise ValueError("the missing-data guard needs the run's planned replicates")
     if not single_look:
         return _report(config_path, results, next_results, False, missing_data_guard_reserve, frozen_reach, planned_replicates)
-    with (results / ".run.lock").open("a") as handle:  # no run may add cells while the single look is taken
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise ValueError(f"a run is active on these results: the single look waits for it: {results}") from None
+    with contextlib.ExitStack() as locks:  # no run may add cells, to stage 1 or stage 2, while the single look is taken
+        for directory in [results] + ([next_results] if next_results else []):
+            handle = locks.enter_context((directory / ".run.lock").open("a"))
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError(f"a run is active on these results: the single look waits for it: {directory}") from None
+        if (results / LOOK).exists():  # checked again under the lock: two looks cannot both pass
+            raise ValueError(f"the single look has been taken ({LOOK} exists): these results are not read again: {results}")
         return _report(config_path, results, next_results, True, missing_data_guard_reserve, frozen_reach, planned_replicates)
 
 
@@ -1930,15 +1951,20 @@ def main(argv=None):
     elif args.command == "sensitivity":
         print(json.dumps(sensitivity(path, args.jobs)))
     elif args.command == "run":
-        result = run(path, out, replicates=args.replicates, jobs=args.jobs, max_calls=args.max_calls, max_usd=args.max_usd, stop_usd=args.stop_usd,
-                     max_invalid=args.max_invalid, requeue_refused=args.requeue_refused, over_limit=args.over_limit, chunk=args.chunk,
-                     max_load=args.max_load, load_wait_s=args.load_wait_s, quota_gate=args.quota_gate, cost_marker_at=args.cost_marker_at,
-                     cost_marker_hold_usd=args.cost_marker_hold_usd, rate_limit_wait_s=args.rate_limit_wait_s, strict_jobs=args.strict_jobs)
+        try:
+            result = run(path, out, replicates=args.replicates, jobs=args.jobs, max_calls=args.max_calls, max_usd=args.max_usd, stop_usd=args.stop_usd,
+                         max_invalid=args.max_invalid, requeue_refused=args.requeue_refused, over_limit=args.over_limit, chunk=args.chunk,
+                         max_load=args.max_load, load_wait_s=args.load_wait_s, quota_gate=args.quota_gate, cost_marker_at=args.cost_marker_at,
+                         cost_marker_hold_usd=args.cost_marker_hold_usd, rate_limit_wait_s=args.rate_limit_wait_s, strict_jobs=args.strict_jobs)
+        except ValueError as error:  # a refusal by the run (its options, set or artifacts) prints as a usage error, exit 2
+            parser.error(str(error))
         print(json.dumps(result))
         return 2 if result.get("stop") else 0
     elif args.command == "chain":
         print(json.dumps(chain(path, args.results.expanduser().resolve(), out)))
     else:
+        if args.replicates is not None and not args.missing_data_guard:
+            parser.error("--replicates on report only fixes the plan of --missing-data-guard")
         if args.missing_data_guard and (args.reserve_usd is None or args.replicates is None):
             parser.error("--missing-data-guard needs --reserve-usd (the run's --stop-usd) and --replicates (the run's)")
         reach = json.loads(args.frozen_reach.expanduser().read_text()) if args.frozen_reach else None

@@ -61,6 +61,12 @@ class Agent:
                 self.live -= 1
 
 
+def log_probe(out, cost=.01):
+    """What quota_check appends, for tests that replace the probe."""
+    with (out / "quota.jsonl").open("a") as handle:
+        handle.write(json.dumps({"probe_cost_usd": cost}) + "\n")
+
+
 def go(path, out, agent, **options):
     defaults = {"replicates": 1, "jobs": 1, "max_calls": 99, "max_usd": 99, "stop_usd": 1}
     return lab.run(path, out, execute=agent, **{**defaults, **options})
@@ -179,21 +185,21 @@ class Limits(unittest.TestCase):
 
     def test_a_dear_cell_after_a_pause_still_ends_the_run(self):
         # review B1: a refusal sets the pause, then an in-flight cell costs more than --stop-usd: the stop is final, not a pause
-        for wait in (0, 3600):
-            with self.subTest(wait=wait), mock.patch.object(lab, "RATE_LIMIT_COOLDOWN_S", 0), mock.patch.object(lab.time, "sleep"):
-                out = self.root / f"dear-{wait}"
+        for wait, requeue in ((0, False), (0, True), (3600, True)):  # the first is 1.8.1's case: every new option off
+            with self.subTest(wait=wait, requeue=requeue), mock.patch.object(lab, "RATE_LIMIT_COOLDOWN_S", 0), mock.patch.object(lab.time, "sleep"):
+                out = self.root / f"dear-{wait}-{requeue}"
                 first = []
                 agent = Agent(refuse=lambda cid, attempt: not first and not first.append(cid),
                               cost=lambda cid: 25.0, delay=lambda cid: 0 if cid == agent.calls[0] else .2)
-                state = go(self.path, out, agent, jobs=2, stop_usd=20, max_usd=400, requeue_refused=True, rate_limit_wait_s=wait)
+                state = go(self.path, out, agent, jobs=2, stop_usd=20, max_usd=400, requeue_refused=requeue, rate_limit_wait_s=wait)
                 self.assertEqual((state["stop"], state["calls"]), ("cell-over-limit", 2))
                 self.assertTrue((out / "STOP.json").exists())
 
     def test_chunks_finish_before_the_gates_run_again(self):
         gates = []
         with mock.patch.object(lab, "quiet", lambda out, m, w, step: gates.append(("load", step)) or True), \
-                mock.patch.object(lab, "quota_check", lambda config, out, left: gates.append(("quota", round(left, 3))) or
-                                  (out / "quota.jsonl").open("a").write(json.dumps({"probe_cost_usd": .01}) + "\n") and (True, "headroom", .01)):
+                mock.patch.object(lab, "quota_check", lambda config, out, left: gates.append(("quota", round(left, 3))) or log_probe(out)
+                                  or (True, "headroom", .01)):
             path = write_set(self.root / "probed", quota_probe={"command": ["probe"]})
             state = go(path, self.out, Agent(delay=lambda cid: .01), jobs=2, chunk=3, max_load=8, quota_gate=True)
         self.assertEqual((state["stop"], state["calls"], state["quota_probe_usd"], state["spent"]), (None, 8, .03, 8.03))
@@ -216,9 +222,13 @@ class Limits(unittest.TestCase):
         self.assertFalse((self.out / "STOP.json").exists())
         self.assertEqual(json.loads((self.out / "load.log").read_text().splitlines()[0])["load"], [20.0, 20.0, 20.0])
         held_set = write_set(self.root / "probed", quota_probe={"command": ["probe"]})
-        with mock.patch.object(lab, "quota_check", return_value=(False, "seven_day at 0.9", None)):
+        with mock.patch.object(lab, "quota_check", lambda config, out, left: log_probe(out, None) or (False, "seven_day at 0.9", None)):
             held = go(held_set, self.root / "held", Agent(), quota_gate=True)
         self.assertEqual((held["stop"], held["calls"], held["quota_probes_unmeasured"]), ("quota-hold", 0, 1))
+        self.assertEqual(held["spent"], 1.0)  # a probe without a measured cost is charged the --stop-usd reserve
+        with mock.patch.object(lab, "quota_check", side_effect=AssertionError("no room, no probe")):
+            broke = go(held_set, self.root / "held", Agent(), quota_gate=True, max_usd=1.5)  # 1.0 spent + 1.0 reserve > 1.5
+        self.assertEqual((broke["stop"], broke["calls"]), ("usd-budget", 0))
         with self.assertRaisesRegex(ValueError, "quota_probe"):
             go(self.path, self.root / "noprobe", Agent(), quota_gate=True)  # refused before the seal, not at the first gate
         self.assertFalse((self.root / "noprobe" / "run-manifest.json").exists())
@@ -295,6 +305,11 @@ class ControllerErrors(unittest.TestCase):
             self.assertEqual((failed["controller_error"]["type"], failed["controller_error"]["message"]), ("RuntimeError", "snapshot refused"))
             self.assertIn("test_lab_runs.py", failed["controller_error"]["where"])
             self.assertIn("RuntimeError: snapshot refused (at test_lab_runs.py", err.getvalue())
+            quiet = write_set(root / "quiet", retain_diagnostic_text=False)  # the set withholds diagnostic text: no message kept
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                go(quiet, root / "quiet-out", Agent(raise_=lambda cid, out_: cid == "T1-r01-a"), stop_usd=5)
+            self.assertIsNone(json.loads((root / "quiet-out" / "T1-r01-a.json").read_text())["controller_error"]["message"])
+            self.assertIn("RuntimeError (at test_lab_runs.py", err.getvalue())
 
 
 class Seal(unittest.TestCase):
