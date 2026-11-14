@@ -448,7 +448,7 @@ class LabEndToEnd(unittest.TestCase):
                 {"cell": "B-r01-high", "valid": False, "failure_class": "timeout"}]
         a = lab.arm_accounting(config, results, rows, {"B-r02-low": {}})  # no ledger: a receipt alone shows the attempt
         self.assertEqual((a["history"], a["unread_cells"]), ("absent", 0))
-        self.assertEqual(a["arms"]["low"], {"planned": 4, "not_dispatched": 2, "no_result": 1, "valid": 1, "accepted": 1, "invalid": {}})
+        self.assertEqual(a["arms"]["low"], {"planned": 4, "not_dispatched": 2, "no_result": 1, "valid": 1, "accepted": 1, "invalid": {}, "refused": 0})
         self.assertEqual(a["arms"]["high"]["invalid"], {"timeout": 1, "unknown": 1})
         chain = {"tasks": [{"id": "T-r100-low-next"}], "arms": {"next": {}}}  # a stage-2 task id carries its parent's replicate
         a = lab.arm_accounting(chain, results, [{"cell": "T-r100-low-next-r01-next", "valid": True, "accepted": False}], {})

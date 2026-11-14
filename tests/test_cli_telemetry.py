@@ -828,5 +828,55 @@ class NativeTelemetryTests(unittest.TestCase):
             framework_cli.validate_receipt(value)
 
 
+class ClaudeRefusalAndContinuationTests(unittest.TestCase):
+    """1.9.0: a Claude usage limit is a rate limit; a turn reopened for a background task is one session, not two."""
+    init = {"type": "system", "subtype": "init", "session_id": "s"}
+    module = NativeTelemetryTests.module
+    parse = NativeTelemetryTests.parse
+
+    def result(self, **fields):
+        return {"type": "result", "subtype": "success", "is_error": False, "session_id": "s", "num_turns": 1,
+                "usage": {"input_tokens": 1, "output_tokens": 1}, "total_cost_usd": 0.5, **fields}
+
+    def test_the_real_usage_limit_result_is_a_rate_limit(self):
+        # the shape the F-1 dry run fed the runner: is_error with subtype success, zero usage and zero cost
+        limit = self.result(is_error=True, result="Claude AI usage limit reached|1795039200", total_cost_usd=0.0,
+                            usage={"input_tokens": 0, "output_tokens": 0})
+        got = self.parse("claude", [self.init, limit])
+        self.assertEqual((got["status"], got["problem"], got["estimated_cost_usd"]), ("incomplete", "native-error-rate-limit", 0.0))
+
+    def test_a_rejected_rate_limit_event_names_the_error_that_follows(self):
+        rejected = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day"}}
+        error = self.result(is_error=True, subtype="error_during_execution", result="API Error")
+        self.assertEqual(self.parse("claude", [self.init, rejected, error])["problem"], "native-error-rate-limit")
+        self.assertEqual(self.parse("claude", [self.init, rejected])["problem"], "native-error-rate-limit")  # no result at all
+        allowed = self.parse("claude", [self.init, rejected, self.result()])  # served after all (overage): a valid session
+        self.assertEqual((allowed["status"], allowed["problem"]), ("complete", None))
+
+    def test_usage_numbers_never_classify_an_error(self):
+        error = self.result(is_error=True, subtype="error_during_execution", result="boom",
+                            usage={"input_tokens": 429, "output_tokens": 429})
+        self.assertEqual(self.parse("claude", [self.init, error])["problem"], "native-error")
+
+    def test_a_background_task_reopens_the_same_session_once_per_notification(self):
+        notice = {"type": "system", "subtype": "task_notification", "task_id": "t", "status": "completed", "session_id": "s"}
+        first = self.result(num_turns=47, total_cost_usd=2.45, usage={"input_tokens": 84, "output_tokens": 45572})
+        second = self.result(num_turns=2, total_cost_usd=2.538, usage={"input_tokens": 6, "output_tokens": 932})
+        got = self.parse("claude", [self.init, first, notice, self.init, second])  # the shape of F's GJ-F5A63B5F-r02-xhigh
+        self.assertEqual((got["status"], got["problem"], got["continuations"]), ("complete", None, 1))
+        self.assertEqual((got["usage"]["input_tokens"], got["usage"]["output_tokens"], got["completed_turns"]), (90, 46504, 49))
+        self.assertEqual(got["estimated_cost_usd"], 2.538)  # cumulative, so the last one
+        other = dict(self.init, session_id="other")
+        for rows, problem in (([self.init, first, self.init, second], "ambiguous-session"),  # no notification
+                              ([self.init, first, notice, other, second], "ambiguous-session"),
+                              ([self.init, notice, self.init, second], "ambiguous-session"),  # notice before any result
+                              ([self.init, first, notice, self.init, self.result(total_cost_usd=1.0)], "invalid-cost"),
+                              ([self.init, first, notice, self.init, notice, self.init, second], "ambiguous-session")):
+            with self.subTest(rows=[r.get("subtype") for r in rows]):
+                self.assertEqual((self.parse("claude", rows)["status"], self.parse("claude", rows)["problem"]), ("incomplete", problem))
+        unfinished = self.parse("claude", [self.init, first, notice, self.init])
+        self.assertEqual((unfinished["status"], unfinished["problem"]), ("incomplete", None))
+
+
 if __name__ == "__main__":
     unittest.main()

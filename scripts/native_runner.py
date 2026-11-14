@@ -5,11 +5,13 @@ Usage: native_runner.py --cli codex|claude --receipt PATH --provider P --model M
 The prompt arrives on stdin and is passed through. The receipt records only what the JSON stream proves: neither CLI reports the
 served effort or provider, and Codex reports the served model only when the server reroutes it (recorded, so the run fails as a
 mismatch); otherwise those stay None (never copied from the request).
-Stream content is never echoed or stored; only its sha256 and the normalized usage are kept.
+Stream content is never echoed or stored; only its sha256 and the normalized usage are kept, unless --stream-copy names a new
+file (owner-only): then the raw stream is kept there, byte for byte, for diagnosis. It holds the session's content.
 """
 import argparse
 import hashlib
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
 import subprocess
@@ -124,6 +126,16 @@ def claude_settings(cli, command):
     return hashlib.sha256(data).hexdigest()
 
 
+class _Tee:
+    """Feeds the telemetry and keeps the same bytes in the stream copy."""
+    def __init__(self, telemetry, copy):
+        self.telemetry, self.copy = telemetry, copy
+
+    def feed(self, chunk):
+        self.copy.write(chunk)
+        self.telemetry.feed(chunk)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--cli", choices=("codex", "claude"), required=True)
@@ -131,6 +143,7 @@ def main(argv=None):
         parser.add_argument(name, required=True)
     parser.add_argument("--price-table")
     parser.add_argument("--settings-sha256", help="required with a Claude --settings file: the frozen digest it must have (r41 G2)")
+    parser.add_argument("--stream-copy", help="keep the raw stream in this new file (absolute path, owner-only); off by default")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -152,15 +165,23 @@ def main(argv=None):
             if args.cli != "codex":  # ponytail: Claude usage semantics (cache read/write apart from input) come with that executor
                 raise ValueError("price table supports Codex usage only")
             table, digest = price_table(args.price_table)
+        copy = None
+        if args.stream_copy:
+            if not Path(args.stream_copy).is_absolute():
+                raise ValueError("stream copy path must be absolute")
+            copy = os.fdopen(os.open(args.stream_copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb")
         handle = open(receipt, "x")  # r41 G1: reserve the receipt before spending; an empty one left behind marks an attempt
     except (ValueError, OSError) as error:
         print(f"native-runner refused: {error}", file=sys.stderr)
         return 2
     telemetry = NativeTelemetry(args.cli)
     stderr_state = {"bytes": 0}
+    reader = telemetry if copy is None else _Tee(telemetry, copy)
     # Same process group: replay_eval owns cleanup. Both pipes are counted in memory.
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
-        streams_closed = drain(process, telemetry, wait=True, echo=False, stderr_state=stderr_state)
+        streams_closed = drain(process, reader, wait=True, echo=False, stderr_state=stderr_state)
+    if copy is not None:
+        copy.close()
     result = telemetry.finish()
     if not streams_closed:
         result["status"] = "incomplete"
@@ -182,6 +203,10 @@ def main(argv=None):
              "problem": result["problem"], "settings_sha256": settings_digest}  # pilot cell 3: fixed telemetry code (e.g. native-error), never stream content
     if digest is not None:
         value["price_table_sha256"] = digest
+    if result["continuations"]:
+        value["continuations"] = result["continuations"]  # turns the CLI reopened for a background task (counted in usage)
+    if copy is not None:
+        value["stream_copy"] = Path(args.stream_copy).name  # its bytes hash to source_sha256
     with handle:
         json.dump(value, handle, indent=2, sort_keys=True)
         handle.write("\n")

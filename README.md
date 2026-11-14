@@ -61,12 +61,12 @@ reuse the existing query path, and stop after integrated proof.
 
 ## Install
 
-Install the stable CLI from a published tag. The example uses v1.8.1. The release page includes
+Install the stable CLI from a published tag. The example uses v1.9.0. The release page includes
 the source archive, SHA-256 checksums and build provenance details.
-[007 Framework 1.8.1](https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.8.1)
+[007 Framework 1.9.0](https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.9.0)
 
 ```bash
-release_tag=v1.8.1
+release_tag=v1.9.0
 git clone --branch "$release_tag" --depth 1 https://github.com/marcuscavalcanti/007-framework.git
 cd 007-framework
 pipx install .
