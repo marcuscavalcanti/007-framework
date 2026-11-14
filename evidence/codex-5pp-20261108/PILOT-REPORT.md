@@ -30,8 +30,3 @@
 - 1.7.0 and 1.8.0 count it toward the invalid budget, so a short outage ends a paid study.
 - A later release should pause the run on `native-error-rate-limit`, as a planned stop, instead of spending cells. Any further study
   should pre-register that handling.
-
-## Addendum (2026-11-12, maintainer)
-- **Cause of the refusals:** the ChatGPT account's Codex quota was exhausted. It was not a short outage. The answer stays NO-STOPPED
-  with the provider as cause.
-- **What follows:** Codex studies wait until the quota is back ([PROGRAM.md](../PROGRAM.md)).

@@ -95,7 +95,8 @@ re-grades. The cell was not accepted in any of the three, so acceptance and R ar
   pass every reach test: the worst-case imputation (`xhigh` passes every reach test) equals the observed `xhigh` value, and P and B
   coincide because both `medium` attempts score the same. L2 equals L0 in mean, interval and statistic; its critical value differs
   because the simulation pool changed.
-- **Hashes.** `SHA256SUMS` hashes to `12a77915…`, the value GO-3 records. Every file in it verified at 2026-11-14T10:43:59Z, after
+- **Hashes.** The pre-registration ledger, published here as `SHA256SUMS.prereg` (byte-identical to the `SHA256SUMS` that
+  AMENDMENT-F1 and GO-3 name), hashes to `12a77915…`, the value GO-3 records. Every file in it verified at 2026-11-14T10:43:59Z, after
   the robustness step.
 
 ## Errata (hashed files are not edited)
@@ -131,3 +132,5 @@ the maintainer's records (`revisao-f-resultado-20261114`, `revisao-f-resultado-r
 | `descriptive-after-look.json` | per arm, computed after the look with the pinned `load_cells` and `cost_of`: cells, valid, accepted, total, mean and median cost |
 | `run.log` (`6c90ecc2…`), `load.log` (`9c4b59d2…`), `autolaunch.log` (`8177df99…`) | the run, its one-minute load averages and the launcher |
 | `pilot-gate.json` | the 60% flag (copy of `smoke-a3-20261112/pilot-gate.json`) |
+| `SHA256SUMS.prereg` | the pre-registration ledger. Four files it names hold local paths and stay in the maintainer's records (`f-set.json`, `f1.json`, `quota_f.py`, `bin/claude`); every other file it names is here and verifies |
+| `frozen-reach.json`, `dryrun/dry-run.json` | the frozen reach set and the PREREG dry run, as the ledger hashes them |
