@@ -1,0 +1,12 @@
+{
+ "go": "Marcus, no AskUserQuestion: \"GO condicional automático (Recomendado)\"",
+ "at": "2026-11-13T02:59:57Z",
+ "option_text": "Autorizo agora: despacha sozinho a versão da F-1 que (a) passar no ensaio seco, (b) receber SHIP do Fable xhigh sem nenhuma correção pendente, (c) passar nos portões de cota e de carga. O GO-3.json registra estas palavras e o hash final. Se o Fable pedir qualquer correção, nada sai sem você.",
+ "reset": "Marcus: \"Só quando eu avisar que está pronto (Recomendado)\" — Claude avisa quando ensaio e revisão estiverem prontos e a máquina quieta; Marcus paga o reset da janela de 7 dias; o F sai em seguida",
+ "quota": "sem crédito extra: a via é o reset da janela (taxa de reset de Marcus)",
+ "reservation": {
+  "answer": "Marcus, no AskUserQuestion: \"Sim, reservo até o resultado (Recomendado)\"",
+  "at": "2026-11-13T10:35:25Z",
+  "meaning": "máquina e conta Claude reservadas para o estudo F do reset até existir f-result.json: sem suítes de teste pesadas, sem mutation_probe, sem sessões longas de Claude"
+ }
+}

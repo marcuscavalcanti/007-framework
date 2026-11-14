@@ -6,6 +6,37 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Changed
+
+- Amendment 2 to the Codex 5-point pilot pre-registration (`evidence/codex-5pp-20261108/AMENDMENT-2.md`), published before
+  the corrected gate re-run and any pilot attempt. It pins the pilot to the v1.7.0 code, keeps the evaluator embedded in the mined
+  tasks, re-runs the corrected planted-defect gate, fixes a blind rule for tasks whose reference fails, uses the floor as written
+  and adds a dry run with no model. The original pre-registration, Amendment 1 and their scripts are unchanged.
+- `evidence/codex-5pp-20261108/DECISIONS.md`, pushed before the gate re-run's result and any pilot attempt: what each pilot
+  outcome leads to, the confirmatory cost cap (US$400), and the rules for whether one repository can reach a verdict and
+  for adoption after the announcement.
+- Amendment 3 (`evidence/codex-5pp-20261108/AMENDMENT-3.md`), pushed before the gate re-run's output and any pilot attempt, after an
+  adversarial review of the viability rule: the confirmatory pre-registration and analysis at 5 points, a dry run on every pooled
+  task with varied outcomes, a freeze that third parties can re-run with published per-cell tables, and the part-3 script.
+- Amendment 4 (`evidence/codex-5pp-20261108/AMENDMENT-4.md`), after traefik/yaegi failed the gate re-run's consistency check
+  and before any second re-run or pilot attempt: one quiet re-run, then an inconsistent repository leaves the pool.
+- Amendment 5 and PREREG-B (`evidence/codex-5pp-20261108/`), before any pilot attempt, after an adversarial validation of the plan:
+  four oracle controls (reference-failed union, a dry run that checks the reference, a serial re-grade with NO-INSTRUMENT above 2%
+  discordance, one-job robustness re-grades), a load log, an A/A check, and a per-repository test of the thesis as written at the
+  break-even margin. DECISIONS revision 2 makes that test the single answer.
+- Amendment 6 (`evidence/codex-5pp-20261108/AMENDMENT-6.md`), after the dry run failed before any pilot attempt: pierrec/lz4's
+  task bases hold a symlink the pinned snapshot refuses, so it leaves the pool; yaegi left under Amendment 4 (47/68 vs 46/68).
+- Amendment 7 (`evidence/codex-5pp-20261108/AMENDMENT-7.md`), before any pilot attempt: every remaining run uses 2 jobs, after the
+  dry run at 4 jobs drove the load to about 870 and the machine restarted.
+- Amendment 8 (`evidence/codex-5pp-20261108/AMENDMENT-8.md`), before any pilot attempt: the serial re-grade reads patches as bytes;
+  newline translation had made a CRLF patch unappliable and failed the dry run's serial check.
+- Study F result (`evidence/go-json-claude-f-20261112/RESULT-F.md`): on go-json, Claude Opus 5.5 requested at `medium` against
+  `xhigh` reads PAYS under PREREG-F and Amendment F-1 (reach difference +0.8 points, 95% interval −3.0 to +4.7, margin 20 points;
+  cost per accepted change 0.26 of `xhigh`'s, worst case up to 0.32), with whole-change acceptance 56/82 against 61/81. DECISIONS
+  part 6 reads YES for this executor on this repository; T1's third bullet was completed after the look by a demote-only step. The
+  study was selected after an exploratory reading, and the result covers one public repository. Reviewed in two rounds by Claude
+  Fable 5.2 at maximum effort.
+
 ## [1.9.0] - 2026-11-14
 
 A minor release for `007 lab`: what Claude study F ran by script around 1.8.1 is now native, and most open items of the 1.8.0

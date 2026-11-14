@@ -1,0 +1,26 @@
+{
+ "disagree": 1,
+ "discordance": 0.006134969325153374,
+ "per_arm": {
+  "medium": {
+   "cells": 82,
+   "disagree": 1
+  },
+  "xhigh": {
+   "cells": 81,
+   "disagree": 0
+  }
+ },
+ "unapplied": [],
+ "disagreements": [
+  {
+   "cell": "GJ-540F0144-r02-medium",
+   "changed": [
+    "github.com/go-json-experiment/json :: 0 :: TestMarshal/Maps/String/Deterministic+AllowInvalidUTF8+AllowDuplicateNames"
+   ]
+  }
+ ],
+ "evaluator": "pinned",
+ "code_commit": "f05ebcbc47496bcd39c272fe2d0dd82d9a336879",
+ "set_sha256": "2402907a97fed0fc46ccd429097328e175686a647820b0872356db71aaf1020e"
+}
