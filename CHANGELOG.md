@@ -8,9 +8,10 @@ schemas, and the dashboard snapshot.
 
 ## [1.9.0] - 2026-11-14
 
-A minor release for `007 lab`: what Claude study F ran by script around 1.8.1 is now native, and every open item of the 1.8.0
-and 1.8.1 qualification records is closed but one (a paid measurement). Every new option is off by default: a run or report
-without them behaves as in 1.8.1. Release qualification is recorded in [the release record](evidence/v1.9.0/release-evidence.md).
+A minor release for `007 lab`: what Claude study F ran by script around 1.8.1 is now native, and most open items of the 1.8.0
+and 1.8.1 qualification records are closed; the record lists the ones that stay open. Every new option is off by default: a run
+or report without them behaves as in 1.8.1, except the fixes below. Release qualification is recorded in
+[the release record](evidence/v1.9.0/release-evidence.md).
 
 ### Added
 
@@ -21,12 +22,13 @@ without them behaves as in 1.8.1. Release qualification is recorded in [the rele
   dispatched again after the pause), `--rate-limit-wait-s` (wait out the pause inside the run) and `--over-limit record` (a cell
   above `--stop-usd` is counted and the run goes on to `--max-usd`). New planned pauses: `machine-busy`, `quota-hold`. New stops:
   `cost-marker-hold` (terminal), `looked`, `load-sensitive-oracle`. `run` returns `refused_per_arm`, `requeued` and
-  `over_limit_cells`.
-- `007 lab report --single-look` writes `LOOK.json`, after which `report` refuses to read the results and `run` refuses to add to
-  them. `--missing-data-guard --reserve-usd X` adds F-1's guard: readings P and B, L2 imputed from the plan, the cost ratio with
-  its interval and worst case, and an answer (PAYS, PROVEN-NOT-ECONOMIC, DOES-NOT-PAY). `--frozen-reach FILE` fixes the reach set.
-  `compare.critical_floor` sets a floor for the critical value. On the published 2026-11-07 and study F results the guard
-  reproduces every published statistic, critical value and cost ratio.
+  `over_limit_cells`, `quota_probe_usd` and `quota_probes_unmeasured`. A quota probe's cost joins the run's spend.
+- `007 lab report --single-look` takes the results' run lock and writes `LOOK.json`, after which `report` refuses to read the
+  results and `run` refuses to add to them, also between chunks. `--missing-data-guard --reserve-usd X --replicates N` adds F-1's
+  guard: readings P and B, L2 imputed from the plan of N replicates, the cost ratio with its interval and worst case, and an
+  answer (PAYS, PROVEN-NOT-ECONOMIC, DOES-NOT-PAY). `--frozen-reach FILE` fixes the reach set and records its digest.
+  `compare.critical_floor` sets a floor for the guard's critical value. On the published 2026-11-07 and study F results the guard
+  reproduces every statistic, critical value and cost ratio that study F's hashed `analyze_f.py` gives.
 - `native_runner --stream-copy FILE` (placeholder `{stream_copy}`) keeps the raw stream beside the cell, owner-only.
 - The run manifest records the grading `toolchain`: path and version of each acceptance interpreter and of `go`, `node` or
   `pytest` when an adapter calls them. A change on resume is a `manifest-mismatch`.
@@ -38,7 +40,9 @@ without them behaves as in 1.8.1. Release qualification is recorded in [the rele
 
 - The default `--jobs` is a quarter of the cores, at least 2 (was a third).
 - `arm_accounting` gives `refused` per arm and `replicates`; `report.md` names refusals per arm and says when they hit the arms
-  unequally.
+  unequally, and the printed verdict carries `refused_unequal`.
+- `run` no longer stops with `usd-budget` when the queue is already empty (1.8.1 checked the budget before the queue).
+- A rate-limit cooldown applies only while planned cells remain.
 
 ### Fixed
 
@@ -55,7 +59,10 @@ without them behaves as in 1.8.1. Release qualification is recorded in [the rele
 - A snapshot's relative symbolic link whose target stays inside the snapshot is materialized as a copy instead of refusing the
   cell; absolute links, links that leave the snapshot or have no target are still refused.
 - More forms of a file argument are sealed: `KEY=/file`, `--flag=key=/file`, `-f/file`, `@/file` (1.8.1 review item 6).
-- A controller error records `controller_error` (type, message, innermost frame) in the cell and prints them to stderr.
+- A snapshot's directory link is copied only after the links inside its target are materialized.
+- A controller error records `controller_error` (type, innermost frame, and the message when the set retains diagnostic text)
+  in the cell and prints them to stderr.
+- More forms of a file argument are sealed, also `--flag=@/file`; a pre-1.9 manifest without `toolchain` resumes.
 
 ### Not in this release
 

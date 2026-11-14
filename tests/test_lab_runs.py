@@ -17,9 +17,11 @@ import effort_lab as lab  # noqa: E402
 import replay_eval  # noqa: E402
 
 ZERO = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+SLEEP = time.sleep  # the agent's own delay; tests patch the controller's waits (lab.time.sleep is this same module)
 
 
 def write_set(root, tasks=4, **extra):
+    root.mkdir(exist_ok=True)
     path = root / "set.json"
     path.write_text(json.dumps({"seed": 1, "arms": {"a": {}, "b": {}}, "tasks": [{"id": f"T{i}"} for i in range(tasks)], **extra}))
     return path
@@ -42,7 +44,7 @@ class Agent:
             self.peak = max(self.peak, self.live)
         try:
             if self.delay:
-                time.sleep(self.delay(cid))
+                SLEEP(self.delay(cid))
             if self.raise_ and self.raise_(cid, out):
                 raise RuntimeError("snapshot refused")
             if self.refuse and self.refuse(cid, attempt):
@@ -175,12 +177,28 @@ class Limits(unittest.TestCase):
         self.assertEqual(capped["stop"], "usd-budget")  # only the total cap stops it
         self.assertLessEqual(capped["spent"], 75.0)
 
+    def test_a_dear_cell_after_a_pause_still_ends_the_run(self):
+        # review B1: a refusal sets the pause, then an in-flight cell costs more than --stop-usd: the stop is final, not a pause
+        for wait in (0, 3600):
+            with self.subTest(wait=wait), mock.patch.object(lab, "RATE_LIMIT_COOLDOWN_S", 0), mock.patch.object(lab.time, "sleep"):
+                out = self.root / f"dear-{wait}"
+                first = []
+                agent = Agent(refuse=lambda cid, attempt: not first and not first.append(cid),
+                              cost=lambda cid: 25.0, delay=lambda cid: 0 if cid == agent.calls[0] else .2)
+                state = go(self.path, out, agent, jobs=2, stop_usd=20, max_usd=400, requeue_refused=True, rate_limit_wait_s=wait)
+                self.assertEqual((state["stop"], state["calls"]), ("cell-over-limit", 2))
+                self.assertTrue((out / "STOP.json").exists())
+
     def test_chunks_finish_before_the_gates_run_again(self):
         gates = []
         with mock.patch.object(lab, "quiet", lambda out, m, w, step: gates.append(("load", step)) or True), \
-                mock.patch.object(lab, "quota_check", lambda config, out, left: gates.append(("quota", round(left, 3))) or (True, "headroom")):
-            state = go(self.path, self.out, Agent(delay=lambda cid: .01), jobs=2, chunk=3, max_load=8, quota_gate=True)
-        self.assertEqual((state["stop"], state["calls"]), (None, 8))
+                mock.patch.object(lab, "quota_check", lambda config, out, left: gates.append(("quota", round(left, 3))) or
+                                  (out / "quota.jsonl").open("a").write(json.dumps({"probe_cost_usd": .01}) + "\n") and (True, "headroom", .01)):
+            path = write_set(self.root / "probed", quota_probe={"command": ["probe"]})
+            state = go(path, self.out, Agent(delay=lambda cid: .01), jobs=2, chunk=3, max_load=8, quota_gate=True)
+        self.assertEqual((state["stop"], state["calls"], state["quota_probe_usd"], state["spent"]), (None, 8, .03, 8.03))
+        again = go(path, self.out, Agent())  # a resume charges the probes the run already made
+        self.assertEqual((again["calls"], again["spent"]), (0, 8.03))
         self.assertEqual(gates, [("load", "chunk at 0"), ("quota", 1.0), ("load", "chunk at 3"), ("quota", .625), ("load", "chunk at 6"), ("quota", .25)])
         sent = finished = 0
         for row in replay_eval.load_dispatch_history(self.out)[0]:  # the 4th and 7th dispatch wait for every earlier cell
@@ -197,9 +215,13 @@ class Limits(unittest.TestCase):
         self.assertEqual((busy["stop"], busy["calls"]), ("machine-busy", 0))
         self.assertFalse((self.out / "STOP.json").exists())
         self.assertEqual(json.loads((self.out / "load.log").read_text().splitlines()[0])["load"], [20.0, 20.0, 20.0])
-        with mock.patch.object(lab, "quota_check", return_value=(False, "seven_day at 0.9")):
-            held = go(self.path, self.out, Agent(), quota_gate=True)
-        self.assertEqual((held["stop"], held["calls"]), ("quota-hold", 0))
+        held_set = write_set(self.root / "probed", quota_probe={"command": ["probe"]})
+        with mock.patch.object(lab, "quota_check", return_value=(False, "seven_day at 0.9", None)):
+            held = go(held_set, self.root / "held", Agent(), quota_gate=True)
+        self.assertEqual((held["stop"], held["calls"], held["quota_probes_unmeasured"]), ("quota-hold", 0, 1))
+        with self.assertRaisesRegex(ValueError, "quota_probe"):
+            go(self.path, self.root / "noprobe", Agent(), quota_gate=True)  # refused before the seal, not at the first gate
+        self.assertFalse((self.root / "noprobe" / "run-manifest.json").exists())
         with mock.patch.object(lab.os, "getloadavg", return_value=(1.0, 1.0, 1.0)):
             done = go(self.path, self.out, Agent(), max_load=8, load_wait_s=0)
         self.assertEqual((done["stop"], done["calls"]), (None, 8))
@@ -222,6 +244,13 @@ class Limits(unittest.TestCase):
         self.assertEqual(go(self.path, self.out, Agent())["stop"], "looked")
         with self.assertRaisesRegex(ValueError, "single look"):
             lab.report(self.path, self.out, None)
+        out = self.root / "paused"  # a look taken while a run waits between chunks ends it at the next chunk
+        def look_after_first(config, task, arm, rep, out_, timeout):
+            row = Agent()(config, task, arm, rep, out_, timeout)
+            (out_ / "LOOK.json").write_text("{}")
+            return row
+        state = go(self.path, out, look_after_first, chunk=1)
+        self.assertEqual((state["stop"], state["calls"]), ("looked", 1))
 
     def test_jobs_above_a_quarter_of_the_cores_warn_or_are_refused(self):
         with mock.patch.object(lab.os, "cpu_count", return_value=8):
@@ -234,7 +263,8 @@ class Limits(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "jobs limit"):
                 go(self.path, self.root / "strict", Agent(), jobs=3, strict_jobs=True)
             self.assertFalse((self.root / "strict").exists())
-        for bad in ({"over_limit": "maybe"}, {"chunk": 0}, {"max_load": 0}, {"cost_marker_at": 4}, {"rate_limit_wait_s": -1}):
+        for bad in ({"over_limit": "maybe"}, {"chunk": 0}, {"max_load": 0}, {"cost_marker_at": 4}, {"rate_limit_wait_s": -1},
+                    {"rate_limit_wait_s": 600}):  # waiting without --requeue-refused would lose each refused cell
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "limit"):
                 go(self.path, self.root / "bad", Agent(), **bad)
 
@@ -292,12 +322,18 @@ class Seal(unittest.TestCase):
             self.assertEqual(moved["details"]["toolchain"]["found"]["python"]["version"], "Python 3.99.1")
             version.write_text("3.99.0")
             self.assertEqual(go(path, out, Agent())["stop"], None)
+            manifest = json.loads((out / "run-manifest.json").read_text())  # a manifest from before 1.9 has no toolchain
+            del manifest["toolchain"]
+            old = root / "old"
+            old.mkdir()
+            (old / "run-manifest.json").write_text(json.dumps(manifest))
+            self.assertEqual(go(path, old, Agent())["stop"], None)  # compared only once a manifest records it
 
     def test_every_form_of_a_file_argument_is_sealed(self):
         with tempfile.TemporaryDirectory() as d:
             named = Path(d) / "agent.toml"
             named.write_text("x")
-            for part in (f"KEY={named}", f"--flag=key={named}", f"-f{named}", f"@{named}", f"--config={named}"):
+            for part in (f"KEY={named}", f"--flag=key={named}", f"-f{named}", f"@{named}", f"--config={named}", f"--flag=@{named}"):
                 with self.subTest(part=part):
                     self.assertEqual(lab.seal({"agent_command": ["/bin/sh", part]})["executables"][part]["path"], str(named.resolve()))
             self.assertNotIn("GIT_CONFIG_GLOBAL=/dev/null", lab.seal({"agent_command": ["/bin/sh", "GIT_CONFIG_GLOBAL=/dev/null"]})["executables"])
@@ -326,14 +362,18 @@ class QuotaGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d)
             event = {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {"seven_day": {"utilization": .2, "status": "allowed"}}}}
-            config = {"quota_probe": {"command": [sys.executable, "-c", f"print({json.dumps(json.dumps(event))}); print('not json')"]}}
-            self.assertEqual(lab.quota_check(config, out, 1.0), (True, "headroom"))
+            result = {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": .02}
+            config = {"quota_probe": {"command": [sys.executable, "-c", f"print({json.dumps(json.dumps(event))}); print('not json'); "
+                                                                        f"print({json.dumps(json.dumps(result))})"]}}
+            self.assertEqual(lab.quota_check(config, out, 1.0), (True, "headroom", .02))
             logged = json.loads((out / "quota.jsonl").read_text())
-            self.assertEqual((logged["utilization"], logged["probe_exit"]), ({"seven_day": .2}, 0))
+            self.assertEqual((logged["utilization"], logged["probe_exit"], logged["probe_cost_usd"]), ({"seven_day": .2}, 0, .02))
+            self.assertEqual(lab.probe_costs(out), (.02, 0))
             with self.assertRaisesRegex(ValueError, "quota_probe"):
                 lab.quota_check({}, out, 1.0)
             missing = {"quota_probe": {"command": [str(out / "absent")]}}
-            self.assertEqual(lab.quota_check(missing, out, 1.0), (False, "no rate_limit_event"))  # fails closed
+            self.assertEqual(lab.quota_check(missing, out, 1.0), (False, "no rate_limit_event", None))  # fails closed
+            self.assertEqual(lab.probe_costs(out), (.02, 1))  # a probe with no measured cost is counted, never guessed
 
 
 class LoadSensitiveOracle(unittest.TestCase):
@@ -377,7 +417,7 @@ class SnapshotLinks(unittest.TestCase):
             dest = root / "ok"
             dest.mkdir()
             replay_eval.extract_archive(self.archive(root, [("c.txt", "b.txt"), ("b.txt", "a.txt"), ("e", "d"), ("d/up.txt", "../a.txt")]), dest)
-            for name, text in (("b.txt", "A\n"), ("c.txt", "A\n"), ("e/x.txt", "X\n"), ("d/up.txt", "A\n")):
+            for name, text in (("b.txt", "A\n"), ("c.txt", "A\n"), ("e/x.txt", "X\n"), ("d/up.txt", "A\n"), ("e/up.txt", "A\n")):
                 self.assertEqual((dest / name).read_text(), text)
             self.assertFalse(any(p.is_symlink() for p in dest.rglob("*")))
             for links, reason in (([("out", "../outside")], "leaves"), ([("abs", "/etc/hosts")], "absolute"),
@@ -435,6 +475,11 @@ class MissingDataGuard(unittest.TestCase):
         self.assertEqual(g["readings"]["P"]["verdict"], "PROVEN")  # L0 alone would have said PROVEN
         absent = self.guard([r for r in self.cells() if not (r["task"] == "T9" and r["arm"] == "hi")])
         self.assertEqual(absent["missing_data"]["imputed_in_L2"], {"absent": 2})
+
+    def test_a_declared_floor_raises_the_critical_value(self):
+        self.config["compare"]["critical_floor"] = 99.0
+        g = self.guard(self.cells())
+        self.assertEqual((g["readings"]["P"]["critical"], g["verdict"], g["critical_floor"]), (99.0, "NOT-PROVEN", 99.0))
 
     def test_a_kill_does_not_pay(self):
         g = self.guard(self.cells(low_fail={(t, r) for t in self.tasks for r in (1, 2)}))

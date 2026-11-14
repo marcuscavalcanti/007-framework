@@ -165,12 +165,14 @@ def main(argv=None):
             if args.cli != "codex":  # ponytail: Claude usage semantics (cache read/write apart from input) come with that executor
                 raise ValueError("price table supports Codex usage only")
             table, digest = price_table(args.price_table)
-        copy = None
-        if args.stream_copy:
-            if not Path(args.stream_copy).is_absolute():
-                raise ValueError("stream copy path must be absolute")
-            copy = os.fdopen(os.open(args.stream_copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb")
+        if args.stream_copy and not Path(args.stream_copy).is_absolute():
+            raise ValueError("stream copy path must be absolute")
+        if args.stream_copy and (os.path.lexists(args.stream_copy)):
+            raise ValueError("stream copy already exists")
         handle = open(receipt, "x")  # r41 G1: reserve the receipt before spending; an empty one left behind marks an attempt
+        copy = None
+        if args.stream_copy:  # after the receipt: a refused copy leaves the reserved receipt, which marks the attempt
+            copy = os.fdopen(os.open(args.stream_copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb")
     except (ValueError, OSError) as error:
         print(f"native-runner refused: {error}", file=sys.stderr)
         return 2

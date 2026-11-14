@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -20,6 +21,10 @@ FAKE = r"""import json, os, pathlib, sys
 prompt = sys.stdin.read()
 pathlib.Path("answer.txt").write_text(str(len(prompt)))
 mode, name = os.environ.get("FAKE_MODE", "ok"), pathlib.Path(sys.argv[0]).name
+if mode.startswith("limit-once:"):  # the first call anywhere is refused, every later one served
+    marker = pathlib.Path(mode.split(":", 1)[1])
+    mode = "ok" if marker.exists() else "usage-limit"
+    marker.touch()
 sys.stderr.write("PRIVATE-SENTINEL on stderr\n")  # review r25-r32 R5: native stderr must not reach retained evidence
 if name == "codex":
     rows = [{"type": "thread.started", "thread_id": "t1"}, {"type": "turn.started"},
@@ -197,6 +202,32 @@ class NativeRunnerTests(unittest.TestCase):
         self.assertTrue(effort_lab.refused(self.output, "t1-r01-claude"))
         _, used = self.cell("claude", mode="ok", replicate=2)  # a served cell names no refusal
         self.assertFalse(effort_lab.refused(self.output, "t2-r02-claude"))
+
+    def test_a_refused_attempt_is_set_aside_and_dispatched_again_through_the_real_cell(self):
+        effort_lab = importlib.import_module("effort_lab")
+        runner = [sys.executable, "-B", str(RUNNER), "--cli", "claude", "--receipt", "{runner_receipt}", "--provider", "anthropic",
+                  "--model", "{model}", "--effort", "{effort}", "--stream-copy", "{stream_copy}", "--", str(self.bin / "claude"), *CLI["claude"]]
+        task = {"id": "t1", "repo": "r", "base": self.base, "accepted": self.base, "prompt": "do the task",
+                "acceptance": [[sys.executable, "-c", "import pathlib; raise SystemExit(0 if pathlib.Path('answer.txt').exists() else 1)"]]}
+        config = {"seed": 1, "repos": {"r": str(self.repo)}, "agent_command": runner, "tasks": [task],
+                  "arms": {"claude": {"provider": "anthropic", "model": "m", "effort": "medium", "doctrine": ""}}}
+        path, out = self.root / "set.json", self.root / "requeue"
+        path.write_text(json.dumps(config))
+        old = os.environ.get("FAKE_MODE")
+        os.environ["FAKE_MODE"] = f"limit-once:{self.root / 'limited'}"
+        try:
+            first = effort_lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=9, stop_usd=1, requeue_refused=True)
+            with mock.patch.object(effort_lab, "RATE_LIMIT_COOLDOWN_S", 0):
+                second = effort_lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=9, stop_usd=1, requeue_refused=True)
+        finally:
+            os.environ.pop("FAKE_MODE") if old is None else os.environ.update(FAKE_MODE=old)
+        self.assertEqual((first["stop"], first["refused"], first["requeued"], first["spent"]), ("rate-limit", 1, 1, 0.0))
+        self.assertEqual((second["stop"], second["calls"], second["spent"]), (None, 1, 0.01))
+        kept = {p.name for p in (out / "refused").iterdir()}  # the refused attempt's files, nothing deleted
+        self.assertLessEqual({"t1-r01-claude.1.json", "t1-r01-claude.1.runner.json", "t1-r01-claude.1.stream.jsonl"}, kept)
+        cell = json.loads((out / "t1-r01-claude.json").read_text())
+        self.assertEqual((cell["valid"], cell["accepted"]), (True, True))
+        self.assertEqual(json.loads((out / "t1-r01-claude.runner.json").read_text())["stream_copy"], "t1-r01-claude.stream.jsonl")
 
     def test_a_reopened_turn_and_the_opt_in_stream_copy(self):
         record, receipt = self.cell("claude", mode="continued")

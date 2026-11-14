@@ -570,14 +570,15 @@ def plan(config, replicates):
     return cells
 
 
-def _error_detail(error):
-    """Type, message (first 300 characters) and the innermost traceback frame of a controller error."""
+def _error_detail(error, retain=True):
+    """Type, message (first 300 characters; None unless the set retains diagnostic text, as replay cells do) and the innermost
+    traceback frame of a controller error."""
     frames = traceback.extract_tb(error.__traceback__)
     where = f"{Path(frames[-1].filename).name}:{frames[-1].lineno} in {frames[-1].name}" if frames else None
-    return {"type": type(error).__name__, "message": str(error)[:300], "where": where}
+    return {"type": type(error).__name__, "message": str(error)[:300] if retain else None, "where": where}
 
 
-def _controller_failure(out, task, arm, rep, error):
+def _controller_failure(out, task, arm, rep, error, retain=True):
     """The result of a cell whose controller raised: invalid, never retried, its receipt (if the agent ran) kept and bound."""
     cid = replay_eval.cell_id(task, arm, rep)
     path, receipt = out / f"{cid}.json", out / f"{cid}.runner.json"
@@ -586,7 +587,7 @@ def _controller_failure(out, task, arm, rep, error):
     row = {"schema": "007-framework/replay-cell/v1", "task": task["id"], "arm": arm, "replicate": rep, "valid": False, "accepted": False,
            "failure_class": f"controller-error:{type(error).__name__}", "cost_usd": "unmeasured", "acceptance_outcomes": "unavailable",
            "runner_receipt_sha256": hashlib.sha256(receipt.read_bytes()).hexdigest() if receipt.is_file() else "unmeasured",
-           "controller_error": _error_detail(error)}
+           "controller_error": _error_detail(error, retain)}
     path.write_text(json.dumps(row))
     return row
 
@@ -688,8 +689,7 @@ def _named_files(part):
         names |= {part.split("=", 1)[1], part.rsplit("=", 1)[1]}
     if len(part) > 2 and part[0] == "-" and part[1] != "-":
         names.add(part[2:])
-    if part.startswith("@"):
-        names.add(part[1:])
+    names |= {name[1:] for name in names if name.startswith("@")}  # `@/f`, `--flag=@/f`
     return sorted(name for name in names if os.path.isabs(name))
 
 
@@ -800,7 +800,7 @@ def jobs_limit():
 
 
 LOAD_POLL_S, LOAD_LOG_S, QUOTA_TIMEOUT_S = 300, 60, 300
-PLANNED_PAUSES = ("call-budget", "rate-limit", "machine-busy", "quota-hold")  # a later run resumes them; no STOP.json
+PLANNED_PAUSES = ("call-budget", "rate-limit", "machine-busy", "quota-hold", "looked")  # a later run resumes them; no STOP.json
 
 
 def _log_load(out, step=None):
@@ -869,10 +869,9 @@ def quota_judge(events, left, windows=("seven_day",), need=.60, ceiling=.95):
 def quota_check(config, out, left):
     """Run the set's quota probe (one minimal call on the study's model, never a cell) and judge its rate_limit_event rows.
     Appends the decision to quota.jsonl."""
-    probe = config.get("quota_probe")
-    if not isinstance(probe, dict) or not isinstance(probe.get("command"), list) or not all(isinstance(p, str) for p in probe["command"]):
-        raise ValueError("--quota-gate needs quota_probe.command (an argv list) in the set")
-    events, exit_code = [], None
+    validate_quota_probe(config)
+    probe = config["quota_probe"]
+    events, exit_code, cost = [], None, None
     try:
         with tempfile.TemporaryDirectory(prefix="007-quota-") as scratch:
             done = subprocess.run(probe["command"], cwd=scratch, capture_output=True, text=True, timeout=QUOTA_TIMEOUT_S, stdin=subprocess.DEVNULL)
@@ -884,13 +883,48 @@ def quota_check(config, out, left):
                 continue
             if isinstance(row, dict) and row.get("type") == "rate_limit_event" and isinstance(row.get("rate_limit_info"), dict):
                 events.append(row["rate_limit_info"])
+            if isinstance(row, dict) and row.get("type") == "result" and harness_report._valid_money(row.get("total_cost_usd")):
+                cost = row["total_cost_usd"]  # the probe is a real call: its cost joins the run's spend
     except (OSError, subprocess.TimeoutExpired) as error:
         exit_code = type(error).__name__
     ok, reason, used = quota_judge(events, left, tuple(probe.get("windows", ("seven_day",))), probe.get("need", .60), probe.get("ceiling", .95))
     with (out / "quota.jsonl").open("a") as handle:
         handle.write(json.dumps({"at": _now(), "ok": ok, "reason": reason, "utilization": used, "cells_left_share": left,
-                                 "probe_exit": exit_code, "events": events}) + "\n")
-    return ok, reason
+                                 "probe_exit": exit_code, "probe_cost_usd": cost, "events": events}) + "\n")
+    return ok, reason, cost
+
+
+def validate_quota_probe(config):
+    probe = config.get("quota_probe")
+    if not isinstance(probe, dict) or not isinstance(probe.get("command"), list) or not probe["command"] or not all(isinstance(p, str) for p in probe["command"]):
+        raise ValueError("--quota-gate needs quota_probe.command (an argv list) in the set")
+    windows = probe.get("windows", ["seven_day"])
+    if not isinstance(windows, list) or not windows or not all(isinstance(w, str) for w in windows):
+        raise ValueError("quota_probe.windows must be a nonempty list of names")
+    for key, default in (("need", .60), ("ceiling", .95)):
+        value = probe.get(key, default)
+        if not harness_report._valid_money(value) or value > 1:
+            raise ValueError(f"quota_probe.{key} must be a share between 0 and 1")
+
+
+def probe_costs(out):
+    """(measured cost, probes without a measured cost) of every quota probe this run recorded."""
+    measured, unmeasured = 0.0, 0
+    try:
+        lines = (out / "quota.jsonl").read_text().splitlines()
+    except FileNotFoundError:
+        return measured, unmeasured
+    for line in lines:
+        try:
+            value = json.loads(line).get("probe_cost_usd")
+        except (ValueError, AttributeError):
+            unmeasured += 1
+            continue
+        if harness_report._valid_money(value):
+            measured += value
+        else:
+            unmeasured += 1
+    return measured, unmeasured
 
 
 def cost_marker(out, cells, arm_of, stop_usd, hold_usd):
@@ -940,6 +974,8 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
                                   ("rate_limit_wait_s", rate_limit_wait_s, 0), ("cost_marker_at", 1 if cost_marker_at is None else cost_marker_at, 1)):
         if type(value) is not int or value < minimum:
             raise ValueError(f"{name} limit must be an integer >= {minimum}")
+    if rate_limit_wait_s and not requeue_refused:  # waiting without requeue would lose every refused cell of the outage
+        raise ValueError("rate_limit_wait_s limit needs requeue_refused")
     if over_limit not in ("stop", "record"):
         raise ValueError("over_limit limit must be stop or record")
     if max_load is not None and not (harness_report._valid_money(max_load) and max_load > 0):
@@ -976,6 +1012,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     replay_eval.validate_cell_artifacts(config["tasks"], config["arms"], replicates, directory=out)
     if (out / LOOK).exists():  # the single look was taken: no attempt may follow it
         return {"stop": "looked", "calls": 0}
+    if options["quota_gate"]:
+        validate_quota_probe(config)  # before the seal, not at the first gate
     try:
         flagged = set(json.loads((config_path.parent / "sensitivity.json").read_text()).get("load_sensitive", []))
     except (OSError, ValueError, AttributeError):
@@ -1000,7 +1038,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     refusals = [row for row in history if "finished_at" in row and row.get("refused") is True]
-    if refusals:  # resuming inside the outage would only lose cells to it; the newest refusal anywhere in the ledger counts
+    remaining = any(replay_eval.cell_id(t, a, r) not in done for t, r, a in cells)
+    if refusals and remaining:  # a finished run has nothing to lose to the outage  # resuming inside the outage would only lose cells to it; the newest refusal anywhere in the ledger counts
         age = (datetime.now(timezone.utc) - max(harness_report._instant(row["finished_at"]) for row in refusals)).total_seconds()
         if age < RATE_LIMIT_COOLDOWN_S:
             return {"stop": "rate-limit-cooldown", "calls": 0, "retry_after_s": round(RATE_LIMIT_COOLDOWN_S - age)}
@@ -1034,7 +1073,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         changed += [f"executables:{part}" for part in parts]
         details = {part: {"sealed": old.get(part), "found": new.get(part)} for part in parts}
         if "toolchain" in changed:
-            details["toolchain"] = {"sealed": recorded["toolchain"], "found": sealed["toolchain"]}
+            details["toolchain"] = {"sealed": recorded.get("toolchain"), "found": sealed["toolchain"]}
         if bound and bound != {_sha256(manifest)}:
             changed.append("manifest")
         binding = _binding(out, recorded, _sha256(manifest), history)
@@ -1063,11 +1102,14 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     def over_limit(cost):
         nonlocal stop, over
         if cost is not None and cost > stop_usd:
-            if options["over_limit"] == "stop":
-                stop = stop or "cell-over-limit"
+            if options["over_limit"] == "stop":  # final: it outranks a planned pause set earlier in the same pass
+                stop = "cell-over-limit" if stop in (None, *PLANNED_PAUSES) else stop
             else:
                 over += 1  # recorded; only the total cap stops the run
 
+    probe_usd, probe_unmeasured = probe_costs(out)
+    if probe_usd:
+        charge(probe_usd)  # quota probes this run already made
     for row in refusals:  # the live decision, recorded in the ledger once per refused attempt
         if row["cell"] in arm_of:
             refused_per_arm[arm_of[row["cell"]]] += 1
@@ -1097,7 +1139,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         try:
             return cell, execute(config, task, arm, rep, out, timeout_s)
         except Exception as error:  # one cell's failure (a refused snapshot, a crash) is an invalid cell, never the whole run
-            row = _controller_failure(out, task, arm, rep, error)
+            row = _controller_failure(out, task, arm, rep, error, config.get("retain_diagnostic_text", True) is True)
             detail = row.get("controller_error") or _error_detail(error)
             print(f"007 lab: {replay_eval.cell_id(task, arm, rep)}: {detail['type']}: {detail['message']} (at {detail['where']})", file=sys.stderr)
             return cell, row
@@ -1109,6 +1151,9 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                     if not cost_marker(out, cells, arm_of, stop_usd, options["cost_marker_hold_usd"]):
                         stop = "cost-marker-hold"
                         break
+                if (out / LOOK).exists():  # a look taken while this run was paused between chunks
+                    stop = "looked"
+                    break
                 todo = [c for c in cells if cell_name(c) not in done]
                 if not todo:
                     break
@@ -1122,7 +1167,12 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                     stop = "machine-busy"
                     break
                 if options["quota_gate"]:
-                    ok, _ = quota_check(config, out, len(todo) / len(cells))
+                    ok, _, cost = quota_check(config, out, len(todo) / len(cells))
+                    if cost is None:
+                        probe_unmeasured += 1  # reported, not guessed: a probe is one minimal call
+                    else:
+                        probe_usd += cost
+                        charge(cost)
                     if not ok:
                         stop = "quota-hold"
                         break
@@ -1189,7 +1239,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     if stop and stop not in PLANNED_PAUSES:
         (out / "STOP.json").write_text(json.dumps({"stop": stop, "at": _now(), "spent": spent, "calls": calls}))
     return {"stop": stop, "calls": calls, "spent": spent, "invalid": invalid, "refused": sum(refused_per_arm.values()),
-            "refused_per_arm": refused_per_arm, "requeued": requeued, "over_limit_cells": over, "cells": len(cells)}
+            "refused_per_arm": refused_per_arm, "requeued": requeued, "over_limit_cells": over, "cells": len(cells),
+            "quota_probe_usd": probe_usd, "quota_probes_unmeasured": probe_unmeasured}
 
 
 # ---- score and report
@@ -1632,12 +1683,26 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
             "reach_frozen": frozen, "refused": len(every) - len(dispatched)}
 
 
-def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None):
-    """`single_look`: the report may be read once; it writes LOOK.json, after which neither `report` nor `run` works on these
-    results. `missing_data_guard_reserve` (US$ for a cell with no measured cost, normally the run's --stop-usd) adds the guard.
-    `frozen_reach` ({task: [tests]}, fixed before the attempts) replaces the reach the run's own cells would give."""
+def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None, planned_replicates=None):
+    """`single_look`: the report may be read once, with no run active on the results; it writes LOOK.json, after which neither
+    `report` nor `run` works on them. `missing_data_guard_reserve` (US$ for a cell with no measured cost, normally the run's
+    --stop-usd) adds the guard, which needs `planned_replicates` (the run's --replicates: the plan is not recorded). `frozen_reach`
+    ({task: [tests]}, fixed before the attempts) replaces the reach the run's own cells would give; its digest is reported."""
     if (results / LOOK).exists():
         raise ValueError(f"the single look has been taken ({LOOK} exists): these results are not read again: {results}")
+    if missing_data_guard_reserve is not None and (type(planned_replicates) is not int or planned_replicates < 1):
+        raise ValueError("the missing-data guard needs the run's planned replicates")
+    if not single_look:
+        return _report(config_path, results, next_results, False, missing_data_guard_reserve, frozen_reach, planned_replicates)
+    with (results / ".run.lock").open("a") as handle:  # no run may add cells while the single look is taken
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError(f"a run is active on these results: the single look waits for it: {results}") from None
+        return _report(config_path, results, next_results, True, missing_data_guard_reserve, frozen_reach, planned_replicates)
+
+
+def _report(config_path, results, next_results, single_look, missing_data_guard_reserve, frozen_reach, planned_replicates):
     config = json.loads(config_path.read_text())
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     manifest = sealed_state(config, results)
@@ -1711,6 +1776,8 @@ def report(config_path, results, next_results, *, single_look=False, missing_dat
     tier["margin"] = margin
     tier["compare_changed_after_seal"] = manifest["compare_changed"]
     tier["run_binding"] = manifest["state"]
+    # a limit can be per model: unequal refusals mean the arms' valid cells may cover different commits
+    tier["refused_unequal"] = len({a.get("refused", 0) for a in accounting["arms"].values()}) > 1
     tier["next_run_binding"] = stage2["state"] if stage2 else None
     tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, margin, critical=math.inf if critical is None else critical)
     proof = {"critical": critical, "statistic": studentized(diffs, margin) if len(diffs) > 1 else None,
@@ -1722,7 +1789,9 @@ def report(config_path, results, next_results, *, single_look=False, missing_dat
     aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a, reach=frozen_reach)) for a in (low, ref)}
     guard = None
     if missing_data_guard_reserve is not None:
-        planned = [(t["id"], rep, arm) for t, rep, arm in plan(config, accounting["replicates"])] if accounting["replicates"] else []
+        if planned_replicates < accounting["replicates"]:
+            raise ValueError(f"cells reach replicate {accounting['replicates']}, beyond the {planned_replicates} planned")
+        planned = [(t["id"], rep, arm) for t, rep, arm in plan(config, planned_replicates)]
         guard = missing_data_guard(config, results, task_dir, every, planned, low, ref, margin, missing_data_guard_reserve, frozen_reach)
     if stage2 is not None:
         stage2["stage1_cells_chained"] = sum(r["cell"] in next_rows for r in rows)
@@ -1731,7 +1800,8 @@ def report(config_path, results, next_results, *, single_look=False, missing_dat
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES,
-              "missing_data_guard": guard, "reach_frozen": frozen_reach is not None}
+              "missing_data_guard": guard, "reach_frozen": frozen_reach is not None,
+              "frozen_reach_sha256": hashlib.sha256(json.dumps(frozen_reach, sort_keys=True).encode()).hexdigest() if frozen_reach is not None else None}
     (results / "report.json").write_text(json.dumps(result, indent=1) + "\n")
     (results / "report.md").write_text(summary(result, low, ref, len(rows)))
     if single_look:
@@ -1827,6 +1897,7 @@ def main(argv=None):
             sub.add_argument("--missing-data-guard", action="store_true", help="add L0/L2 from the plan and the worst-case cost ratio")
             sub.add_argument("--reserve-usd", type=float, help="with --missing-data-guard: a cell with no measured cost counts at this (the run's --stop-usd)")
             sub.add_argument("--frozen-reach", type=Path, help="JSON {task: [tests]} fixed before the attempts, instead of the run's own reach")
+            sub.add_argument("--replicates", type=int, help="with --missing-data-guard: the run's --replicates, which fixes the plan")
     plan_ = commands.add_parser("feasibility", help="before spending: tasks a verdict needs, from a pilot or a stated per-task SD")
     plan_.add_argument("--set", type=Path, required=True, dest="path")
     plan_.add_argument("--results", type=Path)
@@ -1847,6 +1918,8 @@ def main(argv=None):
         return 0
     path = args.path.expanduser().resolve()
     out = args.out.expanduser().resolve() if args.out else None
+    if args.command == "run" and args.strict_jobs and args.jobs > jobs_limit():
+        parser.error(f"--jobs {args.jobs} is above {jobs_limit()} (a quarter of this machine's cores, at least 2)")
     if args.command in ("mine", "sensitivity", "chain") and args.jobs > jobs_limit():  # run checks its own
         message = f"--jobs {args.jobs} is above {jobs_limit()} (a quarter of this machine's cores, at least 2): load can move grades"
         if args.strict_jobs:
@@ -1866,12 +1939,12 @@ def main(argv=None):
     elif args.command == "chain":
         print(json.dumps(chain(path, args.results.expanduser().resolve(), out)))
     else:
-        if args.missing_data_guard and args.reserve_usd is None:
-            parser.error("--missing-data-guard needs --reserve-usd (the run's --stop-usd)")
+        if args.missing_data_guard and (args.reserve_usd is None or args.replicates is None):
+            parser.error("--missing-data-guard needs --reserve-usd (the run's --stop-usd) and --replicates (the run's)")
         reach = json.loads(args.frozen_reach.expanduser().read_text()) if args.frozen_reach else None
         result = report(path, args.results.expanduser().resolve(), args.next_results.expanduser().resolve() if args.next_results else None,
                         single_look=args.single_look, missing_data_guard_reserve=args.reserve_usd if args.missing_data_guard else None,
-                        frozen_reach=reach)
+                        frozen_reach=reach, planned_replicates=args.replicates)
         print(json.dumps({**result["verdict"], **({"missing_data_guard": {k: result["missing_data_guard"][k] for k in ("verdict", "answer")}}
                                                   if result["missing_data_guard"] else {})}))
     return 0
