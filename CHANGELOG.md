@@ -6,6 +6,71 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-14
+
+A minor release for `007 lab`: what Claude study F ran by script around 1.8.1 is now native, and most open items of the 1.8.0
+and 1.8.1 qualification records are closed; the record lists the ones that stay open. Every new option is off by default: a run
+or report without them behaves as in 1.8.1, except the fixes below. Release qualification is recorded in
+[the release record](evidence/v1.9.0/release-evidence.md).
+
+### Added
+
+- `007 lab run` options for an unattended study: `--chunk` (dispatch, wait, gate, repeat), `--max-load` and `--load-wait-s` (a
+  5-minute load gate before each chunk, `load.log`), `--quota-gate` (the set's `quota_probe`, judged on Claude's
+  `rate_limit_event` rows, fails closed; `quota.jsonl`), `--cost-marker-at` and `--cost-marker-hold-usd` (one cost projection
+  after the first cells; `HOLD.json` is terminal), `--requeue-refused` (a refused call is set aside under `refused/` and
+  dispatched again after the pause), `--rate-limit-wait-s` (wait out the pause inside the run) and `--over-limit record` (a cell
+  above `--stop-usd` is counted and the run goes on to `--max-usd`). New planned pauses: `machine-busy`, `quota-hold`. New stops:
+  `cost-marker-hold` (terminal), `looked`, `load-sensitive-oracle`. `run` returns `refused_per_arm`, `requeued` and
+  `over_limit_cells`, `quota_probe_usd` and `quota_probes_unmeasured`. A quota probe's cost joins the run's spend (one without a
+  measured cost at the `--stop-usd` reserve), and a probe runs only with room under `--max-usd`.
+- `007 lab report --single-look` takes the results' run lock and writes `LOOK.json`, after which `report` refuses to read the
+  results and `run` refuses to add to them, also between chunks. `--missing-data-guard --reserve-usd X --replicates N` adds F-1's
+  guard: readings P and B, L2 imputed from the plan of N replicates, the cost ratio with its interval and worst case, and an
+  answer (PAYS, PROVEN-NOT-ECONOMIC, DOES-NOT-PAY). `--frozen-reach FILE` fixes the reach set and records its digest.
+  `compare.critical_floor` sets a floor for the guard's critical value. On the published 2026-11-07 and study F results the guard
+  reproduces every statistic, critical value and cost ratio that study F's hashed `analyze_f.py` gives.
+- `native_runner --stream-copy FILE` (placeholder `{stream_copy}`) keeps the raw stream beside the cell, owner-only.
+- The run manifest records the grading `toolchain`: path and version of each acceptance interpreter and of `go`, `node` or
+  `pytest` when an adapter calls them. A change on resume is a `manifest-mismatch`.
+- `sensitivity` grades each control again alone and lists `load_sensitive` tasks, whose grade moved with the load; they leave the
+  measure, and `run` refuses a set that holds them.
+- `--strict-jobs` on every `lab` command refuses a `--jobs` above a quarter of the cores (at least 2); without it, a warning.
+
+### Changed
+
+- The default `--jobs` is a quarter of the cores, at least 2 (was a third).
+- `arm_accounting` gives `refused` per arm and `replicates`; `report.md` names refusals per arm and says when they hit the arms
+  unequally, and the printed verdict carries `refused_unequal`.
+- `run` no longer stops with `usd-budget` when the queue is already empty (1.8.1 checked the budget before the queue).
+- A rate-limit cooldown applies only while planned cells remain.
+
+### Fixed
+
+- A Claude usage limit is a rate limit. The CLI's error result ("usage limit reached") and a rejected `rate_limit_event` read
+  `native-error-rate-limit`, from the error text only, never from usage numbers. Before, they read `native-error` and spent the
+  invalid budget, which study F had to guard with a quota gate.
+- A refused call with a zero-filled `usage` counts as having no usage. The real Claude runner writes one, so in 1.8.1 the
+  rate-limit pause never applied to Claude (the 1.8.1 review's open question, now pinned by a test on the runner's own receipt).
+- A Claude session the CLI reopens for a background task that ended after the result (a second `init` with the same session id,
+  after that task's notification) is one session: usage adds up, the cost is the last, cumulative one, and the receipt counts
+  `continuations`. Before, it read `ambiguous-session`, the cause of F's only invalid cell (`GJ-F5A63B5F-r02-xhigh`, US$2.45),
+  confirmed from its retained stream. Any other repeated `init` still reads `ambiguous-session`.
+- The rate-limit cooldown reads the newest refusal anywhere in the ledger, after the orphan check (1.8.1 review N3).
+- A snapshot's relative symbolic link whose target stays inside the snapshot is materialized as a copy instead of refusing the
+  cell; absolute links, links that leave the snapshot or have no target are still refused.
+- More forms of a file argument are sealed: `KEY=/file`, `--flag=key=/file`, `-f/file`, `@/file`, `--flag=@/file` (1.8.1 review
+  item 6).
+- A snapshot's directory link is copied only after the links inside its target are materialized.
+- A controller error records `controller_error` (type, innermost frame, and the message when the set retains diagnostic text)
+  in the cell and prints them to stderr.
+- A manifest without `toolchain` is not compared on it (a 1.8.1 manifest still stops on the sealed 007 scripts).
+
+### Not in this release
+
+- Measuring the explicit-environment effect (a 2×2 on yaegi) is a paid Codex measurement, pending Codex quota and the
+  maintainer's go.
+
 ## [1.8.1] - 2026-11-12
 
 A patch release for `007 lab`, from defects the Codex 5-point pilot found. Release qualification is recorded in
@@ -707,7 +772,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0
 

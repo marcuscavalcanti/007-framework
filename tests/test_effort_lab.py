@@ -359,6 +359,51 @@ class LabEndToEnd(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lost the manifest"):
             lab.report(path, results, nxt)
 
+    def test_report_guard_single_look_and_refused_rows_through_the_real_cells(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+
+        def refusing(config, task, arm, rep, out_, timeout):  # one call the provider refused, as the real runner writes it
+            cid = lab.replay_eval.cell_id(task, arm, rep)
+            if cid.endswith("-r02-medium"):
+                (out_ / f"{cid}.runner.json").write_text(json.dumps({"problem": "native-error-rate-limit", "cost_usd": 0.0,
+                                                                     "usage": {"input_tokens": 0, "output_tokens": 0}}))
+                row = {"schema": "007-framework/replay-cell/v1", "task": task["id"], "arm": arm, "replicate": rep, "valid": False,
+                       "accepted": False, "failure_class": "agent-exit", "cost_usd": "unmeasured", "acceptance_outcomes": "unavailable",
+                       "runner_receipt_sha256": lab._sha256(out_ / f"{cid}.runner.json")}
+                (out_ / f"{cid}.json").write_text(json.dumps(row))
+                return row
+            return lab.replay_eval.execute_cell(config, task, arm, rep, out_, timeout)
+        state = lab.run(path, results, replicates=2, jobs=2, max_calls=9, max_usd=10, stop_usd=1, execute=refusing)
+        self.assertEqual((state["stop"], state["refused_per_arm"]), ("rate-limit", {"medium": 1, "high": 0}))
+        self.assertIn(next(r["cell"] for r in lab.load_cells(results) if r.get("failure_class") == "provider-rate-limit"),
+                      lab.chain(path, results, self.root / "stage2")["broken"])  # 1.8.1 review item 5
+        lab.sensitivity(path, 2)
+        with self.assertRaisesRegex(ValueError, "planned replicates"):
+            lab.report(path, results, None, missing_data_guard_reserve=1.0)
+        with self.assertRaisesRegex(ValueError, "beyond the 1 planned"):
+            lab.report(path, results, None, missing_data_guard_reserve=1.0, planned_replicates=1)
+        config = json.loads(path.read_text())
+        task = config["tasks"][0]["id"]
+        reach = {task: [k for k in json.loads((out / "tasks" / task / "hidden.json").read_text()) if k != "__module__"]}
+        with (results / ".run.lock").open("a") as held:  # a run is active: the single look waits
+            lab.fcntl.flock(held, lab.fcntl.LOCK_EX)
+            with self.assertRaisesRegex(ValueError, "a run is active"):
+                lab.report(path, results, None, single_look=True)
+            lab.fcntl.flock(held, lab.fcntl.LOCK_UN)
+        result = lab.report(path, results, None, single_look=True, missing_data_guard_reserve=1.0, frozen_reach=reach, planned_replicates=3)
+        guard = result["missing_data_guard"]
+        self.assertEqual(guard["missing_data"]["planned"], 6)  # the plan, not what was attempted: 2 cells never dispatched
+        self.assertEqual(guard["missing_data"]["imputed_in_L2"], {"absent": 2, "refused": 1})
+        self.assertEqual((result["reach_frozen"], result["frozen_reach_sha256"] is not None, result["verdict"]["refused_unequal"]), (True, True, True))
+        self.assertIn("Missing-data guard", (results / "report.md").read_text())
+        self.assertIn("1 attempts refused by the provider", (results / "report.md").read_text())
+        self.assertEqual(json.loads((results / "LOOK.json").read_text())["report_sha256"], lab._sha256(results / "report.json"))
+        with self.assertRaisesRegex(ValueError, "single look"):
+            lab.report(path, results, None)
+        self.assertEqual(lab.run(path, results, replicates=3, jobs=1, max_calls=9, max_usd=10, stop_usd=1)["stop"], "looked")
+
     def test_chain_skips_a_cell_with_no_candidate_patch(self):
         out = self.root / "lab"
         lab.mine(self.config, out, 2)
@@ -448,7 +493,7 @@ class LabEndToEnd(unittest.TestCase):
                 {"cell": "B-r01-high", "valid": False, "failure_class": "timeout"}]
         a = lab.arm_accounting(config, results, rows, {"B-r02-low": {}})  # no ledger: a receipt alone shows the attempt
         self.assertEqual((a["history"], a["unread_cells"]), ("absent", 0))
-        self.assertEqual(a["arms"]["low"], {"planned": 4, "not_dispatched": 2, "no_result": 1, "valid": 1, "accepted": 1, "invalid": {}})
+        self.assertEqual(a["arms"]["low"], {"planned": 4, "not_dispatched": 2, "no_result": 1, "valid": 1, "accepted": 1, "invalid": {}, "refused": 0})
         self.assertEqual(a["arms"]["high"]["invalid"], {"timeout": 1, "unknown": 1})
         chain = {"tasks": [{"id": "T-r100-low-next"}], "arms": {"next": {}}}  # a stage-2 task id carries its parent's replicate
         a = lab.arm_accounting(chain, results, [{"cell": "T-r100-low-next-r01-next", "valid": True, "accepted": False}], {})
@@ -535,7 +580,7 @@ class LabEndToEnd(unittest.TestCase):
 
 
 class CRLFPatches(unittest.TestCase):
-    def test_a_patch_with_crlf_lines_reads_and_applies_intact(self):
+    def test_a_patch_with_crlf_lines_reads_and_applies_intact(self, apply_env=None):
         with tempfile.TemporaryDirectory() as d:
             repo, tree = Path(d) / "repo", Path(d) / "tree"
             repo.mkdir()
@@ -549,9 +594,18 @@ class CRLFPatches(unittest.TestCase):
             self.assertIn(b"\r", patch.read_bytes())
             git(repo, "checkout", "-q", "--", "a.txt")
             shutil.copytree(repo, tree, ignore=shutil.ignore_patterns(".git"))
-            self.assertFalse(lab.apply_patch(tree, patch.read_text()))  # newline translation breaks it, as 1.8.0 read it
-            self.assertTrue(lab.apply_patch(tree, lab.read_patch(patch)))
+            with mock.patch.dict(os.environ, apply_env or {}):
+                if apply_env is None:  # newline translation breaks it, as 1.8.0 read it (autocrlf would mend that read)
+                    self.assertFalse(lab.apply_patch(tree, patch.read_text()))
+                self.assertTrue(lab.apply_patch(tree, lab.read_patch(patch)))
             self.assertEqual((tree / "a.txt").read_bytes(), b"x\r\nz\r\n")
+
+    def test_a_crlf_patch_applies_under_an_operators_core_autocrlf(self):
+        # 1.8.1 review N2: git apply keeps the operator's config; with core.autocrlf=true it must still apply intact
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / "gitconfig"
+            config.write_text("[core]\n\tautocrlf = true\n[apply]\n\twhitespace = fix\n")
+            self.test_a_patch_with_crlf_lines_reads_and_applies_intact(apply_env={"GIT_CONFIG_GLOBAL": str(config)})
 
 
 class Budget(unittest.TestCase):

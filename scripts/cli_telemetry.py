@@ -143,6 +143,8 @@ class NativeTelemetry:
                                        "output_tokens", "reasoning_output_tokens", "total_tokens")}
         self.available = set(self.usage)
         self.cost, self.models = None, {}
+        # Claude: a rejected rate_limit_event, and a background task that ended after the result (it opens one more turn)
+        self.refused, self.background_done, self.continuations = False, False, 0
 
     def feed(self, chunk):
         self.digest.update(chunk)
@@ -202,11 +204,23 @@ class NativeTelemetry:
                     raise ValueError("foreign-thread-usage")
             codex_init = self.provider == "codex" and kind == "thread.started"
             claude_init = self.provider == "claude" and kind == "system" and row.get("subtype") == "init"
+            if self.provider == "claude" and kind == "rate_limit_event":
+                info = row.get("rate_limit_info")
+                self.refused |= isinstance(info, dict) and info.get("status") == "rejected"
+            if self.provider == "claude" and kind == "system" and row.get("subtype") == "task_notification" and self.result_seen:
+                self.background_done = True
             if codex_init or claude_init:
                 session = row.get("thread_id" if codex_init else "session_id")
-                if self.session is not None or not isinstance(session, str) or not session:
-                    raise ValueError("ambiguous-session")
-                self.session = hashlib.sha256(session.encode()).hexdigest()
+                digest = hashlib.sha256(session.encode()).hexdigest() if isinstance(session, str) and session else None
+                if claude_init and self.result_seen and self.background_done and digest is not None and digest == self.session:
+                    # the CLI reopens the same session for a background task that ended after the result: one more turn,
+                    # accepted only when the stream shows that task's notification between the result and this init
+                    self.result_seen, self.background_done = False, False
+                    self.continuations += 1
+                else:
+                    if self.session is not None or digest is None:
+                        raise ValueError("ambiguous-session")
+                    self.session = digest
             if self.provider == "codex" and kind == "turn.started":
                 if not self.session or self.started:
                     raise ValueError("ambiguous-turn")
@@ -231,13 +245,17 @@ class NativeTelemetry:
                 if (self.result_seen or not isinstance(session, str) or not session
                         or self.session != hashlib.sha256(session.encode()).hexdigest()):
                     raise ValueError("ambiguous-terminal")
-                self.add_usage(row.get("usage"))
+                self.add_usage(row.get("usage"))  # per turn: a continuation's usage adds up
                 self.result_seen = True
-                self.completed = row.get("num_turns") if type(row.get("num_turns")) is int and row["num_turns"] >= 0 else None
+                turns = row.get("num_turns") if type(row.get("num_turns")) is int and row["num_turns"] >= 0 else None
+                self.completed = turns if not self.continuations else (
+                    self.completed + turns if turns is not None and self.completed is not None else None)
                 cost = row.get("total_cost_usd")
                 if cost is not None and not harness_report._valid_money(cost):
                     raise ValueError("invalid-cost")
-                self.cost = cost
+                if self.continuations and (cost is None) != (self.cost is None) or cost is not None and self.cost is not None and cost < self.cost:
+                    raise ValueError("invalid-cost")  # the session's cost is cumulative: it never falls
+                self.cost, self.models = cost, {}
                 for model, values in (row.get("modelUsage") or {}).items():
                     if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,160}", model) or not isinstance(values, dict):
                         raise ValueError("invalid-model-usage")
@@ -245,7 +263,9 @@ class NativeTelemetry:
                                           if key in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD")
                                           and harness_report._valid_money(value)}
                 if row.get("subtype") != "success" or row.get("is_error") is not False:
-                    raise ValueError("native-error")
+                    # the error text only (never usage numbers): "usage limit reached" is a rate limit, like a rejected event
+                    text = {key: row.get(key) for key in ("subtype", "result", "error", "errors", "api_error_status")}
+                    raise ValueError("native-error-rate-limit" if self.refused else native_error_class(text))
         except (ValueError, TypeError, AttributeError, UnicodeDecodeError, RecursionError) as error:
             # keep our own fixed codes (e.g. native-error); anything else, such as a JSON parser message, stays generic
             code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z]+(-[a-z]+)+", str(error)) else "invalid-native-event"
@@ -300,9 +320,12 @@ class NativeTelemetry:
             except (ValueError, UnicodeDecodeError, RecursionError) as error:
                 self.problem = "stream-limit" if str(error) == "stream-limit" else "invalid-native-event"
             self.buffer, self.large_row = b"", None
+        if self.refused and not self.result_seen and (not self.problem or self.problem.startswith("native-error")):
+            self.problem = "native-error-rate-limit"  # refused, then the stream ended without a result
+        ended = self.result_seen if self.provider == "claude" else self.completed  # a reopened Claude turn needs its own result
         return {
             "source": self.provider + "-cli", "scope": "fresh-command",
-            "status": "complete" if not self.problem and self.session and (self.result_seen or self.completed) and not self.started else "incomplete",
+            "status": "complete" if not self.problem and self.session and ended and not self.started else "incomplete",
             "stream_sha256": self.digest.hexdigest(), "stream_bytes": self.size,
             "session_sha256": self.session, "completed_turns": self.completed,
             "usage": {key: value for key, value in self.usage.items() if key in self.available} if self.result_seen or self.completed else None,
@@ -310,6 +333,7 @@ class NativeTelemetry:
             "cost_basis": "client-estimate" if self.cost is not None else "unavailable",
             "reported_model": next(iter(self.models)) if len(self.models) == 1 else "unmeasured",
             "model_usage": self.models, "problem": self.problem, "oversized_content_rows": self.oversized,
+            "continuations": self.continuations,
         }
 
 
