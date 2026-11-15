@@ -6,8 +6,29 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Added
+
+- `007 lab sensitivity --operator v2 [--floor F]` writes `sensitivity-v2.json` beside the v1 `sensitivity.json`, which `run` and
+  `report` still read. A v2 mutant is the reference tree with one unit reverted to the base, built by line substitution rather
+  than by applying a reduced patch. A unit is a hunk of a zero-context diff in a non-test text file; every unit is tried, and
+  binary files stay as in the reference. A construction control checks, file by file, that the base plus every unit gives the
+  reference and the reference minus every unit gives the base. Each mutant is classed trivial, equivalent (same tokens as the
+  reference, touching only blank or comment lines), out-of-scope (the hidden tests pass without its file), invalid (breaks a
+  test green at both the base and the reference with the hidden files at the base) or valid. A valid mutant ends
+  `rejected-contract`, `rejected-assert` or `survived`. Tasks are measured only when the reference passes and the base fails. The
+  file publishes sensitivity as a mean of per-task rates with a task-bootstrap interval, plus specificity on the equivalents,
+  coverage and the whole funnel. Its decision has three states: `passes`, `fails` or `indeterminate`, plus `no-information`
+  below 20 valid mutants in 8 tasks and `floor-unset` with no `--floor`. Rows carry file indexes, never names. Operator
+  `revert-one-unit/1`.
+
 ### Fixed
 
+- `sensitivity`: a mutant is the reference minus one sampled hunk and nothing else. In 1.9.0 every mutant also lost the
+  reference's binary blocks and its blocks without a hunk (rename, mode change, empty file), which could fail a build and count as
+  a caught defect. A diff is binary only on a `GIT binary patch` line, not on that phrase inside a text line (1.9.0 skipped such a
+  text diff). A reference with one hunk yields no mutant, since minus that hunk it is the base. `sensitivity.json` records
+  `operator` (`minus-one-hunk/2`); a 1.9.0 file has none. Found by an exploratory audit (Codex gpt-6-astra) and confirmed in code;
+  sensitivities measured with 1.9.0 stay as published and are not comparable with 1.10.0 ones without saying so.
 - `007 lab mine` kept tasks no candidate could pass: its controls graded the reference at its own tree, while a cell grades a
   patch on the base snapshot behind `reset_to_base`. A commit that renames or deletes a Go test file passed the first and failed
   the second. The reference patch is now also graded as a candidate, and such a commit is dropped
@@ -19,6 +40,12 @@ schemas, and the dashboard snapshot.
 
 - `docs/lab.md` states that a snapshot is not read isolation: an installed copy of a mined repository on the host can hold a
   task's answer.
+
+### Documentation
+
+- The lab guide states the scope of `proven_critical`'s 2.5%: it holds for attempts that fail independently. A failure shared by
+  every attempt of a task is not in its loss model; an exact counter-example (24 tasks, 3 attempts per arm, 20-point margin) gives
+  3.31%. Study F is not affected (statistic 10.84 against 2.28).
 
 ## [1.9.0] - 2026-11-14
 

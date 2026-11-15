@@ -1,7 +1,8 @@
 """`007 lab`: headless effort replay for any Git repository and any coding agent.
 
 mine        commit pairs A -> B (the next real change to A's sources) with hidden tests and a generated contract. No model.
-sensitivity does a latent defect in A show up when B lands? Reference patches minus one hunk. No model.
+sensitivity does a latent defect in A show up when B lands? Reference patches minus one hunk (--operator v2: one unit of the
+            reference tree reverted, graded on A's hidden tests, three-state decision). No model.
 run         every arm × task × replicate in parallel, under a call and money budget. Calls the configured agent.
 chain       each candidate of A becomes the base of B, in a private mirror of the repository. No model.
 report      frozen gates. A verdict is only as strong as the instrument: an insensitive one yields NO-INFORMATION, never PASS.
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 import fcntl
 import glob
 import hashlib
+import io
 import json
 import math
 import os
@@ -32,6 +34,7 @@ import sys
 import tempfile
 import threading
 import time
+import tokenize
 import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -482,22 +485,28 @@ def chain(config_path, results, out):
 
 # ---- sensitivity
 
+MUTATION_OPERATOR = "minus-one-hunk/2"  # 2: every unsampled block kept whole; no mutant of a one-hunk reference
+
+
 def hunks(patch_text):
-    """(file header, [hunks]) per text file of a unified diff."""
+    """(file header, [hunks]) per `diff --git` block, in order. A binary block (a `GIT binary patch` line, not the phrase inside a
+    text line) or a block with no `@@` (rename, mode change, empty file) is kept whole as its header, with no hunks."""
     out = []
     for chunk in re.split(r"(?m)^(?=diff --git )", patch_text):
-        if chunk.startswith("diff --git ") and "GIT binary patch" not in chunk:
-            parts = re.split(r"(?m)^(?=@@ )", chunk)
-            if len(parts) > 1:
-                out.append((parts[0], parts[1:]))
+        if chunk.startswith("diff --git "):
+            parts = [] if re.search(r"(?m)^GIT binary patch$", chunk) else re.split(r"(?m)^(?=@@ )", chunk)
+            out.append((parts[0], parts[1:]) if len(parts) > 1 else (chunk, []))
     return out
 
 
 def mutants(patch_text, limit, rng):
-    """The reference minus one hunk, sampled: a change partly done, as a weaker agent might leave it."""
+    """The reference minus one hunk, sampled: a change partly done, as a weaker agent might leave it. Every other block, binary and
+    hunk-less ones included, stays as in the reference. A reference with one hunk has no mutant: minus that hunk it is the base."""
     files = hunks(patch_text)
     index = [(i, j) for i, (_, parts) in enumerate(files) for j in range(len(parts))]
     rng.shuffle(index)
+    if len(index) < 2:
+        return
     for i, j in index[:limit]:
         yield "".join(head + "".join(p for n, p in enumerate(parts) if not (k == i and n == j)) for k, (head, parts) in enumerate(files) if not (k == i and len(parts) == 1))
 
@@ -547,7 +556,7 @@ def sensitivity(config_path, jobs, per_task=6):
     # each control again, one at a time: an oracle whose grade moves with the machine's load (yaegi) is not an instrument
     serial = {tid: value for tid, _, value in map(one, [item for item in work if item[1]])}
     unstable = sorted(tid for tid, control, value in rows if control and serial[tid] != value)
-    result = sensitivity_summary(rows, unstable)
+    result = {**sensitivity_summary(rows, unstable), "operator": MUTATION_OPERATOR}
     (out / "sensitivity.json").write_text(json.dumps(result, indent=1))
     return result
 
@@ -576,6 +585,228 @@ def sensitivity_summary(rows, load_sensitive=()):
             "conformant": conformant, "tasks": len(controls), "per_task": per, "errors": sum(isinstance(r[2], str) for r in rows), "unapplied": sum(r[2] is None for r in rows), "conflicts": conflicts,
             "load_sensitive": sorted(load_sensitive),
             "passed": bool(survivors) and len(survivors) >= GATES["min_survivors"] and caught / len(survivors) >= GATES["min_sensitivity"]}
+
+
+# ---- sensitivity v2: the reference tree with one unit reverted, built line by line (no reduced patch to misapply)
+
+OPERATOR_V2 = "revert-one-unit/1"
+U0 = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.M)
+CODE_TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|`[^`]*`|\n|\w+|[^\s\w]', re.S)
+C_LIKE = re.compile(r"\.(go|(c|m)?(j|t)sx?|java|kt|c|cc|cpp|h|hpp|cs|swift|rs|scala|php)$")
+COMMENT_LINE = re.compile(r"^\s*($|//|/\*|\*|#)")
+
+
+def _lines(data):
+    """Lines as git counts them: cut at \\n only, bytes intact."""
+    return re.findall(r"[^\n]*\n|[^\n]+\Z", data.decode("utf-8", "surrogateescape"))
+
+
+def _blob(repo, rev, path):
+    try:
+        return _lines(_git(repo, "show", f"{rev}:{path}"))
+    except subprocess.CalledProcessError:
+        return None
+
+
+def units(repo, base, head):
+    """([path, lines at base | None, lines at head | None, [(base start, base n, head start, head n)]] per non-test text file,
+    binary non-test files): the hunks of a zero-context diff. A binary file has no unit and stays as at head."""
+    files, binaries = [], 0
+    for row in filter(None, _git(repo, "diff", "--numstat", "-z", "--no-renames", base, head).decode("utf-8", "surrogateescape").split("\0")):
+        added, _, path = row.split("\t", 2)
+        if commit_replay.TEST.search(path):
+            continue
+        if added == "-":
+            binaries += 1
+            continue
+        diff = _git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", base, head, "--", f":(literal){path}").decode("utf-8", "surrogateescape")
+        hunks = [(int(a) - (b != "0"), int(b or 1), int(c) - (d != "0"), int(d or 1)) for a, b, c, d in U0.findall(diff)]
+        if hunks:
+            files.append([path, _blob(repo, base, path), _blob(repo, head, path), hunks])
+    return files, binaries
+
+
+def revert(base_lines, head_lines, hunk):
+    b0, bn, h0, hn = hunk
+    return (head_lines or [])[:h0] + (base_lines or [])[b0:b0 + bn] + (head_lines or [])[h0 + hn:]
+
+
+def rebuilds(base_lines, head_lines, hunks):
+    """base + every unit = head and head - every unit = base: the parse is the change."""
+    base_lines, head_lines = base_lines or [], head_lines or []
+    forward, backward = list(base_lines), list(head_lines)
+    for b0, bn, h0, hn in reversed(hunks):
+        forward[b0:b0 + bn] = head_lines[h0:h0 + hn]
+        backward[h0:h0 + hn] = base_lines[b0:b0 + bn]
+    return forward == head_lines and backward == base_lines
+
+
+def _code(lines, path):
+    """What a compiler reads: comments out, runs of line breaks as one. None when it cannot be read (never equivalent then)."""
+    text = "".join(lines or [])
+    if path.endswith(".py"):
+        try:
+            return [(t.type, t.string) for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type not in (tokenize.COMMENT, tokenize.NL)]
+        except (tokenize.TokenError, SyntaxError):
+            return None
+    if not C_LIKE.search(path):
+        return [line.rstrip() for line in text.split("\n")]  # ponytail: other files equivalent only up to trailing spaces
+    out = []
+    for token in CODE_TOKEN.findall(text):
+        if not token.startswith(("//", "/*")) and not (token == "\n" and out and out[-1] == "\n"):
+            out.append(token)
+    return out
+
+
+def equivalent(path, base_lines, head_lines, hunk):
+    """Same tokens as the reference, and every line the unit touches is blank or a comment: a regex literal holding `//` cannot pass."""
+    b0, bn, h0, hn = hunk
+    touched = (base_lines or [])[b0:b0 + bn] + (head_lines or [])[h0:h0 + hn]
+    if not all(COMMENT_LINE.match(line) for line in touched):
+        return False
+    mine = _code(revert(base_lines, head_lines, hunk), path)
+    return mine is not None and mine == _code(head_lines, path)
+
+
+def _put(tree, path, lines):
+    target = replay_eval.hidden_target(tree, path)
+    if lines is None:
+        target.unlink(missing_ok=True)
+    else:
+        target.write_bytes("".join(lines).encode("utf-8", "surrogateescape"))
+
+
+def _grade(directory, tree, spec, sandbox, env):
+    """pass, contract (a hidden or baseline test absent or `error`: it did not build or load) or assert (all ran, one failed)."""
+    outcomes = collect(tree, spec, sandbox, env)
+    need = json.loads((directory / "hidden.json").read_text()) + json.loads((directory / "baseline.json").read_text())
+    if all(outcomes.get(k) == "pass" for k in need):
+        return "pass"
+    return "contract" if any(outcomes.get(k) in (None, "error") for k in need) else "assert"
+
+
+def sensitivity_v2(config_path, jobs, floor=None):
+    """Every unit of every task: trivial, equivalent, out-of-scope, invalid, or valid and then rejected or survived. No model."""
+    config = json.loads(config_path.read_text())
+    out = config_path.parent
+    pairs = json.loads((out / "pairs.json").read_text())
+    repo = next(iter(config["repos"].values()))
+    sandbox, env = config.get("acceptance_sandbox"), config.get("acceptance_env")
+    hidden_of = lambda task: [e["target"] for e in task["hidden_acceptance"] if not e["target"].startswith(ACCEPT)]
+    work, tasks = {}, {}
+    for task in config["tasks"]:
+        files, binaries = units(repo, task["base"], task["accepted"])
+        tasks[task["id"]] = {"files": len(files), "units": sum(len(f[3]) for f in files), "binaries": binaries,
+                             "construction": all(rebuilds(f[1], f[2], f[3]) for f in files)}
+        work[task["id"]] = (task, files)
+
+    def tree_run(tid, kind, index=None, unit=None):
+        task, files = work[tid]
+        spec, directory = pairs[tid]["spec"], out / "tasks" / tid
+        try:
+            with tempfile.TemporaryDirectory(prefix="lab-v2-") as scratch:
+                tree = Path(scratch) / "tree"
+                extract(repo, task["base"] if kind in ("base", "visible-base") else task["accepted"], tree)
+                if kind == "base":
+                    overlay(repo, tree, task["accepted"], hidden_of(task))
+                elif kind == "deleted":
+                    _put(tree, files[index][0], None)
+                elif kind == "mutant":
+                    path, base_lines, head_lines, hunks = files[index]
+                    reverted = revert(base_lines, head_lines, hunks[unit])
+                    _put(tree, path, None if base_lines is None and reverted == [] else reverted)
+                grade = None if kind.startswith("visible") else _grade(directory, tree, spec, sandbox, env)
+                if kind in ("visible-base", "visible-reference", "mutant"):
+                    for name in hidden_of(task) if kind != "visible-base" else []:
+                        _put(tree, name, _blob(repo, task["base"], name))
+                    return grade, passing(collect(tree, spec, sandbox, env))
+                return grade, None
+        except Exception as error:
+            return failure_summary(error), None
+
+    first = [(tid, kind, None) for tid in work if tasks[tid]["construction"] for kind in ("reference", "base", "visible-base", "visible-reference")]
+    first += [(tid, "deleted", i) for tid, (_, files) in work.items() if tasks[tid]["construction"] for i, f in enumerate(files) if f[2] is not None]
+    with ThreadPoolExecutor(jobs) as pool_:
+        done = dict(zip(first, pool_.map(lambda item: tree_run(*item), first)))
+    rows, second = [], []
+    for tid, (task, files) in work.items():
+        meta = tasks[tid]
+        if meta["construction"]:
+            meta.update(reference=done[(tid, "reference", None)][0], base=done[(tid, "base", None)][0])
+            visible = (done[(tid, "visible-base", None)][1] or set()) & (done[(tid, "visible-reference", None)][1] or set())
+            meta["visible_tests"] = len(visible)
+        meta["control"] = ("operator-invalid" if not meta["construction"] else "ok" if meta["reference"] == "pass" and meta["base"] in ("contract", "assert")
+                           else "control-failed")
+        if meta["control"] != "ok":
+            continue
+        trivial = meta["units"] == 1 and not meta["binaries"]
+        for i, (path, base_lines, head_lines, hunks) in enumerate(files):
+            loaded = head_lines is None or done[(tid, "deleted", i)][0] != "pass"
+            for k, hunk in enumerate(hunks):
+                row = {"task": tid, "file": i, "unit": k}
+                row["class"] = ("trivial" if trivial else "equivalent" if equivalent(path, base_lines, head_lines, hunk)
+                                else "out-of-scope" if not loaded else None)
+                rows.append(row)
+                if row["class"] in (None, "equivalent"):
+                    second.append((row, visible))
+    with ThreadPoolExecutor(jobs) as pool_:
+        graded = list(pool_.map(lambda item: tree_run(item[0]["task"], "mutant", item[0]["file"], item[0]["unit"]), second))
+    for (row, visible), (grade, seen) in zip(second, graded):
+        if grade not in ("pass", "contract", "assert"):
+            row.update({"class": "error", "outcome": grade})
+        elif row["class"] == "equivalent":
+            row["outcome"] = grade
+        elif not visible <= (seen or set()):
+            row["class"] = "invalid"
+        else:
+            row.update({"class": "valid", "outcome": {"pass": "survived", "contract": "rejected-contract", "assert": "rejected-assert"}[grade]})
+    result = {"operator": OPERATOR_V2, "seed": config.get("seed", 1), "floor": floor,
+              **sensitivity_v2_summary(rows, tasks, floor, config.get("seed", 1)), "tasks": tasks, "rows": rows}
+    (out / "sensitivity-v2.json").write_text(json.dumps(result, indent=1))
+    return {k: v for k, v in result.items() if k not in ("tasks", "rows")}
+
+
+def _interval(values, seed, draws):
+    rng = random.Random(seed)
+    means = sorted(statistics.fmean(rng.choices(values, k=len(values))) for _ in range(draws))
+    return [means[int(.025 * draws)], means[int(.975 * draws) - 1]]
+
+
+def sensitivity_v2_summary(rows, tasks, floor=None, seed=1, draws=GATES["draws"]):
+    """Per-task means with a task bootstrap, and the three-state decision. Only tasks whose controls passed are measured."""
+    ok = {tid for tid, meta in tasks.items() if meta["control"] == "ok"}
+    rows = [r for r in rows if r["task"] in ok]
+    funnel = {c: sum(r["class"] == c for r in rows) for c in ("trivial", "invalid", "equivalent", "out-of-scope", "valid", "error")}
+    valid = [r for r in rows if r["class"] == "valid"]
+    parts = {o: sum(r["outcome"] == o for r in valid) for o in ("rejected-contract", "rejected-assert", "survived")}
+    per_task, coverage = {}, []
+    for tid in sorted(ok):
+        mine = [r for r in rows if r["task"] == tid]
+        hits = [r["outcome"] != "survived" for r in mine if r["class"] == "valid"]
+        if hits:
+            per_task[tid] = sum(hits) / len(hits)
+        if sum(r["class"] != "trivial" for r in mine):
+            coverage.append(len(hits) / sum(r["class"] != "trivial" for r in mine))
+    equivalents = [r for r in rows if r["class"] == "equivalent"]
+    specificity = sum(r["outcome"] == "pass" for r in equivalents) / len(equivalents) if equivalents else None
+    sensitivity = statistics.fmean(per_task.values()) if per_task else None
+    interval = _interval(list(per_task.values()), seed, draws) if per_task else None
+    if specificity is not None and specificity < 1:
+        decision = "fails"
+    elif len(valid) < 20 or len(per_task) < GATES["min_signal_tasks"]:
+        decision = "no-information"
+    elif floor is None:
+        decision = "floor-unset"
+    elif interval[1] < floor:
+        decision = "fails"
+    elif interval[0] >= floor and specificity == 1:
+        decision = "passes"
+    else:
+        decision = "indeterminate"
+    return {"decision": decision, "sensitivity": sensitivity, "interval": interval, "specificity": specificity, "equivalents": len(equivalents),
+            "coverage": statistics.fmean(coverage) if coverage else None, "funnel": funnel, "valid_outcomes": parts, "per_task": per_task,
+            "tasks_measured": len(ok), "tasks_with_valid": len(per_task),
+            "controls": {c: sum(m["control"] == c for m in tasks.values()) for c in ("ok", "control-failed", "operator-invalid")}}
 
 
 # ---- run
@@ -1930,6 +2161,9 @@ def main(argv=None):
             sub.add_argument("--cost-marker-at", type=int, help="after this many cells, project the cost once (needs --cost-marker-hold-usd)")
             sub.add_argument("--cost-marker-hold-usd", type=float, help="a projection above this holds the run for good (HOLD.json)")
             sub.add_argument("--rate-limit-wait-s", type=int, default=0, help="wait out rate-limit pauses inside the run, up to this long in all")
+        if name == "sensitivity":
+            sub.add_argument("--operator", choices=("v1", "v2"), default="v1", help="v2: one unit reverted in the reference tree (sensitivity-v2.json)")
+            sub.add_argument("--floor", type=float, help="v2: the floor its three-state decision reads; without it the decision is floor-unset")
         if name in ("chain", "report"):
             sub.add_argument("--results", type=Path, required=True)
         if name == "report":
@@ -1969,7 +2203,7 @@ def main(argv=None):
     if args.command == "mine":
         print(json.dumps({"tasks": mine(json.loads(path.read_text()), out, args.jobs)}))
     elif args.command == "sensitivity":
-        print(json.dumps(sensitivity(path, args.jobs)))
+        print(json.dumps(sensitivity_v2(path, args.jobs, args.floor) if args.operator == "v2" else sensitivity(path, args.jobs)))
     elif args.command == "run":
         try:
             result = run(path, out, replicates=args.replicates, jobs=args.jobs, max_calls=args.max_calls, max_usd=args.max_usd, stop_usd=args.stop_usd,

@@ -1127,10 +1127,103 @@ class Gates(unittest.TestCase):
         self.assertEqual(self.v(self.c(reduction=.2), [-.04, .04])["thesis"], "NOT-SURVIVES")
         self.assertEqual(self.v(self.c(low=5), [-.04, .04])["time"], "SURVIVES")  # acceptance counts only through time per accepted change
 
+    def test_a_mutant_keeps_every_unsampled_block(self):
+        text = ("diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,1 +1,1 @@\n-x\n+y\n@@ -9,1 +9,1 @@\n-p\n+q\n")
+        binary = "diff --git a/f.bin b/f.bin\nindex 1..2 100644\nGIT binary patch\nliteral 3\nKcmZ\n\nliteral 0\nHcmV\n\n"
+        rename = "diff --git a/old.go b/new.go\nsimilarity index 100%\nrename from old.go\nrename to new.go\n"
+        mode = "diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n"
+        out = list(lab.mutants(text + binary + rename + mode, 6, __import__("random").Random(1)))
+        self.assertEqual(len(out), 2)
+        for m in out:
+            self.assertTrue(m.endswith(binary + rename + mode))  # 1.9.0 dropped all three from every mutant
+            self.assertEqual(m.count("\n@@ "), 1)
+
+    def test_binary_is_a_line_not_a_phrase_and_one_hunk_has_no_mutant(self):
+        text = ('diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n@@ -1,1 +1,1 @@\n-a\n+s = "GIT binary patch"\n'
+                "@@ -5,1 +5,1 @@\n-b\n+c\n")
+        self.assertEqual(len(lab.hunks(text)[0][1]), 2)  # 1.9.0 read this text diff as binary and made no mutant
+        self.assertEqual(list(lab.mutants(text.split("@@ -5")[0], 6, __import__("random").Random(1))), [])  # minus it, the base
+
     def test_a_rejected_mutant_counts_only_where_the_reference_passes(self):
         rows = [("A", True, (True, None)), ("B", True, (False, None))] + [("A", False, (False, None))] * 10 + [("B", False, (False, None))] * 10
         immediate = lab.sensitivity_summary(rows)["immediate"]
         self.assertEqual((immediate["mutants"], immediate["rejected"]), (10, 10))  # B's oracle rejects even the reference
+
+
+class OperatorV2(unittest.TestCase):
+    BASE = "def add(a, b):\n    return a - b\n\n\n# helper\ndef mul(a, b):\n    return a + b\n"
+    HEAD = "def add(a, b):\n    return a + b\n\n\n# helper for products\ndef mul(a, b):\n    return a * b\n"
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        git(self.repo, "init", "-qb", "main")
+
+    def test_units_rebuild_the_change_and_one_mutant_per_unit(self):
+        (self.repo / "f.bin").write_bytes(b"\0\1")
+        base = commit(self.repo, {"a.go": "package a\n\nfunc A() int { return 1 }\n\nfunc B() int { return 2 }\n", "old.go": "package a\n\nvar X = 1\n",
+                                  "a_test.go": "package a\n"}, "base", "2026-01-01T00:00:00Z")
+        (self.repo / "f.bin").write_bytes(b"\0\2")
+        git(self.repo, "mv", "old.go", "new.go")
+        head = commit(self.repo, {"a.go": "package a\n\nfunc A() int { return 10 }\n\nfunc B() int { return 20 }\n", "b.go": "package a\n\nvar Y = 2",
+                                  "a_test.go": "package a\n\n// changed\n"}, "head", "2026-01-02T00:00:00Z")
+        files, binaries = lab.units(self.repo, base, head)
+        self.assertEqual(binaries, 1)
+        self.assertEqual(sorted(f[0] for f in files), ["a.go", "b.go", "new.go", "old.go"])  # a_test.go is a test: no unit
+        self.assertTrue(all(lab.rebuilds(*f[1:]) for f in files))
+        self.assertEqual(sum(len(f[3]) for f in files), 5)  # A, B, the renamed file as delete + add, the new file
+        old = next(f for f in files if f[0] == "old.go")
+        self.assertEqual(lab.revert(old[1], old[2], old[3][0]), old[1])  # the deleted file comes back whole
+        b = next(f for f in files if f[0] == "b.go")
+        self.assertEqual(lab.revert(b[1], b[2], b[3][0]), [])  # an added file reverted is absent (sensitivity_v2 deletes it)
+        self.assertFalse(lab.rebuilds(old[1], old[2], [(0, 1, 0, 0)]))  # a wrong parse fails the construction control
+
+    def test_a_comment_only_unit_is_equivalent_and_code_is_not(self):
+        base, head = lab._lines(self.BASE.encode()), lab._lines(self.HEAD.encode())
+        hunks = [(1, 1, 1, 1), (4, 1, 4, 1), (6, 1, 6, 1)]
+        self.assertTrue(lab.rebuilds(base, head, hunks))
+        self.assertEqual([lab.equivalent("calc.py", base, head, h) for h in hunks], [False, True, False])
+        go = (lab._lines(b"package a\n\n// one\nvar r = `//x`\n"), lab._lines(b"package a\n\n// two\nvar r = `//x`\n"))
+        self.assertTrue(lab.equivalent("a.go", *go, (2, 1, 2, 1)))
+        self.assertFalse(lab.equivalent("a.go", lab._lines(b"x := 1 // a\n"), lab._lines(b"x := 2 // a\n"), (0, 1, 0, 1)))
+
+    def test_v2_end_to_end_classifies_every_unit(self):
+        old = "import unittest\n\n\nclass Old(unittest.TestCase):\n    def test_truth(self):\n        self.assertTrue(True)\n"
+        commit(self.repo, {"calc.py": self.BASE, "unused.py": "X = 1\n", "tests/__init__.py": "", "tests/test_old.py": old}, "base", "2026-01-01T00:00:00Z")
+        hidden = ("import unittest\nimport calc\n\n\nclass Calc(unittest.TestCase):\n" + "".join(f"    def test_add_{i}(self):\n        self.assertEqual(calc.add({i}, 1), {i + 1})\n\n" for i in range(5))
+                  + "    def test_mul(self):\n        self.assertEqual(calc.mul(2, 2), 4)\n")
+        message = "feat: fix addition and multiplication\n\n" + "Addition must really add and multiplication must really multiply, in every caller. " * 2
+        commit(self.repo, {"calc.py": self.HEAD, "unused.py": "X = 2\n", "tests/test_calc.py": hidden}, message, "2026-01-05T00:00:00Z")
+        config = {"repo": str(self.repo), "adapter": "unittest", "tests": "tests/test_*.py", "as_of": "2026-03-01T00:00:00+00:00", "seed": 7, "want": 1,
+                  "min_source_lines": 1, "min_message": 50, "require_next": False}
+        out = self.root / "lab"
+        self.assertEqual(lab.mine(config, out, 2), 1)
+        result = lab.sensitivity_v2(out / "replay-set.json", 2)
+        self.assertEqual(result["controls"], {"ok": 1, "control-failed": 0, "operator-invalid": 0})
+        self.assertEqual(result["funnel"], {"trivial": 0, "invalid": 0, "equivalent": 1, "out-of-scope": 1, "valid": 2, "error": 0})
+        self.assertEqual(result["valid_outcomes"], {"rejected-contract": 0, "rejected-assert": 1, "survived": 1})  # mul(2, 2) is 4 either way
+        self.assertEqual((result["sensitivity"], result["specificity"], result["decision"]), (.5, 1.0, "no-information"))
+        saved = json.loads((out / "sensitivity-v2.json").read_text())
+        self.assertEqual(saved["operator"], "revert-one-unit/1")
+        self.assertNotIn("calc.py", json.dumps(saved["rows"]))  # rows carry a file index, never a name
+
+    def test_the_decision_has_three_states_and_never_rounds_up(self):
+        tasks = {f"T{i}": {"control": "ok"} for i in range(8)}
+        def rows(rejected, equivalent_outcome="pass"):
+            out = [{"task": f"T{i}", "class": "valid", "outcome": "rejected-assert" if j < rejected else "survived"} for i in range(8) for j in range(3)]
+            return out + [{"task": "T0", "class": "equivalent", "outcome": equivalent_outcome}]
+        decide = lambda r, floor: lab.sensitivity_v2_summary(r, tasks, floor, draws=500)["decision"]
+        self.assertEqual(decide(rows(3), .5), "passes")
+        self.assertEqual(decide(rows(0), .5), "fails")
+        self.assertEqual(decide(rows(3), None), "floor-unset")
+        self.assertEqual(decide(rows(3, "assert"), .5), "fails")  # an oracle that rejects a harmless change fails, whatever its sensitivity
+        self.assertEqual(decide([r for r in rows(3) if r["class"] == "valid"], .5), "indeterminate")  # no equivalent: no specificity
+        mixed = rows(0) + [{"task": f"T{i}", "class": "valid", "outcome": "rejected-assert"} for i in range(4) for _ in range(6)]
+        self.assertEqual(decide(mixed, .5), "indeterminate")
+        self.assertEqual(decide(rows(3)[:9] + rows(3)[-1:], .5), "no-information")  # 9 valid in 3 tasks
 
 
 class MinerSafety(unittest.TestCase):
