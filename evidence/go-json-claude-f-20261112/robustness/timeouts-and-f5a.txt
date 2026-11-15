@@ -1,0 +1,6 @@
+medium max wall 566 >=3000s 0 agent_exit Counter({0: 82}) fail Counter({'none': 82})
+xhigh max wall 1762 >=3000s 0 agent_exit Counter({0: 82}) fail Counter({'none': 81, 'runner-invalid': 1})
+GJ-F5A63B5F-r01-medium True True
+GJ-F5A63B5F-r01-xhigh True True
+GJ-F5A63B5F-r02-medium True True
+GJ-F5A63B5F-r02-xhigh False False

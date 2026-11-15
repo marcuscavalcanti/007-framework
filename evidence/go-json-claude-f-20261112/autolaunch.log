@@ -1,0 +1,30 @@
+{"quota": {"ok": false, "reason": "seven-day at 0.82 with 100% of cells left", "seven_day": 0.82, "at": "2026-11-13T10:54:02.005873+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.83 with 100% of cells left", "seven_day": 0.83, "at": "2026-11-13T11:24:05.042225+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.83 with 100% of cells left", "seven_day": 0.83, "at": "2026-11-13T11:54:08.211352+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.84 with 100% of cells left", "seven_day": 0.84, "at": "2026-11-13T12:24:11.449472+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.86 with 100% of cells left", "seven_day": 0.86, "at": "2026-11-13T12:54:16.025011+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.86 with 100% of cells left", "seven_day": 0.86, "at": "2026-11-13T13:24:19.999231+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.87 with 100% of cells left", "seven_day": 0.87, "at": "2026-11-13T13:54:23.923768+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.87 with 100% of cells left", "seven_day": 0.87, "at": "2026-11-13T14:24:27.616923+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.87 with 100% of cells left", "seven_day": 0.87, "at": "2026-11-13T14:54:31.039911+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.87 with 100% of cells left", "seven_day": 0.87, "at": "2026-11-13T15:24:34.673023+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.87 with 100% of cells left", "seven_day": 0.87, "at": "2026-11-13T15:54:38.096733+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.88 with 100% of cells left", "seven_day": 0.88, "at": "2026-11-13T16:24:41.562397+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.89 with 100% of cells left", "seven_day": 0.89, "at": "2026-11-13T16:54:44.858520+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.9 with 100% of cells left", "seven_day": 0.9, "at": "2026-11-13T17:24:48.366406+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.91 with 100% of cells left", "seven_day": 0.91, "at": "2026-11-13T17:54:52.101389+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.92 with 100% of cells left", "seven_day": 0.92, "at": "2026-11-13T18:24:56.241997+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.92 with 100% of cells left", "seven_day": 0.92, "at": "2026-11-13T18:55:00.327433+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.92 with 100% of cells left", "seven_day": 0.92, "at": "2026-11-13T19:25:04.358921+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.92 with 100% of cells left", "seven_day": 0.92, "at": "2026-11-13T19:55:08.637300+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.93 with 100% of cells left", "seven_day": 0.93, "at": "2026-11-13T20:25:12.512701+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.94 with 100% of cells left", "seven_day": 0.94, "at": "2026-11-13T20:55:16.400798+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.94 with 100% of cells left", "seven_day": 0.94, "at": "2026-11-13T21:25:20.352180+00:00"}}
+{"autolaunch": "stopped", "why": "Marcus: Fable 5.2 para tudo; F (Opus) estacionado", "at": "2026-11-13T21:37:30Z"}
+{"quota": {"ok": false, "reason": "seven-day at 0.97 with 100% of cells left", "seven_day": 0.97, "at": "2026-11-13T22:04:28.462634+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.98 with 100% of cells left", "seven_day": 0.98, "at": "2026-11-13T22:14:32.384824+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.98 with 100% of cells left", "seven_day": 0.98, "at": "2026-11-13T22:24:36.011458+00:00"}}
+{"quota": {"ok": false, "reason": "seven-day at 0.98 with 100% of cells left", "seven_day": 0.98, "at": "2026-11-13T22:34:39.404791+00:00"}}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.01, "at": "2026-11-13T22:41:21.387532+00:00"}}
+{"autolaunch": "launch", "at": "2026-11-13T22:41:21Z"}
+{"autolaunch": "run_f exit", "exit": 0, "at": "2026-11-14T09:51:49Z"}

@@ -1,0 +1,20 @@
+{
+ "medium": {
+  "cells": 82,
+  "valid": 82,
+  "accepted": 56,
+  "cost_total": 57.46,
+  "cost_mean": 0.701,
+  "cost_median": 0.619,
+  "no_cost": 0
+ },
+ "xhigh": {
+  "cells": 82,
+  "valid": 81,
+  "accepted": 61,
+  "cost_total": 237.72,
+  "cost_mean": 2.899,
+  "cost_median": 2.526,
+  "no_cost": 0
+ }
+}

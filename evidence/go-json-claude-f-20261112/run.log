@@ -1,0 +1,29 @@
+{"f": "start", "at": "2026-11-13T22:41:21Z", "cells_done": 0, "f_set_sha256": "2402907a97fed0fc46ccd429097328e175686a647820b0872356db71aaf1020e", "sha256sums": "12a77915457f0dd26934fa5104d923aa2bf1312b47819b93775959f0db5154b4", "code_commit": "f05ebcbc47496bcd39c272fe2d0dd82d9a336879", "cli_version": "2.1.322 (Claude Code)", "overrides": ""}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.01, "at": "2026-11-13T22:41:24.976730+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 43.1123252, "invalid": 0, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 0, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T00:02:35Z"}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.1, "at": "2026-11-14T00:22:38.765035+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 68.874829, "invalid": 0, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 20, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T01:16:03Z"}
+{"costcheck": {"at": "2026-11-14T01:16:03.453875+00:00", "cells": {"medium": 20, "xhigh": 20}, "spent": 68.87, "projection_usd": 282.3867989, "hold_above_usd": 360.0}}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.14, "at": "2026-11-14T01:21:06.595021+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 100.16065920000004, "invalid": 0, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 40, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T02:44:16Z"}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.19, "at": "2026-11-14T02:44:20.177000+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 145.359949, "invalid": 0, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 60, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T04:25:03Z"}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.24, "at": "2026-11-14T04:25:07.207666+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 169.659323, "invalid": 0, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 80, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T05:21:29Z"}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.26, "at": "2026-11-14T05:21:33.249826+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 213.272718, "invalid": 0, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 100, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T06:47:40Z"}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.28, "at": "2026-11-14T06:47:44.350701+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 241.3331544, "invalid": 0, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 120, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T07:49:37Z"}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.29, "at": "2026-11-14T07:49:41.016713+00:00"}}
+{"stop": "call-budget", "calls": 20, "spent": 290.2074786, "invalid": 1, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 140, "calls": 20, "exit": 2, "stop": "call-budget", "at": "2026-11-14T09:24:56Z"}
+{"quota": {"ok": true, "reason": "seven-day headroom", "seven_day": 0.31, "at": "2026-11-14T09:24:59.551935+00:00"}}
+{"stop": null, "calls": 4, "spent": 295.176676, "invalid": 1, "refused": 0, "cells": 164}
+{"f": "chunk end", "from": 160, "calls": 4, "exit": 0, "stop": "", "at": "2026-11-14T09:36:50Z"}

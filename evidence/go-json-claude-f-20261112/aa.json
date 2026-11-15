@@ -1,0 +1,11 @@
+{
+ "splits": 2000,
+ "tasks": 41,
+ "ci_excludes_zero": 0.0355,
+ "proven_at_5pp_floor": 0.9035,
+ "expected_range": [
+  0.03,
+  0.08
+ ],
+ "within_range": true
+}

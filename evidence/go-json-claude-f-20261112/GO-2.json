@@ -1,0 +1,17 @@
+{
+ "go": "Marcus, no AskUserQuestion: \"Híbrido do Fable (Recomendado)\"; a opção dizia \"Este sim vale como GO novo\"",
+ "at": "2026-11-13T00:11:49Z",
+ "supersedes": "GO (21:56Z), cuja condição falhou: a sonda reprovou e a projeção deu US$ 492",
+ "plan": "evidence/segunda-opiniao-20261112-b/result-full.md, seção 4",
+ "dispatch_if": [
+  "passo 0 sem causa determinística que atinja o F (feito 23:0xZ: nenhum separador, sem pausa, sem transcrição)",
+  "passo 1 classificado D1, D2 ou D3",
+  "F-1 publicada com hash antes da primeira tentativa",
+  "analyze_f novo reproduz 4,67 na leitura L0 de 07/11"
+ ],
+ "divert_to_fix_first_if": [
+  "a pausa de rate limit da 1.8.1 for o gatilho",
+  "a causa capturada, aplicada aos recibos de 07/11, marcar 6 ou mais das 164 células"
+ ],
+ "terms": "F ~US$ 275, teto US$ 400; marcador em voo com 40 células: projeção por braço > US$ 400 pausa e volta a Marcus, sem exibir notas"
+}

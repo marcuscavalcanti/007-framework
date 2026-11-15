@@ -1,0 +1,21 @@
+{
+ "passed": true,
+ "checks": {
+  "run_exit_0": true,
+  "cells": true,
+  "every_cell_valid": true,
+  "references_accepted": true,
+  "sign_negative": true,
+  "serial_regrade_agrees": true
+ },
+ "cells": 164,
+ "reference_failures": [],
+ "mean": -0.07136475974394296,
+ "serial": {
+  "cells": 2,
+  "disagree": 0,
+  "unapplied": []
+ },
+ "run_stderr": "",
+ "regrade_stderr": ""
+}

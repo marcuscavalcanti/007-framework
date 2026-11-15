@@ -1,0 +1,7 @@
+#!/bin/bash
+# Study F stream retention (F-1): runs the CLI unchanged, copies its stdout to the streams directory, exits with the CLI's own code.
+# A sidecar names the workspace and start time, so a stream the runner stopped reading can still be matched to its cell.
+OUT="@STREAMS@/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+printf '{"pwd": "%s", "start": "%s"}\n' "$PWD" "$(date -u +%FT%TZ)" > "$OUT.meta.json"
+"@CLI@" "$@" | tee "$OUT.jsonl"
+exit "${PIPESTATUS[0]}"
