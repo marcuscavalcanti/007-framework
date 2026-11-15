@@ -38,6 +38,8 @@ schemas, and the dashboard snapshot.
 
 ### Changed
 
+- `docs/evidence.md` reports a paired study of the skill itself (invoked vs disabled, 31 public tasks, two agents): no
+  detectable effect on acceptance by its pre-registered rule.
 - `docs/lab.md` states that a snapshot is not read isolation: an installed copy of a mined repository on the host can hold a
   task's answer.
 
