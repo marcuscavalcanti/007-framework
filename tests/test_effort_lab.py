@@ -531,6 +531,23 @@ class LabEndToEnd(unittest.TestCase):
         with mock.patch.object(lab.replay_eval, "MAX_ACCEPT_OUTCOMES", 6):
             self.assertEqual(len(lab.oracle(self.config, candidate)["hidden"]), 5)
 
+    def test_the_reference_is_graded_the_way_a_candidate_is(self):
+        """The miner's controls graded the reference at its own tree; a candidate is graded as base + patch behind reset_to_base.
+        A commit that renames a Go test file passed the first and no patch could pass the second (LZ4-12377E5F, 2026-11-15)."""
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        task = json.loads((out / "replay-set.json").read_text())["tasks"][0]
+        self.assertTrue(lab.reference_passes_as_candidate(self.config, out, task))
+        self.assertFalse(lab.reference_passes_as_candidate(self.config, out, {**task, "reset_to_base": ["calc.py"]}))  # the fix itself is reset
+
+    def test_a_task_whose_reference_fails_as_a_candidate_is_dropped(self):
+        out = self.root / "lab"
+        with mock.patch.object(lab, "reference_passes_as_candidate", return_value=False):
+            self.assertEqual(lab.mine(self.config, out, 2), 0)
+        drops = {json.loads(l)["sha"]: json.loads(l).get("drop") for l in (out / "mine.jsonl").read_text().splitlines()}
+        self.assertEqual(drops[self.sha], "reference-fails-as-candidate")
+        self.assertEqual(list((out / "tasks").glob("*")), [])
+
     def test_a_test_file_the_commit_deleted_does_not_drop_the_task(self):
         candidate = next(c for c in lab.pool(self.config) if c["sha"] == self.sha)
         built = lab.oracle(self.config, {**candidate, "tests": candidate["tests"] + ["tests/test_gone.py"]})

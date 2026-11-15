@@ -298,6 +298,21 @@ def write_task(config, out, tid, commit, built):
             "acceptance": [[sys.executable, "-I", "-B", f"{ACCEPT}/lab_accept.py", f"{ACCEPT}/lab.json", f"{ACCEPT}/hidden.json", f"{ACCEPT}/baseline.json"]]}
 
 
+def reference_passes_as_candidate(config, out, task):
+    """The reference graded the way `replay_eval` grades a candidate: base snapshot, patch applied, hidden_acceptance (with its
+    reset_to_base), acceptance. `oracle` grades the reference at its own tree; a commit that renames or deletes a Go test file
+    passes there and fails here, since the reset brings the old test back, and then no candidate can pass."""
+    sandbox, env = replay_eval.acceptance_policy(config.get("acceptance_sandbox"), config.get("acceptance_env"))
+    with tempfile.TemporaryDirectory(prefix="lab-refcheck-") as scratch:
+        workspace = Path(scratch).resolve() / "candidate"
+        workspace.mkdir()
+        replay_eval.export_snapshot(config["repo"], task["base"], workspace)
+        if not apply_patch(workspace, read_patch(out / "tasks" / task["id"] / "reference.patch")):
+            return False
+        with replay_eval.hidden_acceptance(task, workspace):
+            return replay_eval.acceptance(task, workspace, sandbox, {**env, "ACCEPT_REPORT": str(Path(scratch) / "report.json")})[1]
+
+
 def build(config, candidate, out):
     """One commit -> (task, meta) or a drop reason. Each step is cheaper than the one it guards."""
     repo, sha, parent = config["repo"], candidate["sha"], candidate["parent"]
@@ -316,9 +331,14 @@ def build(config, candidate, out):
         return None, "next-" + second
     tid = config.get("task_prefix", "LAB-") + sha[:8].upper()
     task = write_task(config, out, tid, candidate, first)
+    next_task = write_task(config, out, tid + "-next", following, second) if following else None
+    # ponytail: an unreachable task is dropped; keeping it means teaching the oracle which test files the reference removed
+    if not all(reference_passes_as_candidate(config, out, t) for t in (task, next_task) if t):
+        for name in (tid, tid + "-next"):
+            shutil.rmtree(out / "tasks" / name, ignore_errors=True)
+        return None, "reference-fails-as-candidate"
     if not following:
         return task, {"id": tid, "spec": first["spec"], "contract": first["contract"], "hidden": len(first["hidden"])}
-    next_task = write_task(config, out, tid + "-next", following, second)
     changed = [l.split("\t") for l in _git(repo, "diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", sha).decode().splitlines()]
     rewind = [[status, name] for status, name in changed if name not in first["hidden_files"]]
     return task, {"id": tid, "spec": first["spec"], "next": next_task, "next_spec": second["spec"], "rewind": rewind, "contract": first["contract"], "next_contract": second["contract"],

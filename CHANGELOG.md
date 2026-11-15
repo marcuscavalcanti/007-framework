@@ -6,6 +6,20 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Fixed
+
+- `007 lab mine` kept tasks no candidate could pass: its controls graded the reference at its own tree, while a cell grades a
+  patch on the base snapshot behind `reset_to_base`. A commit that renames or deletes a Go test file passed the first and failed
+  the second. The reference patch is now also graded as a candidate, and such a commit is dropped
+  (`reference-fails-as-candidate`).
+- `lab_accept.py` died on a `KeyError` when `ACCEPT_REPORT` was not set and left exit 1, which a caller reads as a rejection.
+  Grading now works without it (the exit code is the verdict, the report is optional); `--collect` still requires it and says so.
+
+### Changed
+
+- `docs/lab.md` states that a snapshot is not read isolation: an installed copy of a mined repository on the host can hold a
+  task's answer.
+
 ## [1.9.0] - 2026-11-14
 
 A minor release for `007 lab`: what Claude study F ran by script around 1.8.1 is now native, and most open items of the 1.8.0

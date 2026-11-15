@@ -53,6 +53,22 @@ class Unittest(unittest.TestCase):
             with self.subTest(scope=name):
                 self.assertEqual(self.grade(source), (1, {NEW: "error", "__module__": "fail"}))
 
+    def test_grading_without_a_report_path_still_grades(self):
+        """Without ACCEPT_REPORT the grader died on a KeyError and left exit 1: a harness error read as a rejection of every
+        candidate (public paired study, 2026-11-15: 0 of 124 accepted, the reference included)."""
+        env = {k: v for k, v in os.environ.items() if k != "ACCEPT_REPORT"}
+        for source, expected in ((CASES, 0), (CASES.replace("def test_new(self): pass", "def test_new(self): self.fail('red')"), 1)):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "test_fixture.py").write_text(source)
+                for name, value in (("lab.json", {"adapter": "unittest", "tests": "test_*.py"}), ("hidden.json", [NEW]), ("baseline.json", [OLD])):
+                    (root / name).write_text(json.dumps(value))
+                proc = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "lab.json", "hidden.json", "baseline.json"],
+                                      cwd=root, env=env, capture_output=True, text=True, timeout=300)
+                self.assertEqual((proc.returncode, "Traceback" in proc.stderr), (expected, False), proc.stderr[-300:])
+        collect = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "--collect", "lab.json"], cwd=ROOT, env=env, capture_output=True, text=True)
+        self.assertIn("ACCEPT_REPORT is required", collect.stderr)
+
     def test_a_clean_suite_passes_and_a_test_red_at_base_stays_outside_the_grade(self):
         self.assertEqual(self.grade(CASES), (0, {NEW: "pass", "__module__": "pass"}))
         # The fixture of a class that holds no graded test fails: nothing graded depends on it.

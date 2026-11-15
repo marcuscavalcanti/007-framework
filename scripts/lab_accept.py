@@ -2,7 +2,7 @@
 
 Accepted = every hidden test passes and no baseline test regresses (key "__module__"). A test whose class, module or package
 fails outside any test reads "error", not "pass". No test output is kept.
-Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report)
+Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
 import json
 import os
@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ElementTree
 
 TIMEOUT_S = 800
@@ -168,18 +169,24 @@ def suite(root, config, scratch):
 
 
 def main(argv):
-    root, report = Path.cwd(), Path(os.environ["ACCEPT_REPORT"])
+    root, named = Path.cwd(), os.environ.get("ACCEPT_REPORT")
     collect = argv[0] == "--collect"
-    config = json.loads(Path(argv[1 if collect else 0]).read_text())
-    final = suite(root, config, report.parent / "lab")
-    if collect:
-        report.write_text(json.dumps(final))
-        return 0
-    hidden, baseline = (json.loads(Path(p).read_text()) for p in argv[1:3])
-    result = {name: final.get(name, "error") for name in hidden}
-    result["__module__"] = "fail" if any(final.get(name) != "pass" for name in baseline) else "pass"
-    report.write_text(json.dumps(result, sort_keys=True))
-    return 0 if all(v == "pass" for v in result.values()) else 1
+    if collect and not named:
+        raise SystemExit("ACCEPT_REPORT is required with --collect: the report is its only output")
+    # Grading without a report path still grades: the exit code alone is the verdict. A KeyError here left exit 1 on every
+    # candidate, the reference included, and a caller read it as 124 rejections.
+    with tempfile.TemporaryDirectory(prefix="lab-accept-") as spare:
+        report = Path(named) if named else Path(spare) / "report.json"
+        config = json.loads(Path(argv[1 if collect else 0]).read_text())
+        final = suite(root, config, report.parent / "lab")
+        if collect:
+            report.write_text(json.dumps(final))
+            return 0
+        hidden, baseline = (json.loads(Path(p).read_text()) for p in argv[1:3])
+        result = {name: final.get(name, "error") for name in hidden}
+        result["__module__"] = "fail" if any(final.get(name) != "pass" for name in baseline) else "pass"
+        report.write_text(json.dumps(result, sort_keys=True))
+        return 0 if all(v == "pass" for v in result.values()) else 1
 
 
 if __name__ == "__main__":

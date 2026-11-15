@@ -96,6 +96,16 @@ pin) and is not a claim about other forms, such as written signatures or a skele
 (`min_message`, the reach set, `sufficiency`) select tasks where the specification is already enough, which pulls a verdict
 toward "equal". Commit messages often under-specify what their tests pin. A generated contract states names and strings, never behaviour, but tests can stay out of reach. Tests that fail in every cell carry no signal and leave the metric.
 
+`mine` keeps a commit only if its reference patch also passes the way a candidate is graded: applied to the base snapshot,
+behind the same reset of test files (`reference-fails-as-candidate` otherwise). A commit that renames or deletes a Go test file
+passed at its own tree while no patch could pass in a cell. `lab_accept.py` grades without `ACCEPT_REPORT` too: the exit code is
+the verdict and the report is optional, so a caller that forgets the variable no longer reads a harness error as a rejection.
+
+A snapshot is not read isolation. A mined public repository may also sit on the host as an installed copy (a plugin cache, a
+module cache, a vendored checkout) that already holds the commit a task asks for, and an agent that searches outside its
+workspace can find the answer there. Before a study, deny the agent read access to such copies or mine a repository the host
+does not carry; a cell that read one is contaminated, not a result.
+
 Durability is harder than it looks. In the repository where this was built, five instruments failed their own sensitivity gates, so durability was not testable there. Proving a binary outcome non-inferior at -5 points needs 235 to 1039 changes per arm, depending on the base rate. Treat `durable` as unproven unless `report` says otherwise.
 
 ## Published replay evidence
