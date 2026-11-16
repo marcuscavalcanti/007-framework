@@ -1,15 +1,18 @@
 """Per-test acceptance for `007 lab`. Stdlib only: it is copied into each candidate tree and runs inside the acceptance sandbox.
 
 Accepted = every hidden test passes and no baseline test regresses (key "__module__"). A test whose class, module or package
-fails outside any test reads "error", not "pass". No test output is kept.
-Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report)
+fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed.
+Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
+import contextlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
+import traceback
 import xml.etree.ElementTree as ElementTree
 
 TIMEOUT_S = 800
@@ -167,9 +170,8 @@ def suite(root, config, scratch):
     return ADAPTERS[config["adapter"]](root, root / config.get("cwd", "."), config, env, scratch)
 
 
-def main(argv):
-    root, report = Path.cwd(), Path(os.environ["ACCEPT_REPORT"])
-    collect = argv[0] == "--collect"
+def _main(argv, report):
+    root, collect = Path.cwd(), argv[0] == "--collect"
     config = json.loads(Path(argv[1 if collect else 0]).read_text())
     final = suite(root, config, report.parent / "lab")
     if collect:
@@ -182,5 +184,29 @@ def main(argv):
     return 0 if all(v == "pass" for v in result.values()) else 1
 
 
+def main(argv):
+    """0 accepted, 1 rejected, 2 the grader itself failed. `mine` reads 2 as a harness error; a replay cell records any non-zero
+    exit as not accepted, with the code, as before."""
+    named = os.environ.get("ACCEPT_REPORT")
+    if named:  # the lab's own path: no temporary directory, as in 1.9.0 (an exact environment may leave none writable)
+        return _main(argv, Path(named))
+    if argv[0] == "--collect":
+        print("ACCEPT_REPORT is required with --collect: the report is its only output", file=sys.stderr)
+        return 2
+    # Grading without a report path still grades: the exit code alone is the verdict. A KeyError here left exit 1 on every
+    # candidate, the reference included, and a caller read it as 124 rejections.
+    with tempfile.TemporaryDirectory(prefix="lab-accept-") as spare:
+        return _main(argv, Path(spare) / "report.json")
+
+
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    try:
+        code = main(sys.argv[1:])
+    except Exception as error:  # the type and two frames only: a message can carry test output
+        code = 2  # set first: a failure while describing the error must not turn into exit 1, which is a verdict
+        with contextlib.suppress(Exception):
+            frames = traceback.StackSummary.extract(traceback.walk_tb(error.__traceback__), lookup_lines=False)  # no source read
+            mine = [f for f in frames if Path(f.filename).name == Path(__file__).name] or frames
+            where = "; ".join(dict.fromkeys(f"{Path(f.filename).name}:{f.lineno} in {f.name}" for f in (mine[-1], frames[-1])))
+            print(f"lab_accept: {type(error).__name__} at {where}", file=sys.stderr)
+    raise SystemExit(code)

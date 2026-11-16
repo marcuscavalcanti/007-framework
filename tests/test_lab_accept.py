@@ -53,6 +53,49 @@ class Unittest(unittest.TestCase):
             with self.subTest(scope=name):
                 self.assertEqual(self.grade(source), (1, {NEW: "error", "__module__": "fail"}))
 
+    def test_grading_without_a_report_path_still_grades(self):
+        """Without ACCEPT_REPORT the grader died on a KeyError and left exit 1: a harness error read as a rejection of every
+        candidate (public paired study, 2026-11-15: 0 of 124 accepted, the reference included)."""
+        env = {k: v for k, v in os.environ.items() if k != "ACCEPT_REPORT"}
+        for source, expected in ((CASES, 0), (CASES.replace("def test_new(self): pass", "def test_new(self): self.fail('red')"), 1)):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "test_fixture.py").write_text(source)
+                for name, value in (("lab.json", {"adapter": "unittest", "tests": "test_*.py"}), ("hidden.json", [NEW]), ("baseline.json", [OLD])):
+                    (root / name).write_text(json.dumps(value))
+                proc = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "lab.json", "hidden.json", "baseline.json"],
+                                      cwd=root, env=env, capture_output=True, text=True, timeout=300)
+                self.assertEqual((proc.returncode, "Traceback" in proc.stderr), (expected, False), proc.stderr[-300:])
+        collect = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "--collect", "lab.json"], cwd=ROOT, env=env, capture_output=True, text=True)
+        self.assertEqual((collect.returncode, "ACCEPT_REPORT is required" in collect.stderr), (2, True))
+
+    def test_a_grader_failure_exits_2_and_is_not_a_rejection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "lab.json").write_text("{not json")
+            proc = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "lab.json", "hidden.json", "baseline.json"],
+                                  cwd=root, env={**os.environ, "ACCEPT_REPORT": str(root / "report.json")}, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)
+        # the type, the deepest frame inside the grader and the innermost frame; never the message
+        self.assertRegex(proc.stderr.strip(), r"^lab_accept: JSONDecodeError at lab_accept\.py:\d+ in _main; \w+\.py:\d+ in \w+$")
+
+    def test_the_lab_path_needs_no_temporary_directory(self):
+        """Review of 1.10.0, B1: with ACCEPT_REPORT set (every lab cell) the grader must not need a writable temp location."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"
+            root.mkdir()
+            (root / "test_fixture.py").write_text(CASES)
+            for name, value in (("lab.json", {"adapter": "unittest", "tests": "test_*.py"}), ("hidden.json", [NEW]), ("baseline.json", [OLD])):
+                (root / name).write_text(json.dumps(value))
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with mock.patch.dict(os.environ, {"ACCEPT_REPORT": str(Path(temporary) / "report.json")}), \
+                        mock.patch.object(lab_accept.tempfile, "TemporaryDirectory", side_effect=AssertionError("no temp dir on the lab path")):
+                    self.assertEqual(lab_accept.main(["lab.json", "hidden.json", "baseline.json"]), 0)
+            finally:
+                os.chdir(cwd)
+
     def test_a_clean_suite_passes_and_a_test_red_at_base_stays_outside_the_grade(self):
         self.assertEqual(self.grade(CASES), (0, {NEW: "pass", "__module__": "pass"}))
         # The fixture of a class that holds no graded test fails: nothing graded depends on it.

@@ -6,8 +6,67 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-16
+
+A minor release for `007 lab`, mostly corrections to the instrument. It adds a second sensitivity operator, off by default,
+fixes what the first one counted, stops `mine` from keeping tasks no candidate can pass, and stops the grader from turning a
+harness error into a rejection. `run` and `report` are unchanged: they still read the v1 `sensitivity.json`. A set mined before
+1.10.0 keeps its embedded grader and its tasks until it is mined again. Release qualification is recorded in
+[the release record](evidence/v1.10.0/release-evidence.md).
+
+### Added
+
+- `007 lab sensitivity --operator v2 [--floor F]` writes `sensitivity-v2.json` beside the v1 `sensitivity.json`, which `run` and
+  `report` still read. A v2 mutant is the reference tree with one unit reverted to the base, built by line substitution rather
+  than by applying a reduced patch. A unit is a hunk of a zero-context diff in a non-test text file; every unit is tried, and
+  binary files stay as in the reference. A construction control checks, file by file, that the base plus every unit gives the
+  reference and the reference minus every unit gives the base. Each mutant is classed trivial, equivalent (same tokens as the
+  reference, touching only blank or comment lines), out-of-scope (the hidden tests pass without its file), invalid (breaks a
+  test green at both the base and the reference with the hidden files at the base) or valid. A valid mutant ends
+  `rejected-contract`, `rejected-assert` or `survived`. Tasks are measured only when the reference passes and the base fails. The
+  file publishes sensitivity as a mean of per-task rates with a task-bootstrap interval, plus specificity on the equivalents,
+  coverage and the whole funnel. Its decision has three states: `passes`, `fails` or `indeterminate`, plus `no-information`
+  below 20 valid mutants in 8 tasks and `floor-unset` with no `--floor`; one equivalent mutant the oracle rejects reads `fails`
+  before either, and `passes` needs at least one equivalent in a file the hidden tests load. The pooled binomial interval
+  (Clopper-Pearson over all valid mutants, taken as independent) caps the task bootstrap, which has zero width when per-task
+  rates are equal; with tasks as the unit the cap would be wider. The interval then spans two quantities, the mean of per-task
+  rates and the pooled rate: where task sizes differ much they separate, and the decision drifts to `indeterminate`. A symbolic link or submodule has no unit; a comment that is a
+  directive (a build tag, `go:embed`, `//export`, a shebang, a coding cookie) is not equivalent; the diff flags that set unit
+  boundaries are pinned (algorithm, indent heuristic, inter-hunk context, textconv, external diff), while attributes and the
+  git version are not, so the operator names the same units only on the same git. The file records `jobs`. Known limits are
+  listed in `docs/lab.md`. Rows carry file indexes, never names; an `error` row or a failed control carries the exception type
+  and a numeric exit code, never its message. `equivalents_loaded` counts the equivalents that can fail. Operator
+  `revert-one-unit/1`.
+
+### Fixed
+
+- `sensitivity`: a mutant is the reference minus one sampled hunk, and every other block stays. In 1.9.0 every mutant also lost the
+  reference's binary blocks and its blocks without a hunk (rename, mode change, empty file), which could fail a build and count as
+  a caught defect. A diff is binary only on a `GIT binary patch` line, not on that phrase inside a text line (1.9.0 skipped such a
+  text diff). A block whose only hunk is the sampled one still leaves whole, with a mode change or rename it carries. A reference
+  with one hunk yields no mutant. `sensitivity.json` records
+  `operator` (`minus-one-hunk/2`); a 1.9.0 file has none. Found by an exploratory audit (Codex gpt-6-astra) and confirmed in code;
+  sensitivities measured with 1.9.0 stay as published. Both defects push them upward (a dropped block that fails a build counts
+  as a caught defect); a case that pushes the other way is not excluded. `report` does not print the operator, and a comparison
+  with a 1.10.0 one has to say so.
+- `007 lab mine` kept tasks no candidate could pass: its controls graded the reference at its own tree, while a cell grades a
+  patch on the base snapshot behind `reset_to_base`. A commit that renames or deletes a Go test file passed the first and failed
+  the second. The reference patch is now also graded as a candidate, and such a commit is dropped
+  (`reference-fails-as-candidate`, or `next-reference-fails-as-candidate` for the paired next change). The check runs once, under
+  the mining load: a reference that fails once is dropped under that label, with no retry alone.
+- `lab_accept.py` died on a `KeyError` when `ACCEPT_REPORT` was not set and left exit 1, which a caller reads as a rejection.
+  Grading now works without it (the exit code is the verdict, the report is optional); `--collect` still requires it and says so.
+  The grader exits 2, not 1, when it fails itself, and `mine` drops such a commit as `AcceptanceHarnessError`; a replay cell
+  records any non-zero exit as not accepted, as before. Both fixes reach
+  a set only when it is mined again: a mined task embeds its grader.
+
 ### Changed
 
+- `docs/evidence.md` reports a paired study of the skill itself (invoked vs disabled, 31 public tasks, two agents): no
+  detectable effect on acceptance by a rule written before the run. The study could only have detected a large effect, and
+  host hooks ran in both arms.
+- `docs/lab.md` states that a snapshot is not read isolation: an installed copy of a mined repository on the host can hold a
+  task's answer.
 - Amendment 2 to the Codex 5-point pilot pre-registration (`evidence/codex-5pp-20261108/AMENDMENT-2.md`), published before
   the corrected gate re-run and any pilot attempt. It pins the pilot to the v1.7.0 code, keeps the evaluator embedded in the mined
   tasks, re-runs the corrected planted-defect gate, fixes a blind rule for tasks whose reference fails, uses the floor as written
@@ -36,6 +95,14 @@ schemas, and the dashboard snapshot.
   part 6 reads YES for this executor on this repository; T1's third bullet was completed after the look by a demote-only step. The
   study was selected after an exploratory reading, and the result covers one public repository. Reviewed in two rounds by Claude
   Fable 5.2 at maximum effort.
+
+### Documentation
+
+- The lab guide states the scope of `proven_critical`'s 2.5%: it holds for attempts that fail independently. A failure shared by
+  every attempt of a task is not in its loss model; an exact counter-example (24 tasks, 3 attempts per arm, 20-point margin) gives
+  3.31%: one counter-example, not a bound. Study F's statistic (10.84) is far from its critical value (2.28), which was itself
+  computed under that assumption.
+
 
 ## [1.9.0] - 2026-11-14
 
@@ -803,7 +870,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0
