@@ -1,7 +1,7 @@
 """Per-test acceptance for `007 lab`. Stdlib only: it is copied into each candidate tree and runs inside the acceptance sandbox.
 
 Accepted = every hidden test passes and no baseline test regresses (key "__module__"). A test whose class, module or package
-fails outside any test reads "error", not "pass". No test output is kept.
+fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed.
 Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
 import json
@@ -168,26 +168,38 @@ def suite(root, config, scratch):
     return ADAPTERS[config["adapter"]](root, root / config.get("cwd", "."), config, env, scratch)
 
 
+def _main(argv, report):
+    root, collect = Path.cwd(), argv[0] == "--collect"
+    config = json.loads(Path(argv[1 if collect else 0]).read_text())
+    final = suite(root, config, report.parent / "lab")
+    if collect:
+        report.write_text(json.dumps(final))
+        return 0
+    hidden, baseline = (json.loads(Path(p).read_text()) for p in argv[1:3])
+    result = {name: final.get(name, "error") for name in hidden}
+    result["__module__"] = "fail" if any(final.get(name) != "pass" for name in baseline) else "pass"
+    report.write_text(json.dumps(result, sort_keys=True))
+    return 0 if all(v == "pass" for v in result.values()) else 1
+
+
 def main(argv):
-    root, named = Path.cwd(), os.environ.get("ACCEPT_REPORT")
-    collect = argv[0] == "--collect"
-    if collect and not named:
-        raise SystemExit("ACCEPT_REPORT is required with --collect: the report is its only output")
+    """0 accepted, 1 rejected, 2 the grader itself failed: a harness error is never a verdict."""
+    named = os.environ.get("ACCEPT_REPORT")
+    if named:  # the lab's own path: no temporary directory, as in 1.9.0 (an exact environment may leave none writable)
+        return _main(argv, Path(named))
+    if argv[0] == "--collect":
+        print("ACCEPT_REPORT is required with --collect: the report is its only output", file=sys.stderr)
+        return 2
     # Grading without a report path still grades: the exit code alone is the verdict. A KeyError here left exit 1 on every
     # candidate, the reference included, and a caller read it as 124 rejections.
     with tempfile.TemporaryDirectory(prefix="lab-accept-") as spare:
-        report = Path(named) if named else Path(spare) / "report.json"
-        config = json.loads(Path(argv[1 if collect else 0]).read_text())
-        final = suite(root, config, report.parent / "lab")
-        if collect:
-            report.write_text(json.dumps(final))
-            return 0
-        hidden, baseline = (json.loads(Path(p).read_text()) for p in argv[1:3])
-        result = {name: final.get(name, "error") for name in hidden}
-        result["__module__"] = "fail" if any(final.get(name) != "pass" for name in baseline) else "pass"
-        report.write_text(json.dumps(result, sort_keys=True))
-        return 0 if all(v == "pass" for v in result.values()) else 1
+        return _main(argv, Path(spare) / "report.json")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    try:
+        code = main(sys.argv[1:])
+    except Exception as error:  # the type only: a message can carry test output
+        print(f"lab_accept: {type(error).__name__}", file=sys.stderr)
+        code = 2
+    raise SystemExit(code)

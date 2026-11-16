@@ -301,6 +301,10 @@ def write_task(config, out, tid, commit, built):
             "acceptance": [[sys.executable, "-I", "-B", f"{ACCEPT}/lab_accept.py", f"{ACCEPT}/lab.json", f"{ACCEPT}/hidden.json", f"{ACCEPT}/baseline.json"]]}
 
 
+class AcceptanceHarnessError(RuntimeError):
+    """The grader or its wrapper failed: the commit is dropped under this name, not as a reference that fails."""
+
+
 def reference_passes_as_candidate(config, out, task):
     """The reference graded the way `replay_eval` grades a candidate: base snapshot, patch applied, hidden_acceptance (with its
     reset_to_base), acceptance. `oracle` grades the reference at its own tree; a commit that renames or deletes a Go test file
@@ -313,7 +317,10 @@ def reference_passes_as_candidate(config, out, task):
         if not apply_patch(workspace, read_patch(out / "tasks" / task["id"] / "reference.patch")):
             return False
         with replay_eval.hidden_acceptance(task, workspace):
-            return replay_eval.acceptance(task, workspace, sandbox, {**env, "ACCEPT_REPORT": str(Path(scratch) / "report.json")})[1]
+            results, passed = replay_eval.acceptance(task, workspace, sandbox, {**env, "ACCEPT_REPORT": str(Path(scratch) / "report.json")})
+        if any(r["exit"] not in (0, 1) for r in results):  # lab_accept: 2 is the grader failing, and a wrapper has its own codes
+            raise AcceptanceHarnessError("acceptance did not grade")
+        return passed
 
 
 def build(config, candidate, out):
@@ -336,9 +343,16 @@ def build(config, candidate, out):
     task = write_task(config, out, tid, candidate, first)
     next_task = write_task(config, out, tid + "-next", following, second) if following else None
     # ponytail: an unreachable task is dropped; keeping it means teaching the oracle which test files the reference removed
-    if not all(reference_passes_as_candidate(config, out, t) for t in (task, next_task) if t):
-        for name in (tid, tid + "-next"):
-            shutil.rmtree(out / "tasks" / name, ignore_errors=True)
+    try:
+        reachable = all(reference_passes_as_candidate(config, out, t) for t in (task, next_task) if t)
+    except BaseException:
+        reachable = None
+        raise
+    finally:
+        if not reachable:  # dropped or errored: neither leaves a task directory behind
+            for name in (tid, tid + "-next"):
+                shutil.rmtree(out / "tasks" / name, ignore_errors=True)
+    if not reachable:
         return None, "reference-fails-as-candidate"
     if not following:
         return task, {"id": tid, "spec": first["spec"], "contract": first["contract"], "hidden": len(first["hidden"])}
@@ -501,7 +515,8 @@ def hunks(patch_text):
 
 def mutants(patch_text, limit, rng):
     """The reference minus one hunk, sampled: a change partly done, as a weaker agent might leave it. Every other block, binary and
-    hunk-less ones included, stays as in the reference. A reference with one hunk has no mutant: minus that hunk it is the base."""
+    hunk-less ones included, stays as in the reference. A block whose only hunk is the sampled one leaves whole, header included,
+    so a mode change or rename carried by that block goes with it. A reference with one hunk has no mutant (v2 measures it)."""
     files = hunks(patch_text)
     index = [(i, j) for i, (_, parts) in enumerate(files) for j in range(len(parts))]
     rng.shuffle(index)
@@ -593,7 +608,9 @@ OPERATOR_V2 = "revert-one-unit/1"
 U0 = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.M)
 CODE_TOKEN = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|`[^`]*`|\n|\w+|[^\s\w]', re.S)
 C_LIKE = re.compile(r"\.(go|(c|m)?(j|t)sx?|java|kt|c|cc|cpp|h|hpp|cs|swift|rs|scala|php)$")
-COMMENT_LINE = re.compile(r"^\s*($|//|/\*|\*|#)")
+# a directive written as a comment is code: build tags, go:embed/generate, cgo exports, a shebang, a coding cookie
+DIRECTIVE = r"//go:|//\s*\+build|//export\s|#!|#.*coding[:=]"
+COMMENT_LINE = re.compile(rf"^\s*(?!{DIRECTIVE})($|//|/\*|\*|#)")
 
 
 def _lines(data):
@@ -608,18 +625,23 @@ def _blob(repo, rev, path):
         return None
 
 
-def units(repo, base, head):
+def units(repo, base, head, skip=()):
     """([path, lines at base | None, lines at head | None, [(base start, base n, head start, head n)]] per non-test text file,
-    binary non-test files): the hunks of a zero-context diff. A binary file has no unit and stays as at head."""
+    files without units): the hunks of a zero-context diff. A binary file, a symbolic link and a submodule have no unit and stay
+    as at head; `skip` names the task's hidden files, whatever the test pattern says of them."""
     files, binaries = [], 0
+    raw = _git(repo, "diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head).decode("utf-8", "surrogateescape").split("\0")
+    irregular = {path for meta, path in zip(raw[::2], raw[1::2]) if {meta.split()[0].lstrip(":"), meta.split()[1]} - {"100644", "100755", "000000"}}
     for row in filter(None, _git(repo, "diff", "--numstat", "-z", "--no-renames", base, head).decode("utf-8", "surrogateescape").split("\0")):
         added, _, path = row.split("\t", 2)
-        if commit_replay.TEST.search(path):
+        if commit_replay.TEST.search(path) or path in skip:
             continue
-        if added == "-":
+        if added == "-" or path in irregular:  # a link's "lines" are its target: never a unit, and _put would write through it
             binaries += 1
             continue
-        diff = _git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", base, head, "--", f":(literal){path}").decode("utf-8", "surrogateescape")
+        # the operator's unit boundaries must not follow the host's git configuration
+        diff = _git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--inter-hunk-context=0",
+                    base, head, "--", f":(literal){path}").decode("utf-8", "surrogateescape")
         hunks = [(int(a) - (b != "0"), int(b or 1), int(c) - (d != "0"), int(d or 1)) for a, b, c, d in U0.findall(diff)]
         if hunks:
             files.append([path, _blob(repo, base, path), _blob(repo, head, path), hunks])
@@ -647,7 +669,7 @@ def _code(lines, path):
     if path.endswith(".py"):
         try:
             return [(t.type, t.string) for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type not in (tokenize.COMMENT, tokenize.NL)]
-        except (tokenize.TokenError, SyntaxError):
+        except (tokenize.TokenError, SyntaxError, ValueError):  # ValueError: bytes that are not UTF-8, kept as surrogates
             return None
     if not C_LIKE.search(path):
         return [line.rstrip() for line in text.split("\n")]  # ponytail: other files equivalent only up to trailing spaces
@@ -695,7 +717,7 @@ def sensitivity_v2(config_path, jobs, floor=None):
     hidden_of = lambda task: [e["target"] for e in task["hidden_acceptance"] if not e["target"].startswith(ACCEPT)]
     work, tasks = {}, {}
     for task in config["tasks"]:
-        files, binaries = units(repo, task["base"], task["accepted"])
+        files, binaries = units(repo, task["base"], task["accepted"], hidden_of(task))
         tasks[task["id"]] = {"files": len(files), "units": sum(len(f[3]) for f in files), "binaries": binaries,
                              "construction": all(rebuilds(f[1], f[2], f[3]) for f in files)}
         work[task["id"]] = (task, files)
@@ -733,9 +755,12 @@ def sensitivity_v2(config_path, jobs, floor=None):
         meta = tasks[tid]
         if meta["construction"]:
             meta.update(reference=done[(tid, "reference", None)][0], base=done[(tid, "base", None)][0])
-            visible = (done[(tid, "visible-base", None)][1] or set()) & (done[(tid, "visible-reference", None)][1] or set())
-            meta["visible_tests"] = len(visible)
-        meta["control"] = ("operator-invalid" if not meta["construction"] else "ok" if meta["reference"] == "pass" and meta["base"] in ("contract", "assert")
+            seen_base, seen_reference = done[(tid, "visible-base", None)][1], done[(tid, "visible-reference", None)][1]
+            visible = (seen_base or set()) & (seen_reference or set())
+            # a visible run that errored would leave no test to break: every build-breaking revert would count as a rejection
+            meta.update(visible_tests=len(visible), visible_control=seen_base is not None and seen_reference is not None)
+        meta["control"] = ("operator-invalid" if not meta["construction"]
+                           else "ok" if meta["reference"] == "pass" and meta["base"] in ("contract", "assert") and meta["visible_control"]
                            else "control-failed")
         if meta["control"] != "ok":
             continue
@@ -791,6 +816,11 @@ def sensitivity_v2_summary(rows, tasks, floor=None, seed=1, draws=GATES["draws"]
     specificity = sum(r["outcome"] == "pass" for r in equivalents) / len(equivalents) if equivalents else None
     sensitivity = statistics.fmean(per_task.values()) if per_task else None
     interval = _interval(list(per_task.values()), seed, draws) if per_task else None
+    if interval and parts["survived"] in (0, len(valid)):
+        # equal per-task rates give the bootstrap zero width: 20 of 20 rejected would read [1, 1] and pass any floor. The exact
+        # 97.5% bound for an all-or-none count caps it (0.83 at 20). ponytail: pools mutants across tasks; a cap, not the interval
+        bound = .025 ** (1 / len(valid))
+        interval = [min(interval[0], bound), interval[1]] if parts["survived"] == 0 else [interval[0], max(interval[1], 1 - bound)]
     if specificity is not None and specificity < 1:
         decision = "fails"
     elif len(valid) < 20 or len(per_task) < GATES["min_signal_tasks"]:
@@ -2200,6 +2230,8 @@ def main(argv=None):
         if args.strict_jobs:
             parser.error(message)
         print(f"007 lab: warning: {message}", file=sys.stderr)
+    if args.command == "sensitivity" and args.floor is not None and (args.operator != "v2" or not 0 < args.floor <= 1):
+        parser.error("--floor is a rate in (0, 1] and only the v2 operator reads it")
     if args.command == "mine":
         print(json.dumps({"tasks": mine(json.loads(path.read_text()), out, args.jobs)}))
     elif args.command == "sensitivity":

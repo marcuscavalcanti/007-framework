@@ -67,7 +67,32 @@ class Unittest(unittest.TestCase):
                                       cwd=root, env=env, capture_output=True, text=True, timeout=300)
                 self.assertEqual((proc.returncode, "Traceback" in proc.stderr), (expected, False), proc.stderr[-300:])
         collect = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "--collect", "lab.json"], cwd=ROOT, env=env, capture_output=True, text=True)
-        self.assertIn("ACCEPT_REPORT is required", collect.stderr)
+        self.assertEqual((collect.returncode, "ACCEPT_REPORT is required" in collect.stderr), (2, True))
+
+    def test_a_grader_failure_exits_2_and_is_not_a_rejection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "lab.json").write_text("{not json")
+            proc = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "lab.json", "hidden.json", "baseline.json"],
+                                  cwd=root, env={**os.environ, "ACCEPT_REPORT": str(root / "report.json")}, capture_output=True, text=True)
+        self.assertEqual((proc.returncode, proc.stderr.strip()), (2, "lab_accept: JSONDecodeError"))
+
+    def test_the_lab_path_needs_no_temporary_directory(self):
+        """Review of 1.10.0, B1: with ACCEPT_REPORT set (every lab cell) the grader must not need a writable temp location."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"
+            root.mkdir()
+            (root / "test_fixture.py").write_text(CASES)
+            for name, value in (("lab.json", {"adapter": "unittest", "tests": "test_*.py"}), ("hidden.json", [NEW]), ("baseline.json", [OLD])):
+                (root / name).write_text(json.dumps(value))
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with mock.patch.dict(os.environ, {"ACCEPT_REPORT": str(Path(temporary) / "report.json")}), \
+                        mock.patch.object(lab_accept.tempfile, "TemporaryDirectory", side_effect=AssertionError("no temp dir on the lab path")):
+                    self.assertEqual(lab_accept.main(["lab.json", "hidden.json", "baseline.json"]), 0)
+            finally:
+                os.chdir(cwd)
 
     def test_a_clean_suite_passes_and_a_test_red_at_base_stays_outside_the_grade(self):
         self.assertEqual(self.grade(CASES), (0, {NEW: "pass", "__module__": "pass"}))

@@ -1,5 +1,7 @@
 """`007 lab` end to end: a synthetic repository, a fake agent, no model and no vendor."""
+import contextlib
 import difflib
+import io
 import json
 import os
 import shutil
@@ -539,6 +541,15 @@ class LabEndToEnd(unittest.TestCase):
         task = json.loads((out / "replay-set.json").read_text())["tasks"][0]
         self.assertTrue(lab.reference_passes_as_candidate(self.config, out, task))
         self.assertFalse(lab.reference_passes_as_candidate(self.config, out, {**task, "reset_to_base": ["calc.py"]}))  # the fix itself is reset
+
+    def test_a_grader_failure_while_mining_is_not_a_failing_reference(self):
+        out = self.root / "lab"
+        harness = lambda *a, **k: ([{"exit": 2}], False)
+        with mock.patch.object(lab.replay_eval, "acceptance", side_effect=harness):
+            self.assertEqual(lab.mine(self.config, out, 2), 0)
+        drops = {json.loads(l)["sha"]: json.loads(l).get("drop") for l in (out / "mine.jsonl").read_text().splitlines()}
+        self.assertTrue(drops[self.sha].startswith("AcceptanceHarnessError"), drops)  # with its message when the set keeps diagnostic text
+        self.assertEqual(list((out / "tasks").glob("*")), [])
 
     def test_a_task_whose_reference_fails_as_a_candidate_is_dropped(self):
         out = self.root / "lab"
@@ -1224,6 +1235,54 @@ class OperatorV2(unittest.TestCase):
         mixed = rows(0) + [{"task": f"T{i}", "class": "valid", "outcome": "rejected-assert"} for i in range(4) for _ in range(6)]
         self.assertEqual(decide(mixed, .5), "indeterminate")
         self.assertEqual(decide(rows(3)[:9] + rows(3)[-1:], .5), "no-information")  # 9 valid in 3 tasks
+
+
+class OperatorV2Review(unittest.TestCase):
+    """Review of 1.10.0 (Fable 5.2 xhigh, 2026-11-16)."""
+    def test_an_all_rejected_minimum_sample_does_not_pass_a_floor_near_one(self):
+        tasks = {f"T{i}": {"control": "ok"} for i in range(8)}
+        rows = [{"task": f"T{i % 8}", "class": "valid", "outcome": "rejected-assert"} for i in range(20)] + [{"task": "T0", "class": "equivalent", "outcome": "pass"}]
+        result = lab.sensitivity_v2_summary(rows, tasks, .99, draws=500)
+        self.assertEqual(result["decision"], "indeterminate")  # the bootstrap alone read [1, 1] and passed
+        self.assertAlmostEqual(result["interval"][0], .025 ** (1 / 20))
+        self.assertEqual(lab.sensitivity_v2_summary(rows, tasks, .8, draws=500)["decision"], "passes")
+
+    def test_a_directive_comment_is_not_an_equivalent_change(self):
+        one = (0, 1, 0, 1)
+        self.assertTrue(lab.equivalent("a.go", ["// old note\n", "x := 1\n"], ["// new note\n", "x := 1\n"], one))
+        for base, head in (("//go:build linux\n", "//go:build darwin\n"), ("// +build linux\n", "// +build darwin\n"), ("//export Old\n", "//export New\n")):
+            self.assertFalse(lab.equivalent("a.go", [base, "x := 1\n"], [head, "x := 1\n"], one), base)
+        self.assertFalse(lab.equivalent("a.py", ["# -*- coding: latin-1 -*-\n"], ["# -*- coding: utf-8 -*-\n"], one))
+
+    def test_bytes_that_are_not_utf8_do_not_end_the_run(self):
+        self.assertIn(lab._code(lab._lines(b"# caf\xe9\nx = 1\n"), "a.py") is None, (True, False))  # read or refused, never raised
+        self.assertFalse(lab.equivalent("a.py", lab._lines(b"x = 'caf\xe9'\n"), lab._lines(b"x = 'cafe'\n"), (0, 1, 0, 1)))
+
+    def test_a_symbolic_link_is_never_a_unit_and_never_written_through(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            repo, outside = Path(scratch) / "repo", Path(scratch) / "outside"
+            repo.mkdir()
+            outside.write_text("host file\n")
+            git(repo, "init", "-qb", "main")
+            (repo / "link").symlink_to("first-target")
+            base = commit(repo, {"calc.py": "x = 1\n"}, "base", "2026-01-01T00:00:00Z")
+            (repo / "link").unlink()
+            (repo / "link").symlink_to(str(outside))
+            head = commit(repo, {"calc.py": "x = 2\n"}, "head", "2026-01-02T00:00:00Z")
+            files, without_units = lab.units(repo, base, head)
+            self.assertEqual(([f[0] for f in files], without_units), (["calc.py"], 1))
+            self.assertEqual(lab.units(repo, base, head, skip=("calc.py",))[0], [])  # a hidden file is never a unit
+            tree = Path(scratch) / "tree"
+            lab.extract(repo, head, tree)
+            with self.assertRaises(ValueError):
+                lab._put(tree, "link", ["chosen bytes\n"])
+            self.assertEqual(outside.read_text(), "host file\n")
+
+    def test_floor_is_a_rate_and_only_v2_reads_it(self):
+        for argv in (["sensitivity", "--set", "x.json", "--floor", "0.3"], ["sensitivity", "--set", "x.json", "--operator", "v2", "--floor", "95"]):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
+                lab.main(argv)
+            self.assertIn("--floor is a rate", err.getvalue())
 
 
 class MinerSafety(unittest.TestCase):

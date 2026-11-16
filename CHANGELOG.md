@@ -18,28 +18,37 @@ schemas, and the dashboard snapshot.
   `rejected-contract`, `rejected-assert` or `survived`. Tasks are measured only when the reference passes and the base fails. The
   file publishes sensitivity as a mean of per-task rates with a task-bootstrap interval, plus specificity on the equivalents,
   coverage and the whole funnel. Its decision has three states: `passes`, `fails` or `indeterminate`, plus `no-information`
-  below 20 valid mutants in 8 tasks and `floor-unset` with no `--floor`. Rows carry file indexes, never names. Operator
+  below 20 valid mutants in 8 tasks and `floor-unset` with no `--floor`; one equivalent mutant the oracle rejects reads `fails`
+  before either. When every valid mutant is rejected, or none is, an exact bound caps the bootstrap interval, which has zero
+  width there. A symbolic link or submodule has no unit; a comment that is a directive (a build tag, `go:embed`) is not
+  equivalent; unit boundaries do not follow the host's git configuration. Known limits: no serial re-check of a grade, as v1
+  has; an equivalent mutant in a file no test loads passes vacuously; the reference control grades at the reference's own tree. Rows carry file indexes, never names. Operator
   `revert-one-unit/1`.
 
 ### Fixed
 
-- `sensitivity`: a mutant is the reference minus one sampled hunk and nothing else. In 1.9.0 every mutant also lost the
+- `sensitivity`: a mutant is the reference minus one sampled hunk, and every other block stays. In 1.9.0 every mutant also lost the
   reference's binary blocks and its blocks without a hunk (rename, mode change, empty file), which could fail a build and count as
   a caught defect. A diff is binary only on a `GIT binary patch` line, not on that phrase inside a text line (1.9.0 skipped such a
-  text diff). A reference with one hunk yields no mutant, since minus that hunk it is the base. `sensitivity.json` records
+  text diff). A block whose only hunk is the sampled one still leaves whole, with a mode change or rename it carries. A reference
+  with one hunk yields no mutant (v2 measures that case). `sensitivity.json` records
   `operator` (`minus-one-hunk/2`); a 1.9.0 file has none. Found by an exploratory audit (Codex gpt-6-astra) and confirmed in code;
-  sensitivities measured with 1.9.0 stay as published and are not comparable with 1.10.0 ones without saying so.
+  sensitivities measured with 1.9.0 stay as published. They can only be too high (a dropped block that fails a build counts as a
+  caught defect), `report` does not print the operator, and a comparison with a 1.10.0 one has to say so.
 - `007 lab mine` kept tasks no candidate could pass: its controls graded the reference at its own tree, while a cell grades a
   patch on the base snapshot behind `reset_to_base`. A commit that renames or deletes a Go test file passed the first and failed
   the second. The reference patch is now also graded as a candidate, and such a commit is dropped
   (`reference-fails-as-candidate`).
 - `lab_accept.py` died on a `KeyError` when `ACCEPT_REPORT` was not set and left exit 1, which a caller reads as a rejection.
   Grading now works without it (the exit code is the verdict, the report is optional); `--collect` still requires it and says so.
+  The grader exits 2, not 1, when it fails itself, and `mine` drops such a commit as `AcceptanceHarnessError`. Both fixes reach
+  a set only when it is mined again: a mined task embeds its grader.
 
 ### Changed
 
 - `docs/evidence.md` reports a paired study of the skill itself (invoked vs disabled, 31 public tasks, two agents): no
-  detectable effect on acceptance by its pre-registered rule.
+  detectable effect on acceptance by a rule written before the run. The study could only have detected a large effect, and
+  host hooks ran in both arms.
 - `docs/lab.md` states that a snapshot is not read isolation: an installed copy of a mined repository on the host can hold a
   task's answer.
 - Amendment 2 to the Codex 5-point pilot pre-registration (`evidence/codex-5pp-20261108/AMENDMENT-2.md`), published before
@@ -75,7 +84,8 @@ schemas, and the dashboard snapshot.
 
 - The lab guide states the scope of `proven_critical`'s 2.5%: it holds for attempts that fail independently. A failure shared by
   every attempt of a task is not in its loss model; an exact counter-example (24 tasks, 3 attempts per arm, 20-point margin) gives
-  3.31%. Study F is not affected (statistic 10.84 against 2.28).
+  3.31%: one counter-example, not a bound. Study F's statistic (10.84) is far from its critical value (2.28), which was itself
+  computed under that assumption.
 
 
 ## [1.9.0] - 2026-11-14
