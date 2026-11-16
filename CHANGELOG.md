@@ -19,10 +19,14 @@ schemas, and the dashboard snapshot.
   file publishes sensitivity as a mean of per-task rates with a task-bootstrap interval, plus specificity on the equivalents,
   coverage and the whole funnel. Its decision has three states: `passes`, `fails` or `indeterminate`, plus `no-information`
   below 20 valid mutants in 8 tasks and `floor-unset` with no `--floor`; one equivalent mutant the oracle rejects reads `fails`
-  before either. When every valid mutant is rejected, or none is, an exact bound caps the bootstrap interval, which has zero
-  width there. A symbolic link or submodule has no unit; a comment that is a directive (a build tag, `go:embed`) is not
-  equivalent; unit boundaries do not follow the host's git configuration. Known limits: no serial re-check of a grade, as v1
-  has; an equivalent mutant in a file no test loads passes vacuously; the reference control grades at the reference's own tree. Rows carry file indexes, never names. Operator
+  before either, and `passes` needs at least one equivalent in a file the hidden tests load. The pooled binomial interval
+  (Clopper-Pearson over all valid mutants, taken as independent) caps the task bootstrap, which has zero width when per-task
+  rates are equal; with tasks as the unit the cap would be wider. A symbolic link or submodule has no unit; a comment that is a
+  directive (a build tag, `go:embed`, `//export`, a shebang, a coding cookie) is not equivalent; the diff flags that set unit
+  boundaries are pinned (algorithm, indent heuristic, inter-hunk context, textconv, external diff), while attributes and the
+  git version are not, so the operator names the same units only on the same git. The file records `jobs`. Known limits are
+  listed in `docs/lab.md`. Rows carry file indexes, never names; an `error` row or a failed control carries the exception type,
+  and its message only when the set retains diagnostic text. Operator
   `revert-one-unit/1`.
 
 ### Fixed
@@ -31,17 +35,20 @@ schemas, and the dashboard snapshot.
   reference's binary blocks and its blocks without a hunk (rename, mode change, empty file), which could fail a build and count as
   a caught defect. A diff is binary only on a `GIT binary patch` line, not on that phrase inside a text line (1.9.0 skipped such a
   text diff). A block whose only hunk is the sampled one still leaves whole, with a mode change or rename it carries. A reference
-  with one hunk yields no mutant (v2 measures that case). `sensitivity.json` records
+  with one hunk yields no mutant. `sensitivity.json` records
   `operator` (`minus-one-hunk/2`); a 1.9.0 file has none. Found by an exploratory audit (Codex gpt-6-astra) and confirmed in code;
-  sensitivities measured with 1.9.0 stay as published. They can only be too high (a dropped block that fails a build counts as a
-  caught defect), `report` does not print the operator, and a comparison with a 1.10.0 one has to say so.
+  sensitivities measured with 1.9.0 stay as published. Both defects push them upward (a dropped block that fails a build counts
+  as a caught defect); a case that pushes the other way is not excluded. `report` does not print the operator, and a comparison
+  with a 1.10.0 one has to say so.
 - `007 lab mine` kept tasks no candidate could pass: its controls graded the reference at its own tree, while a cell grades a
   patch on the base snapshot behind `reset_to_base`. A commit that renames or deletes a Go test file passed the first and failed
   the second. The reference patch is now also graded as a candidate, and such a commit is dropped
-  (`reference-fails-as-candidate`).
+  (`reference-fails-as-candidate`, or `next-reference-fails-as-candidate` for the paired next change). The check runs once, under
+  the mining load: a reference that fails once is dropped under that label, with no retry alone.
 - `lab_accept.py` died on a `KeyError` when `ACCEPT_REPORT` was not set and left exit 1, which a caller reads as a rejection.
   Grading now works without it (the exit code is the verdict, the report is optional); `--collect` still requires it and says so.
-  The grader exits 2, not 1, when it fails itself, and `mine` drops such a commit as `AcceptanceHarnessError`. Both fixes reach
+  The grader exits 2, not 1, when it fails itself, and `mine` drops such a commit as `AcceptanceHarnessError`; a replay cell
+  records any non-zero exit as not accepted, as before. Both fixes reach
   a set only when it is mined again: a mined task embeds its grader.
 
 ### Changed

@@ -125,17 +125,20 @@ before the run. Its SHA-256 is `310f98ed379f6852d6e7d3d2123d13f410f77ae94de2315d
 | Codex | 21/31 | 19/31 | 2 | 0 | 0.5 |
 | Both | 41/62 | 38/62 | 3 | 0 | 0.25 |
 
-By the rule written before the run this is no detectable effect. The study could only have detected a large one: a verdict
-needed six discordant pairs on one side for one agent. The "Both" row pools the two agents' pairs on the same 31 tasks; its
-three discordant pairs come from three different tasks. The upper bootstrap limit of the pooled difference, resampling pairs,
-is +11.3 points; the lower limit is not informative because no pair went the other way.
+By the rule written before the run this is no detectable effect. That rule reads each agent on its own; the pooled row was
+planned as a description. The study could only have detected a large effect: a verdict needed six discordant pairs on one
+side for one agent, a difference of 19 points. The "Both" row pools the two agents' pairs on the same 31 tasks; its three
+discordant pairs come from three different tasks. Upper limits of the difference, as exact binomial bounds on the favourable
+pairs: about +13.5 points pooled, +17 for Claude and +21 for Codex (a bootstrap over pairs gives +11.3 pooled). The lower
+limits are not informative because no pair went the other way.
 
-A post-result audit changed the picture for Claude:
+A post-result audit left the verdict as it was and removed Claude's single favourable pair:
 
 - 19 of the 31 tasks come from ponytail, which is also installed on the host as a plugin, and that copy already holds the
   commit 7 of those tasks ask for. The audit searched every arm's recorded tool calls for reads of that copy beyond the
   plugin's own skill file. It found two arms, one per agent and both with the skill: Claude's single favourable pair, and a
-  Codex pair accepted in both arms. A read that left no trace in the recorded calls would not be found.
+  Codex pair accepted in both arms. A read that left no trace in the recorded calls would not be found. The audit did not
+  look for the two Go repositories in module caches, and did not examine network access.
 - One lz4 task could not be passed by any patch. The reference-passes and base-fails controls run on all 31 tasks graded the
   reference at its own tree and did not see it; a control that applied the reference as a patch failed on that task.
 - Without that task and those two pairs: Claude 19 vs 19 of 29, Codex 20 vs 18 of 29 (2 to 0, p 0.5).
@@ -143,7 +146,8 @@ A post-result audit changed the picture for Claude:
   US$23.42 without, for 19 accepted changes each. Codex reports tokens, not cost.
 
 Limits: three repositories, one agent configuration each, effort held fixed (the lever the effort studies measure was off),
-global host hooks active in both arms, and no A/A run to size the noise. The first grading pass was void (the grader was
+global host hooks active in both arms, no A/A run to size the noise, and no measured sensitivity for these 31 tasks' hidden
+tests (by the lab's own rule an unmeasured oracle gives no information). The first grading pass was void (the grader was
 called without its report variable and rejected everything); the saved patches were graded again, in series. The source
 record stays private because it holds host paths. Result SHA-256:
 `13b9532a4da3aae242ba41a8a04a841619d06d49761b3bde3dd68d342c293dd1`.

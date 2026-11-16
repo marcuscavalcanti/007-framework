@@ -1225,7 +1225,7 @@ class OperatorV2(unittest.TestCase):
         tasks = {f"T{i}": {"control": "ok"} for i in range(8)}
         def rows(rejected, equivalent_outcome="pass"):
             out = [{"task": f"T{i}", "class": "valid", "outcome": "rejected-assert" if j < rejected else "survived"} for i in range(8) for j in range(3)]
-            return out + [{"task": "T0", "class": "equivalent", "outcome": equivalent_outcome}]
+            return out + [{"task": "T0", "class": "equivalent", "outcome": equivalent_outcome, "loaded": True}]
         decide = lambda r, floor: lab.sensitivity_v2_summary(r, tasks, floor, draws=500)["decision"]
         self.assertEqual(decide(rows(3), .5), "passes")
         self.assertEqual(decide(rows(0), .5), "fails")
@@ -1241,11 +1241,30 @@ class OperatorV2Review(unittest.TestCase):
     """Review of 1.10.0 (Fable 5.2 xhigh, 2026-11-16)."""
     def test_an_all_rejected_minimum_sample_does_not_pass_a_floor_near_one(self):
         tasks = {f"T{i}": {"control": "ok"} for i in range(8)}
-        rows = [{"task": f"T{i % 8}", "class": "valid", "outcome": "rejected-assert"} for i in range(20)] + [{"task": "T0", "class": "equivalent", "outcome": "pass"}]
-        result = lab.sensitivity_v2_summary(rows, tasks, .99, draws=500)
-        self.assertEqual(result["decision"], "indeterminate")  # the bootstrap alone read [1, 1] and passed
-        self.assertAlmostEqual(result["interval"][0], .025 ** (1 / 20))
-        self.assertEqual(lab.sensitivity_v2_summary(rows, tasks, .8, draws=500)["decision"], "passes")
+        equivalent = [{"task": "T0", "class": "equivalent", "outcome": "pass", "loaded": True}]
+        rows = [{"task": f"T{i % 8}", "class": "valid", "outcome": "rejected-assert"} for i in range(20)] + equivalent
+        decide = lambda r, floor: lab.sensitivity_v2_summary(r, tasks, floor, draws=500)
+        self.assertEqual(decide(rows, .99)["decision"], "indeterminate")  # the bootstrap alone read [1, 1] and passed
+        self.assertAlmostEqual(decide(rows, .99)["interval"][0], .025 ** (1 / 20), places=6)
+        self.assertEqual(decide(rows, .8)["decision"], "passes")
+        # round 2, N1: one survivor must not read better than none (a cap only at all-or-none let 19 of 20 pass at 0.85)
+        worse = [dict(rows[0], outcome="survived")] + rows[1:]
+        self.assertEqual((decide(rows, .85)["decision"], decide(worse, .85)["decision"]), ("indeterminate", "indeterminate"))
+        self.assertLess(decide(worse, .85)["interval"][0], decide(rows, .85)["interval"][0])
+        half = [{"task": f"T{i}", "class": "valid", "outcome": o} for i in range(8) for o in ("rejected-assert", "survived") * 2] + equivalent
+        self.assertLess(decide(half, .45)["interval"][0], .4)  # every task 2 of 4: zero-width bootstrap at 0.5, capped at 0.32
+        self.assertEqual(decide(half, .45)["decision"], "indeterminate")
+
+    def test_an_equivalent_in_a_file_no_test_loads_cannot_carry_specificity(self):
+        tasks = {f"T{i}": {"control": "ok"} for i in range(8)}
+        valid = [{"task": f"T{i}", "class": "valid", "outcome": "rejected-assert"} for i in range(8) for _ in range(3)]
+        decide = lambda loaded: lab.sensitivity_v2_summary(valid + [{"task": "T0", "class": "equivalent", "outcome": "pass", "loaded": loaded}], tasks, .5, draws=500)["decision"]
+        self.assertEqual((decide(True), decide(False)), ("passes", "indeterminate"))
+
+    def test_a_restored_file_gets_its_removed_directories_back(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            lab._put(Path(scratch), "gone/deeper/file.py", ["x = 1\n"])
+            self.assertEqual((Path(scratch) / "gone/deeper/file.py").read_text(), "x = 1\n")
 
     def test_a_directive_comment_is_not_an_equivalent_change(self):
         one = (0, 1, 0, 1)

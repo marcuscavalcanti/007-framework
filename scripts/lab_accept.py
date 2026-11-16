@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 import xml.etree.ElementTree as ElementTree
 
 TIMEOUT_S = 800
@@ -183,7 +184,8 @@ def _main(argv, report):
 
 
 def main(argv):
-    """0 accepted, 1 rejected, 2 the grader itself failed: a harness error is never a verdict."""
+    """0 accepted, 1 rejected, 2 the grader itself failed. `mine` reads 2 as a harness error; a replay cell records any non-zero
+    exit as not accepted, with the code, as before."""
     named = os.environ.get("ACCEPT_REPORT")
     if named:  # the lab's own path: no temporary directory, as in 1.9.0 (an exact environment may leave none writable)
         return _main(argv, Path(named))
@@ -199,7 +201,8 @@ def main(argv):
 if __name__ == "__main__":
     try:
         code = main(sys.argv[1:])
-    except Exception as error:  # the type only: a message can carry test output
-        print(f"lab_accept: {type(error).__name__}", file=sys.stderr)
+    except Exception as error:  # the type and the innermost frame only: a message can carry test output
+        frame = traceback.extract_tb(error.__traceback__)[-1]
+        print(f"lab_accept: {type(error).__name__} at {Path(frame.filename).name}:{frame.lineno} in {frame.name}", file=sys.stderr)
         code = 2
     raise SystemExit(code)

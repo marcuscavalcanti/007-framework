@@ -343,17 +343,15 @@ def build(config, candidate, out):
     task = write_task(config, out, tid, candidate, first)
     next_task = write_task(config, out, tid + "-next", following, second) if following else None
     # ponytail: an unreachable task is dropped; keeping it means teaching the oracle which test files the reference removed
+    failed = "error"
     try:
-        reachable = all(reference_passes_as_candidate(config, out, t) for t in (task, next_task) if t)
-    except BaseException:
-        reachable = None
-        raise
+        failed = next((prefix for prefix, t in (("", task), ("next-", next_task)) if t and not reference_passes_as_candidate(config, out, t)), None)
     finally:
-        if not reachable:  # dropped or errored: neither leaves a task directory behind
+        if failed is not None:  # dropped or errored: neither leaves a task directory behind
             for name in (tid, tid + "-next"):
                 shutil.rmtree(out / "tasks" / name, ignore_errors=True)
-    if not reachable:
-        return None, "reference-fails-as-candidate"
+    if failed is not None:
+        return None, failed + "reference-fails-as-candidate"
     if not following:
         return task, {"id": tid, "spec": first["spec"], "contract": first["contract"], "hidden": len(first["hidden"])}
     changed = [l.split("\t") for l in _git(repo, "diff-tree", "--no-commit-id", "--name-status", "--no-renames", "-r", sha).decode().splitlines()]
@@ -516,7 +514,7 @@ def hunks(patch_text):
 def mutants(patch_text, limit, rng):
     """The reference minus one hunk, sampled: a change partly done, as a weaker agent might leave it. Every other block, binary and
     hunk-less ones included, stays as in the reference. A block whose only hunk is the sampled one leaves whole, header included,
-    so a mode change or rename carried by that block goes with it. A reference with one hunk has no mutant (v2 measures it)."""
+    so a mode change or rename carried by that block goes with it. A reference with one hunk has no mutant."""
     files = hunks(patch_text)
     index = [(i, j) for i, (_, parts) in enumerate(files) for j in range(len(parts))]
     rng.shuffle(index)
@@ -640,7 +638,7 @@ def units(repo, base, head, skip=()):
             binaries += 1
             continue
         # the operator's unit boundaries must not follow the host's git configuration
-        diff = _git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--inter-hunk-context=0",
+        diff = _git(repo, "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--diff-algorithm=myers", "--no-indent-heuristic", "--inter-hunk-context=0",
                     base, head, "--", f":(literal){path}").decode("utf-8", "surrogateescape")
         hunks = [(int(a) - (b != "0"), int(b or 1), int(c) - (d != "0"), int(d or 1)) for a, b, c, d in U0.findall(diff)]
         if hunks:
@@ -771,6 +769,8 @@ def sensitivity_v2(config_path, jobs, floor=None):
                 row = {"task": tid, "file": i, "unit": k}
                 row["class"] = ("trivial" if trivial else "equivalent" if equivalent(path, base_lines, head_lines, hunk)
                                 else "out-of-scope" if not loaded else None)
+                if row["class"] == "equivalent":
+                    row["loaded"] = loaded
                 rows.append(row)
                 if row["class"] in (None, "equivalent"):
                     second.append((row, visible))
@@ -785,7 +785,7 @@ def sensitivity_v2(config_path, jobs, floor=None):
             row["class"] = "invalid"
         else:
             row.update({"class": "valid", "outcome": {"pass": "survived", "contract": "rejected-contract", "assert": "rejected-assert"}[grade]})
-    result = {"operator": OPERATOR_V2, "seed": config.get("seed", 1), "floor": floor,
+    result = {"operator": OPERATOR_V2, "seed": config.get("seed", 1), "floor": floor, "jobs": jobs,
               **sensitivity_v2_summary(rows, tasks, floor, config.get("seed", 1)), "tasks": tasks, "rows": rows}
     (out / "sensitivity-v2.json").write_text(json.dumps(result, indent=1))
     return {k: v for k, v in result.items() if k not in ("tasks", "rows")}
@@ -795,6 +795,21 @@ def _interval(values, seed, draws):
     rng = random.Random(seed)
     means = sorted(statistics.fmean(rng.choices(values, k=len(values))) for _ in range(draws))
     return [means[int(.025 * draws)], means[int(.975 * draws) - 1]]
+
+
+def _binomial_bounds(k, n, alpha=.025):
+    """Clopper-Pearson limits for k of n, by bisection on the binomial tail (no beta quantile in the standard library)."""
+    def tail(p, lo, hi):
+        return sum(math.exp(math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1) + i * math.log(p) + (n - i) * math.log1p(-p)) for i in range(lo, hi + 1))
+    def solve(f):  # f is increasing in p on (0, 1)
+        a, b = 0.0, 1.0
+        for _ in range(60):
+            m = (a + b) / 2
+            a, b = (m, b) if f(m) < alpha else (a, m)
+        return (a + b) / 2
+    low = 0.0 if k == 0 else solve(lambda p: tail(p, k, n))            # P(X >= k) reaches alpha
+    high = 1.0 if k == n else 1 - solve(lambda q: tail(1 - q, 0, k))    # P(X <= k) reaches alpha, in q = 1 - p
+    return low, high
 
 
 def sensitivity_v2_summary(rows, tasks, floor=None, seed=1, draws=GATES["draws"]):
@@ -816,11 +831,12 @@ def sensitivity_v2_summary(rows, tasks, floor=None, seed=1, draws=GATES["draws"]
     specificity = sum(r["outcome"] == "pass" for r in equivalents) / len(equivalents) if equivalents else None
     sensitivity = statistics.fmean(per_task.values()) if per_task else None
     interval = _interval(list(per_task.values()), seed, draws) if per_task else None
-    if interval and parts["survived"] in (0, len(valid)):
-        # equal per-task rates give the bootstrap zero width: 20 of 20 rejected would read [1, 1] and pass any floor. The exact
-        # 97.5% bound for an all-or-none count caps it (0.83 at 20). ponytail: pools mutants across tasks; a cap, not the interval
-        bound = .025 ** (1 / len(valid))
-        interval = [min(interval[0], bound), interval[1]] if parts["survived"] == 0 else [interval[0], max(interval[1], 1 - bound)]
+    if interval:
+        # Equal per-task rates give the task bootstrap zero width: 20 of 20 rejected would read [1, 1] and pass any floor. The
+        # pooled binomial interval caps it in every case, so no result reads better than a perfect one of the same size.
+        # ponytail: the cap takes mutants as independent; with tasks as the unit it would be wider still
+        low, high = _binomial_bounds(len(valid) - parts["survived"], len(valid))
+        interval = [min(interval[0], low), max(interval[1], high)]
     if specificity is not None and specificity < 1:
         decision = "fails"
     elif len(valid) < 20 or len(per_task) < GATES["min_signal_tasks"]:
@@ -829,8 +845,8 @@ def sensitivity_v2_summary(rows, tasks, floor=None, seed=1, draws=GATES["draws"]
         decision = "floor-unset"
     elif interval[1] < floor:
         decision = "fails"
-    elif interval[0] >= floor and specificity == 1:
-        decision = "passes"
+    elif interval[0] >= floor and specificity == 1 and any(r.get("loaded") for r in equivalents):
+        decision = "passes"  # an equivalent in a file no hidden test loads passes whatever the oracle is: it cannot carry specificity
     else:
         decision = "indeterminate"
     return {"decision": decision, "sensitivity": sensitivity, "interval": interval, "specificity": specificity, "equivalents": len(equivalents),
