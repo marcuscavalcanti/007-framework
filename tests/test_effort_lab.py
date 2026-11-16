@@ -551,6 +551,15 @@ class LabEndToEnd(unittest.TestCase):
         self.assertTrue(drops[self.sha].startswith("AcceptanceHarnessError"), drops)  # with its message when the set keeps diagnostic text
         self.assertEqual(list((out / "tasks").glob("*")), [])
 
+    def test_a_failing_next_reference_is_named_as_such(self):
+        out = self.root / "lab"
+        only_next = lambda config, out_, task: not task["id"].endswith("-next")
+        with mock.patch.object(lab, "reference_passes_as_candidate", side_effect=only_next):
+            self.assertEqual(lab.mine(self.config, out, 2), 0)
+        drops = {json.loads(l)["sha"]: json.loads(l).get("drop") for l in (out / "mine.jsonl").read_text().splitlines()}
+        self.assertEqual(drops[self.sha], "next-reference-fails-as-candidate")
+        self.assertEqual(list((out / "tasks").glob("*")), [])
+
     def test_a_task_whose_reference_fails_as_a_candidate_is_dropped(self):
         out = self.root / "lab"
         with mock.patch.object(lab, "reference_passes_as_candidate", return_value=False):
@@ -1215,6 +1224,7 @@ class OperatorV2(unittest.TestCase):
         result = lab.sensitivity_v2(out / "replay-set.json", 2)
         self.assertEqual(result["controls"], {"ok": 1, "control-failed": 0, "operator-invalid": 0})
         self.assertEqual(result["funnel"], {"trivial": 0, "invalid": 0, "equivalent": 1, "out-of-scope": 1, "valid": 2, "error": 0})
+        self.assertEqual((result["jobs"], result["equivalents_loaded"]), (2, 1))  # the comment unit sits in calc.py, which the hidden tests load
         self.assertEqual(result["valid_outcomes"], {"rejected-contract": 0, "rejected-assert": 1, "survived": 1})  # mul(2, 2) is 4 either way
         self.assertEqual((result["sensitivity"], result["specificity"], result["decision"]), (.5, 1.0, "no-information"))
         saved = json.loads((out / "sensitivity-v2.json").read_text())
@@ -1260,6 +1270,8 @@ class OperatorV2Review(unittest.TestCase):
         valid = [{"task": f"T{i}", "class": "valid", "outcome": "rejected-assert"} for i in range(8) for _ in range(3)]
         decide = lambda loaded: lab.sensitivity_v2_summary(valid + [{"task": "T0", "class": "equivalent", "outcome": "pass", "loaded": loaded}], tasks, .5, draws=500)["decision"]
         self.assertEqual((decide(True), decide(False)), ("passes", "indeterminate"))
+        count = lambda loaded: lab.sensitivity_v2_summary(valid + [{"task": "T0", "class": "equivalent", "outcome": "pass", "loaded": loaded}], tasks, .5, draws=500)["equivalents_loaded"]
+        self.assertEqual((count(True), count(False)), (1, 0))  # the summary says why a clear interval reads indeterminate
 
     def test_a_restored_file_gets_its_removed_directories_back(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -1272,6 +1284,7 @@ class OperatorV2Review(unittest.TestCase):
         for base, head in (("//go:build linux\n", "//go:build darwin\n"), ("// +build linux\n", "// +build darwin\n"), ("//export Old\n", "//export New\n")):
             self.assertFalse(lab.equivalent("a.go", [base, "x := 1\n"], [head, "x := 1\n"], one), base)
         self.assertFalse(lab.equivalent("a.py", ["# -*- coding: latin-1 -*-\n"], ["# -*- coding: utf-8 -*-\n"], one))
+        self.assertFalse(lab.equivalent("a.py", ["#!/usr/bin/python2\n", "x = 1\n"], ["#!/usr/bin/python3\n", "x = 1\n"], one))
 
     def test_bytes_that_are_not_utf8_do_not_end_the_run(self):
         self.assertIn(lab._code(lab._lines(b"# caf\xe9\nx = 1\n"), "a.py") is None, (True, False))  # read or refused, never raised

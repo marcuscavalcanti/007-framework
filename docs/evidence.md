@@ -127,9 +127,10 @@ before the run. Its SHA-256 is `310f98ed379f6852d6e7d3d2123d13f410f77ae94de2315d
 
 By the rule written before the run this is no detectable effect. That rule reads each agent on its own; the pooled row was
 planned as a description. The study could only have detected a large effect: a verdict needed six discordant pairs on one
-side for one agent, a difference of 19 points. The "Both" row pools the two agents' pairs on the same 31 tasks; its three
+side for one agent, a difference of at least 19 points. The "Both" row pools the two agents' pairs on the same 31 tasks; its three
 discordant pairs come from three different tasks. Upper limits of the difference, as exact binomial bounds on the favourable
-pairs: about +13.5 points pooled, +17 for Claude and +21 for Codex (a bootstrap over pairs gives +11.3 pooled). The lower
+pairs (97.5%, one-sided): about +13.5 points pooled, +17 for Claude and +21 for Codex (a bootstrap over pairs gives +11.3
+pooled). The lower
 limits are not informative because no pair went the other way.
 
 A post-result audit left the verdict as it was and removed Claude's single favourable pair:
@@ -141,7 +142,8 @@ A post-result audit left the verdict as it was and removed Claude's single favou
   look for the two Go repositories in module caches, and did not examine network access.
 - One lz4 task could not be passed by any patch. The reference-passes and base-fails controls run on all 31 tasks graded the
   reference at its own tree and did not see it; a control that applied the reference as a patch failed on that task.
-- Without that task and those two pairs: Claude 19 vs 19 of 29, Codex 20 vs 18 of 29 (2 to 0, p 0.5).
+- Without that task and those two pairs: Claude 19 vs 19 of 29, Codex 20 vs 18 of 29 (2 to 0, p 0.5). The same bounds are
+  then about +12 for Claude (0 of 29) and +23 for Codex (2 of 29).
 - Exploratory, with no interval and one run per pair: in that subset Claude's arms cost US$26.66 with the skill against
   US$23.42 without, for 19 accepted changes each. Codex reports tokens, not cost.
 

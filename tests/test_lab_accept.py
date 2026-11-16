@@ -76,7 +76,8 @@ class Unittest(unittest.TestCase):
             proc = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts/lab_accept.py"), "lab.json", "hidden.json", "baseline.json"],
                                   cwd=root, env={**os.environ, "ACCEPT_REPORT": str(root / "report.json")}, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 2)
-        self.assertRegex(proc.stderr.strip(), r"^lab_accept: JSONDecodeError at decoder\.py:\d+ in raw_decode$")  # type and frame, no message
+        # the type, the deepest frame inside the grader and the innermost frame; never the message
+        self.assertRegex(proc.stderr.strip(), r"^lab_accept: JSONDecodeError at lab_accept\.py:\d+ in _main; \w+\.py:\d+ in \w+$")
 
     def test_the_lab_path_needs_no_temporary_directory(self):
         """Review of 1.10.0, B1: with ACCEPT_REPORT set (every lab cell) the grader must not need a writable temp location."""

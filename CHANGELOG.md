@@ -6,6 +6,14 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-16
+
+A minor release for `007 lab`, mostly corrections to the instrument. It adds a second sensitivity operator, off by default,
+fixes what the first one counted, stops `mine` from keeping tasks no candidate can pass, and stops the grader from turning a
+harness error into a rejection. `run` and `report` are unchanged: they still read the v1 `sensitivity.json`. A set mined before
+1.10.0 keeps its embedded grader and its tasks until it is mined again. Release qualification is recorded in
+[the release record](evidence/v1.10.0/release-evidence.md).
+
 ### Added
 
 - `007 lab sensitivity --operator v2 [--floor F]` writes `sensitivity-v2.json` beside the v1 `sensitivity.json`, which `run` and
@@ -21,12 +29,13 @@ schemas, and the dashboard snapshot.
   below 20 valid mutants in 8 tasks and `floor-unset` with no `--floor`; one equivalent mutant the oracle rejects reads `fails`
   before either, and `passes` needs at least one equivalent in a file the hidden tests load. The pooled binomial interval
   (Clopper-Pearson over all valid mutants, taken as independent) caps the task bootstrap, which has zero width when per-task
-  rates are equal; with tasks as the unit the cap would be wider. A symbolic link or submodule has no unit; a comment that is a
+  rates are equal; with tasks as the unit the cap would be wider. The interval then spans two quantities, the mean of per-task
+  rates and the pooled rate: where task sizes differ much they separate, and the decision drifts to `indeterminate`. A symbolic link or submodule has no unit; a comment that is a
   directive (a build tag, `go:embed`, `//export`, a shebang, a coding cookie) is not equivalent; the diff flags that set unit
   boundaries are pinned (algorithm, indent heuristic, inter-hunk context, textconv, external diff), while attributes and the
   git version are not, so the operator names the same units only on the same git. The file records `jobs`. Known limits are
-  listed in `docs/lab.md`. Rows carry file indexes, never names; an `error` row or a failed control carries the exception type,
-  and its message only when the set retains diagnostic text. Operator
+  listed in `docs/lab.md`. Rows carry file indexes, never names; an `error` row or a failed control carries the exception type
+  and a numeric exit code, never its message. `equivalents_loaded` counts the equivalents that can fail. Operator
   `revert-one-unit/1`.
 
 ### Fixed
@@ -861,7 +870,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.7.0...v1.8.0

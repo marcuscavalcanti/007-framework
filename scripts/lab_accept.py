@@ -4,6 +4,7 @@ Accepted = every hidden test passes and no baseline test regresses (key "__modul
 fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed.
 Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -201,8 +202,11 @@ def main(argv):
 if __name__ == "__main__":
     try:
         code = main(sys.argv[1:])
-    except Exception as error:  # the type and the innermost frame only: a message can carry test output
-        frame = traceback.extract_tb(error.__traceback__)[-1]
-        print(f"lab_accept: {type(error).__name__} at {Path(frame.filename).name}:{frame.lineno} in {frame.name}", file=sys.stderr)
-        code = 2
+    except Exception as error:  # the type and two frames only: a message can carry test output
+        code = 2  # set first: a failure while describing the error must not turn into exit 1, which is a verdict
+        with contextlib.suppress(Exception):
+            frames = traceback.StackSummary.extract(traceback.walk_tb(error.__traceback__), lookup_lines=False)  # no source read
+            mine = [f for f in frames if Path(f.filename).name == Path(__file__).name] or frames
+            where = "; ".join(dict.fromkeys(f"{Path(f.filename).name}:{f.lineno} in {f.name}" for f in (mine[-1], frames[-1])))
+            print(f"lab_accept: {type(error).__name__} at {where}", file=sys.stderr)
     raise SystemExit(code)

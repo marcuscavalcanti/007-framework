@@ -850,6 +850,7 @@ def sensitivity_v2_summary(rows, tasks, floor=None, seed=1, draws=GATES["draws"]
     else:
         decision = "indeterminate"
     return {"decision": decision, "sensitivity": sensitivity, "interval": interval, "specificity": specificity, "equivalents": len(equivalents),
+            "equivalents_loaded": sum(bool(r.get("loaded")) for r in equivalents),  # only these can fail: `passes` needs one
             "coverage": statistics.fmean(coverage) if coverage else None, "funnel": funnel, "valid_outcomes": parts, "per_task": per_task,
             "tasks_measured": len(ok), "tasks_with_valid": len(per_task),
             "controls": {c: sum(m["control"] == c for m in tasks.values()) for c in ("ok", "control-failed", "operator-invalid")}}
