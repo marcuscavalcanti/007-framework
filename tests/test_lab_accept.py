@@ -3,6 +3,7 @@
 Before the fix, unittest's tearDownClass error and a `go test` package failure after every test passed were both accepted.
 Controls: a clean suite, a test already red at base, and a failure in a scope no graded test lives in still grade as before.
 """
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -319,3 +321,70 @@ class Custom(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuiteDeadline(unittest.TestCase):
+    """1.10.1: a suite that does not finish is a rejection (exit 3), never a grader failure (exit 2), and never exhausts memory.
+    `subprocess.run(capture_output=True, timeout=)` raised TimeoutExpired, which the grader turned into exit 2; under the
+    `lab-accept-v1` contract exit 2 makes the cell invalid, so a candidate whose code hangs left the arm's denominator."""
+
+    def run_child(self, source, timeout=1.5, cap=None):
+        patches = [mock.patch.object(lab_accept, "TIMEOUT_S", timeout)]
+        if cap is not None:
+            patches.append(mock.patch.object(lab_accept, "MAX_STDOUT", cap))
+        with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            started = time.monotonic()
+            try:
+                result = lab_accept._run([sys.executable, "-c", source], temporary, {"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+            except lab_accept.SuiteTimeout:
+                return "timeout", time.monotonic() - started
+            return result, time.monotonic() - started
+
+    def test_a_suite_that_never_returns_times_out(self):
+        outcome, elapsed = self.run_child("import time\ntime.sleep(60)")
+        self.assertEqual(outcome, "timeout")
+        self.assertLess(elapsed, 10)
+
+    def test_a_suite_that_stops_itself_still_times_out(self):
+        """Round 4 of the lost branch: the wait has to count wall time while the child is stopped."""
+        outcome, elapsed = self.run_child("import os, signal\nos.kill(os.getpid(), signal.SIGSTOP)")
+        self.assertEqual(outcome, "timeout")
+        self.assertLess(elapsed, 10)
+
+    def test_a_helper_holding_the_output_is_waited_for_as_in_1_10_0(self):
+        """1.10.0 read until every holder of the pipes closed them: a child that exits at once but leaves a helper with its
+        output open was graded only when the deadline came. Accepting it at once changes when a suite counts as finished."""
+        helper = "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\nprint('done')"
+        outcome, elapsed = self.run_child(helper)
+        self.assertEqual(outcome, "timeout")
+        self.assertGreaterEqual(elapsed, 1.4)
+
+    def test_output_that_never_stops_is_dropped_on_arrival(self):
+        flood = "import sys\nchunk = b'x' * 65536\nwhile True:\n    sys.stdout.buffer.write(chunk); sys.stderr.buffer.write(chunk)"
+        outcome, _ = self.run_child(flood, timeout=1.5, cap=1 << 20)
+        self.assertEqual(outcome, "timeout")
+        short = self.run_child("import sys\nsys.stdout.write('y' * (3 << 20))\nsys.stderr.write('z' * (3 << 20))", cap=1 << 20)[0]
+        self.assertEqual((short.returncode, len(short.stdout), short.stdout_truncated, short.stderr), (0, 1 << 20, True, b""))
+
+    def test_a_suite_that_finishes_keeps_its_output_and_code(self):
+        result = self.run_child("import sys\nprint('ok')\nsys.exit(4)")[0]
+        self.assertEqual((result.returncode, result.stdout, result.stdout_truncated), (4, b"ok\n", False))
+
+    def test_a_timeout_exits_3_and_writes_no_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"
+            root.mkdir()
+            (root / "test_fixture.py").write_text("import time, unittest\nclass Kept(unittest.TestCase):\n    def test_new(self): time.sleep(60)\n")
+            for name, value in (("lab.json", {"adapter": "unittest", "tests": "test_*.py"}), ("hidden.json", [NEW]), ("baseline.json", [])):
+                (root / name).write_text(json.dumps(value))
+            report = Path(temporary) / "report.json"
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with mock.patch.object(lab_accept, "TIMEOUT_S", 1.5), mock.patch.dict(os.environ, {"ACCEPT_REPORT": str(report)}):
+                    self.assertEqual(lab_accept.main(["lab.json", "hidden.json", "baseline.json"]), 3)
+            finally:
+                os.chdir(cwd)
+            self.assertFalse(report.exists())  # no grade was observed: the caller reads outcomes as unavailable

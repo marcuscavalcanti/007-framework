@@ -6,6 +6,21 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Fixed
+
+- A task mined by 1.10.1 declares `acceptance_exit_contract: "lab-accept-v1"`. Under it a replay cell reads the grader's
+  exit 0 as accepted, 1 and 3 as rejected, and any other exit as `acceptance-harness-error`, an invalid cell. In 1.10.0 a
+  grader that crashed or could not start read as a rejection of the candidate. The contract also requires exactly one
+  acceptance command, checked before any agent runs. Tasks without the field keep the 1.10.0 reading.
+- `lab_accept.py` exits 3, with no report, when a suite command does not finish within its 800 s. In 1.10.0 that timeout
+  surfaced as exit 2, which under the new contract would have made a hung candidate an invalid cell and dropped it from
+  its arm's denominator. The wait keeps 1.10.0's end condition (every holder of the output pipes closes them, then the
+  child exits), so a helper left holding the output is still waited for until the deadline. The deadline runs on a
+  monotonic clock in short polls, so it also expires while the suite is stopped. Standard error is dropped on arrival and
+  standard output kept up to 64 MiB (`go test -json` is the only reader; past the cap the run proves no pass), so a suite
+  that prints without end cannot exhaust the grader's memory.
+- `mine` reads a reference whose suite does not finish as `reference-fails-as-candidate`, not as a harness error.
+
 ## [1.10.0] - 2026-11-16
 
 A minor release for `007 lab`, mostly corrections to the instrument. It adds a second sensitivity operator, off by default,

@@ -1,21 +1,25 @@
 """Per-test acceptance for `007 lab`. Stdlib only: it is copied into each candidate tree and runs inside the acceptance sandbox.
 
 Accepted = every hidden test passes and no baseline test regresses (key "__module__"). A test whose class, module or package
-fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed.
+fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed,
+3 a suite command did not finish in time (a rejection: the candidate's code hung; no report is written).
 Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
 import contextlib
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import xml.etree.ElementTree as ElementTree
 
 TIMEOUT_S = 800
+MAX_STDOUT = 64 << 20  # ponytail: only `go test -json` reads stdout; past this the grade is charged as incomplete
 NODE_REPORTER = """export default async function* (source) {
   for await (const e of source) {
     if (e.type !== 'test:pass' && e.type !== 'test:fail') continue;
@@ -55,8 +59,51 @@ json.dump([out, broken], open(sys.argv[1], "w"))
 """
 
 
+class SuiteTimeout(Exception):
+    """A suite command did not finish by TIMEOUT_S. The candidate's code hung: a rejection (exit 3), not a grader failure."""
+
+
 def _run(argv, cwd, env):
-    return subprocess.run(argv, cwd=cwd, env=env, capture_output=True, timeout=TIMEOUT_S)
+    """`subprocess.run(capture_output=True, timeout=TIMEOUT_S)` with the same end: both pipes closed by every holder, then the
+    child's exit, so a helper the suite leaves holding its output is waited for until the deadline, as in 1.10.0. Two changes:
+    stderr is dropped on arrival and stdout kept up to MAX_STDOUT, so a suite that prints without end cannot exhaust memory;
+    the deadline is wall time on a monotonic clock, polled in short slices, so it runs while the child is stopped."""
+    deadline = time.monotonic() + TIMEOUT_S
+    process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out_fd, kept, size, truncated = process.stdout.fileno(), [], 0, False
+    streams = {process.stdout.fileno(): process.stdout, process.stderr.fileno(): process.stderr}
+    poller = select.poll()
+    for fd in streams:
+        poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    try:
+        while streams:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SuiteTimeout
+            for fd, _ in poller.poll(min(remaining, 1.0) * 1000):
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    poller.unregister(fd)
+                    streams.pop(fd).close()
+                elif fd == out_fd and not truncated:
+                    room = MAX_STDOUT - size
+                    kept.append(chunk[:room])
+                    size += min(len(chunk), room)
+                    truncated = len(chunk) > room
+        try:
+            returncode = process.wait(timeout=max(deadline - time.monotonic(), 0))
+        except subprocess.TimeoutExpired:
+            raise SuiteTimeout from None
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        for stream in streams.values():
+            stream.close()
+    result = subprocess.CompletedProcess(argv, returncode, b"".join(kept), b"")
+    result.stdout_truncated = truncated
+    return result
 
 
 def _worst(final, key, outcome):
@@ -116,6 +163,8 @@ def pytest(root, cwd, config, env, scratch):
 
 def go(root, cwd, config, env, scratch):
     result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
+    if getattr(result, "stdout_truncated", False):  # events past the cap are lost: no pass in this run is proven
+        return {}
     final, failed, red, unexplained, seen, completed, active = {}, set(), set(), set(), set(), set(), set()
     for line in result.stdout.decode(errors="replace").splitlines():
         try:
@@ -185,8 +234,16 @@ def _main(argv, report):
 
 
 def main(argv):
-    """0 accepted, 1 rejected, 2 the grader itself failed. `mine` reads 2 as a harness error; a replay cell records any non-zero
-    exit as not accepted, with the code, as before."""
+    """0 accepted, 1 rejected, 2 the grader itself failed, 3 a suite command did not finish (rejected, no report). Under the
+    `lab-accept-v1` contract a replay cell reads 0, 1 and 3 as verdicts and any other exit as a harness error; without the
+    contract it records any non-zero exit as not accepted, as before. `mine` reads 2 as a harness error."""
+    try:
+        return _grade(argv)
+    except SuiteTimeout:
+        return 3
+
+
+def _grade(argv):
     named = os.environ.get("ACCEPT_REPORT")
     if named:  # the lab's own path: no temporary directory, as in 1.9.0 (an exact environment may leave none writable)
         return _main(argv, Path(named))

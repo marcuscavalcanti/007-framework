@@ -569,11 +569,26 @@ def artifact_case_sensitive(directory):
         return not (root / "caseprobe").exists()
 
 
+LAB_ACCEPT_EXIT_CONTRACT = "lab-accept-v1"
+
+
+def acceptance_exit_contract(task):
+    contract = task.get("acceptance_exit_contract")
+    if contract is not None and contract != LAB_ACCEPT_EXIT_CONTRACT:
+        raise ValueError("unknown acceptance exit contract")
+    if contract == LAB_ACCEPT_EXIT_CONTRACT:
+        commands = task.get("acceptance")
+        if not isinstance(commands, list) or len(commands) != 1:
+            raise ValueError("lab-accept-v1 requires exactly one acceptance command")
+    return contract
+
+
 def validate_cell_artifacts(tasks, arms, replicates, *, directory=None):
     sensitive = directory is None or artifact_case_sensitive(directory)
     paths = set()
     for task in tasks:
         validate_timeout(task.get("acceptance_timeout_s", 900))
+        acceptance_exit_contract(task)
         for replicate in range(1, replicates + 1):
             for arm in arms:
                 identifier = cell_id(task, arm, replicate)
@@ -686,6 +701,7 @@ def execute_reserved_cell(config, task, arm, replicate, output_dir, timeout_s, *
 
 def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root=None):
     timeout_s = validate_timeout(timeout_s)
+    exit_contract = acceptance_exit_contract(task)
     retain_text = _diagnostic_retention(config, output_dir)
     acceptance_sandbox, acceptance_env = acceptance_policy(config.get("acceptance_sandbox"), config.get("acceptance_env"))
     attempt_id = cell_id(task, arm, replicate)
@@ -785,7 +801,14 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
                         checks, checks_passed = acceptance(task, acceptance_workspace, acceptance_sandbox, accept_env,
                                                           retain_diagnostic_text=retain_text)
                     # ponytail: every command shares one report path, so only single-command tasks get outcomes
-                    outcomes = acceptance_outcomes(report) if len(checks) == 1 else "unavailable"
+                    # lab-accept-v1: 0 accepted, 1 rejected, 3 a suite that did not finish (rejected, no report, so outcomes
+                    # read unavailable as in 1.10.0); any other exit is the grader failing, never a verdict on the candidate
+                    if exit_contract == LAB_ACCEPT_EXIT_CONTRACT and (
+                        len(checks) != 1 or checks[0]["exit"] not in (0, 1, 3)
+                    ):
+                        hidden_failure = "acceptance-harness-error"
+                    elif len(checks) == 1:
+                        outcomes = acceptance_outcomes(report)
             except CleanupIncomplete as exc:
                 hidden_failure = cleanup_failure = exc.state
             except subprocess.TimeoutExpired:  # review r40 A1: the paid attempt still gets its cell

@@ -298,6 +298,7 @@ def write_task(config, out, tid, commit, built):
     reset = {"reset_to_base": ["*_test.go"]} if built["spec"]["adapter"] == "go" else {}
     return {"id": tid, "repo": config.get("repo_key", "source"), "base": commit["parent"], "accepted": commit["sha"], "prompt": prompt_for(config, built["message"], built["contract"]), "acceptance_timeout_s": 900, **reset,
             "hidden_acceptance": [{"source": str(s), "sha256": hashlib.sha256(s.read_bytes()).hexdigest(), "target": t} for s, t in entries],
+            "acceptance_exit_contract": replay_eval.LAB_ACCEPT_EXIT_CONTRACT,
             "acceptance": [[sys.executable, "-I", "-B", f"{ACCEPT}/lab_accept.py", f"{ACCEPT}/lab.json", f"{ACCEPT}/hidden.json", f"{ACCEPT}/baseline.json"]]}
 
 
@@ -318,7 +319,7 @@ def reference_passes_as_candidate(config, out, task):
             return False
         with replay_eval.hidden_acceptance(task, workspace):
             results, passed = replay_eval.acceptance(task, workspace, sandbox, {**env, "ACCEPT_REPORT": str(Path(scratch) / "report.json")})
-        if any(r["exit"] not in (0, 1) for r in results):  # lab_accept: 2 is the grader failing, and a wrapper has its own codes
+        if any(r["exit"] not in (0, 1, 3) for r in results):  # lab_accept: 2 is the grader failing (3, a hung suite, is a rejection)
             raise AcceptanceHarnessError("acceptance did not grade")
         return passed
 
