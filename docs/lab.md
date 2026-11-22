@@ -109,9 +109,10 @@ command the candidate's tree made impossible to start, grades as no result (a re
 larger cannot be mined. A task mined since 1.10.1 carries `acceptance_exit_contract: "lab-accept-v1"`, which requires
 exactly one acceptance command and `acceptance_timeout_s` of at least 900, and under which a cell reads 0 as accepted, 1
 and 3 as rejected, and any other exit as an invalid cell (`acceptance-harness-error`). The suite shares the grader's user
-and process group, so a suite that kills the grader, a shared memory limit or a full disk still makes an invalid cell, and
-exit 1 is not proof that a grade was made. The grader needs a POSIX host. A mined task embeds its grader: sets mined before
-1.10.0 keep the old one until they are mined again.
+and process group, so a suite that kills the grader still makes an invalid cell; a shared memory limit or a full disk does
+the same when it hits the grader, and reads as a rejection when it hits the suite. Exit 1 is not proof that a grade was
+made. The grader needs a POSIX host. A mined task embeds its grader: sets mined before 1.10.1 keep the old one, and its
+reading, until they are mined again.
 
 A snapshot is not read isolation. A mined public repository may also sit on the host as an installed copy (a plugin cache, a
 module cache, a vendored checkout) that already holds the commit a task asks for, and an agent that searches outside its

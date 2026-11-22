@@ -7,11 +7,13 @@ file that cannot be read (cut short by a crash) grades as no result: a rejection
 Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
 import contextlib
+import errno
 import json
 import os
 from pathlib import Path
 import select
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -74,15 +76,19 @@ class ReportUnreadable(Exception):
     when the candidate's tree makes a command impossible to start (its directory or an in-tree executable gone)."""
 
 
+_TREE_ERRNOS = {errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.ENOEXEC, errno.ELOOP, errno.ENAMETOOLONG}
+
+
 def _spawn(argv, cwd, env):
     """Popen; a start failure the candidate's tree caused (cwd gone, an in-tree relative executable gone or not executable) is
     no result, a rejection. A missing toolchain on PATH or an absolute path stays a grader failure (exit 2): reading it as a
     rejection would reject every candidate, the 0/124 failure."""
     try:
         return subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except OSError:
+    except OSError as error:
         first = str(argv[0]) if argv else ""
-        if not Path(cwd).is_dir() or ("/" in first and not first.startswith("/")):
+        tree_made = error.errno in _TREE_ERRNOS  # EAGAIN, ENOMEM, EMFILE...: the host failed, not the candidate
+        if tree_made and (not Path(cwd).is_dir() or ("/" in first and not first.startswith("/"))):
             raise ReportUnreadable(f"start {Path(first).name}") from None
         raise
 
@@ -125,10 +131,13 @@ def _run(argv, cwd, env, *, keep_stdout=False):
                     room = MAX_STDOUT - len(kept)
                     kept += chunk[:room]
                     truncated = len(chunk) > room
-        try:
-            returncode = process.wait(timeout=max(deadline - time.monotonic(), 0.05))
-        except subprocess.TimeoutExpired:
-            raise SuiteTimeout(argv[0]) from None
+        while True:  # pipes closed, child maybe still running: re-read the deadline at least every second
+            try:
+                returncode = process.wait(timeout=min(max(deadline - time.monotonic(), 0.05), 1.0))
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    raise SuiteTimeout(argv[0]) from None
     except BaseException:
         process.kill()
         process.wait()
@@ -152,15 +161,21 @@ def _lines(data):
 
 
 def _read(path, adapter):
-    """A suite's own result file as text, or None when absent. Past MAX_REPORT, or unreadable, it proves nothing; bytes cut
-    inside a character decode with a replacement, so the cut shows up as malformed content, not as a grader crash."""
+    """A suite's own result file as text, or None when absent. Not a regular file, past MAX_REPORT, unreadable or not valid
+    UTF-8 (a stream cut inside a character), it proves nothing."""
     try:
-        if not path.exists():
+        if not os.path.lexists(path):
             return None
-        if path.stat().st_size > MAX_REPORT:
+        # O_NONBLOCK: opening a FIFO for reading would wait for a writer forever; one handle for the check and the read
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ReportUnreadable(adapter)  # a FIFO or device reports size 0 and could be read without end
+            data = handle.read(MAX_REPORT + 1)  # a file still growing is bounded too
+        if len(data) > MAX_REPORT:
             raise ReportUnreadable(adapter)
-        return path.read_bytes().decode("utf-8", errors="replace")
-    except OSError:
+        return data.decode("utf-8")  # strict: replacement could merge two ids that differ only in the bad bytes
+    except (OSError, UnicodeDecodeError):
         raise ReportUnreadable(adapter) from None
 
 
@@ -198,10 +213,10 @@ def node(root, cwd, config, env, scratch):
             continue
         try:  # a cut stream (the runner died mid-write) or a record of the wrong shape proves nothing
             e = json.loads(line)
-            _worst(final, f"{clean(e.get('f') or '?')} :: {e['d']} :: {clean(e['n'])}", e["o"])
+            _worst(final, f"{clean(e.get('f') or '?')} :: {e['d']} :: {clean(e['n'])}", e["o"] if isinstance(e["o"], str) else "error")
             if e.get("b"):
                 broken.add(f"{clean(e.get('f') or '?')} :: ")
-        except (ValueError, KeyError, TypeError, AttributeError):
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
             raise ReportUnreadable("node") from None
     return _process_status(_charge(final, broken), result)
 
@@ -215,7 +230,8 @@ def unittest_(root, cwd, config, env, scratch):
         out, broken = json.loads(text) if text is not None else ({}, [])
         if not isinstance(out, dict) or not all(isinstance(b, str) for b in broken):
             raise TypeError
-    except (ValueError, TypeError):
+        out = {k: v if isinstance(v, str) else "error" for k, v in out.items()}
+    except (ValueError, TypeError, RecursionError):
         raise ReportUnreadable("unittest") from None
     return _process_status(_charge(out, broken), result, failure_exit=None)  # this child normally exits 0 even for red tests
 
@@ -243,7 +259,7 @@ def go(root, cwd, config, env, scratch):
     for line in _lines(result.stdout):
         try:
             e = json.loads(line.decode(errors="replace"))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if not isinstance(e, dict):
             continue
@@ -280,7 +296,7 @@ def custom(root, cwd, config, env, scratch):
     text = _read(raw, "custom")
     try:
         final = json.loads(text) if text is not None else {}
-    except ValueError:
+    except (ValueError, RecursionError):
         raise ReportUnreadable("custom") from None
     if not isinstance(final, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in final.items()):
         raise ReportUnreadable("custom")
@@ -304,21 +320,28 @@ def suite(root, config, scratch):
 def _main(argv, report):
     global _grade_deadline
     _grade_deadline = time.monotonic() + GRADE_S
+    try:
+        return _graded(argv, report)
+    finally:
+        _grade_deadline = None
+
+
+def _graded(argv, report):
     root, collect = Path.cwd(), argv[0] == "--collect"
     config = json.loads(Path(argv[1 if collect else 0]).read_text())
+    # read before the suite runs in this tree: nothing it does to these files can change what is graded
+    hidden, baseline = ([], []) if collect else (json.loads(Path(p).read_text()) for p in argv[1:3])
     try:
         final = suite(root, config, report.parent / "lab")
     except ReportUnreadable as unreadable:
         if collect:
             raise  # exit 2: a baseline is never collected from a run that proves nothing
         print(f"lab_accept: {unreadable} result unreadable, graded as no result", file=sys.stderr)
-        hidden, _ = (json.loads(Path(p).read_text()) for p in argv[1:3])
         report.write_text(json.dumps({**{name: "error" for name in hidden}, "__module__": "fail"}, sort_keys=True))
         return 1  # a rejection even when nothing is hidden: no grade was made
     if collect:
         report.write_text(json.dumps(final))
         return 0
-    hidden, baseline = (json.loads(Path(p).read_text()) for p in argv[1:3])
     result = {name: final.get(name, "error") for name in hidden}
     result["__module__"] = "fail" if any(final.get(name) != "pass" for name in baseline) else "pass"
     report.write_text(json.dumps(result, sort_keys=True))

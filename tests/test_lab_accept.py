@@ -80,7 +80,7 @@ class Unittest(unittest.TestCase):
                                   cwd=root, env={**os.environ, "ACCEPT_REPORT": str(root / "report.json")}, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 2)
         # the type, the deepest frame inside the grader and the innermost frame; never the message
-        self.assertRegex(proc.stderr.strip(), r"^lab_accept: JSONDecodeError at lab_accept\.py:\d+ in _main; \w+\.py:\d+ in \w+$")
+        self.assertRegex(proc.stderr.strip(), r"^lab_accept: JSONDecodeError at lab_accept\.py:\d+ in _graded; \w+\.py:\d+ in \w+$")
 
     def test_the_lab_path_needs_no_temporary_directory(self):
         """Review of 1.10.0, B1: with ACCEPT_REPORT set (every lab cell) the grader must not need a writable temp location."""
@@ -364,9 +364,9 @@ class SuiteDeadline(unittest.TestCase):
         outcome, _ = self.run_child(flood, timeout=1.5, cap=1 << 20)
         self.assertEqual(outcome, "timeout")
         source = "import sys\nsys.stdout.write('y' * (3 << 20))\nsys.stderr.write('z' * (3 << 20))"
-        short = self.run_child(source, cap=1 << 20, keep=True)[0]
+        short = self.run_child(source, timeout=30, cap=1 << 20, keep=True)[0]
         self.assertEqual((short.returncode, len(short.stdout), short.stdout_truncated, short.stderr), (0, 1 << 20, True, b""))
-        dropped = self.run_child(source, cap=1 << 20)[0]  # only the Go adapter asks for stdout; the rest keep none
+        dropped = self.run_child(source, timeout=30, cap=1 << 20)[0]  # only the Go adapter asks for stdout; the rest keep none
         self.assertEqual((dropped.returncode, len(dropped.stdout), dropped.stdout_truncated), (0, 0, False))
 
     def test_many_tiny_writes_are_kept_in_one_buffer(self):
@@ -376,7 +376,7 @@ class SuiteDeadline(unittest.TestCase):
         self.assertEqual(list(lab_accept._lines(bytearray(b"a\n\nb"))), [b"a", b"", b"b"])
 
     def test_a_suite_that_finishes_keeps_its_output_and_code(self):
-        result = self.run_child("import sys\nprint('ok')\nsys.exit(4)", keep=True)[0]
+        result = self.run_child("import sys\nprint('ok')\nsys.exit(4)", timeout=30, keep=True)[0]
         self.assertEqual((result.returncode, result.stdout, result.stdout_truncated), (4, b"ok\n", False))
 
     @unittest.skipUnless(hasattr(__import__("signal"), "SIGSTOP"), "needs job-control signals")
@@ -411,6 +411,31 @@ class SuiteDeadline(unittest.TestCase):
                     grader.wait()
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(grader.pid, signal.SIGKILL)  # the sleeping suite, left in the grader's group
+
+    def test_no_wait_is_longer_than_one_second(self):
+        """r3 should-fix 3, kernel-independent: every poll() inside _run waits at most 1000 ms, so a stopped grader re-reads its
+        deadline within a second of SIGCONT on any kernel (the stop test alone discriminates only where poll restarts with the
+        remaining time)."""
+        waits, real = [], lab_accept.select.poll
+        class Recording:
+            def __init__(self): self.inner = real()
+            def register(self, *a): return self.inner.register(*a)
+            def unregister(self, *a): return self.inner.unregister(*a)
+            def poll(self, timeout=None):
+                waits.append(timeout)
+                return self.inner.poll(timeout)
+        with mock.patch.object(lab_accept.select, "poll", Recording):
+            outcome = self.run_child("import time\ntime.sleep(60)", timeout=2.5)[0]
+        self.assertEqual(outcome, "timeout")
+        self.assertTrue(waits)
+        self.assertLessEqual(max(waits), 1000)
+
+    def test_a_host_refusal_to_fork_is_a_grader_failure_even_for_an_in_tree_runner(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(lab_accept.subprocess, "Popen", side_effect=BlockingIOError(11, "Resource temporarily unavailable")):
+            with self.assertRaises(OSError) as raised:
+                lab_accept._run(["./run_tests.sh"], temporary, {})
+            self.assertNotIsInstance(raised.exception, lab_accept.ReportUnreadable)
 
     def test_a_helper_that_releases_the_pipes_in_time_grades_normally(self):
         helper = "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1)'])\nsys.exit(5)"
@@ -448,6 +473,9 @@ class SuiteDeadline(unittest.TestCase):
                 if grader.poll() is None:
                     grader.kill()
                     grader.wait()
+                go.write_text("1")  # release a suite still looping if the test failed early
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(grader.pid, signal.SIGKILL)
 
     def test_one_grade_shares_one_deadline(self):
         """r2 item 4: prepare and suite together stop at GRADE_S, so exit 3 is observable inside the cell's 900 s."""
@@ -577,6 +605,53 @@ class UnreadableReport(unittest.TestCase):
         for adapter in self.CUT:
             with self.subTest(adapter=adapter):
                 self.grade(adapter, collect=True)
+
+    def test_a_fifo_a_deep_nesting_or_bad_utf8_proves_nothing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fifo = Path(temporary) / "raw.json"
+            os.mkfifo(fifo)
+            with self.assertRaises(lab_accept.ReportUnreadable):
+                lab_accept._read(fifo, "custom")
+            bad = Path(temporary) / "bad.json"
+            bad.write_bytes(b'{"New": "pa\xff"}')
+            with self.assertRaises(lab_accept.ReportUnreadable):
+                lab_accept._read(bad, "custom")
+        deep = "[" * 100000 + "]" * 100000
+        for adapter, name, text in (("custom", "raw.json", deep), ("unittest", "unittest.json", deep), ("node", "events.jsonl", deep + "\n")):
+            with self.subTest(adapter=adapter), tempfile.TemporaryDirectory() as temporary:
+                scratch = Path(temporary)
+                (scratch / name).write_text(text)
+                with mock.patch.object(lab_accept, "_run", return_value=subprocess.CompletedProcess(["x"], 0, b"", b"")), \
+                        self.assertRaises(lab_accept.ReportUnreadable):
+                    lab_accept.ADAPTERS[adapter](scratch, scratch, {"tests": "*", "command": ["true"]}, {"PATH": ""}, scratch)
+
+    def test_a_non_string_outcome_reads_as_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            scratch = Path(temporary)
+            (scratch / "unittest.json").write_text(json.dumps([{"case.py :: 0 :: New": ["pass"]}, []]))
+            with mock.patch.object(lab_accept, "_run", return_value=subprocess.CompletedProcess(["x"], 0, b"", b"")):
+                self.assertEqual(lab_accept.unittest_(scratch, scratch, {"tests": "test_*.py"}, {"PATH": ""}, scratch),
+                                 {"case.py :: 0 :: New": "error"})
+
+    def test_hidden_and_baseline_are_read_before_the_suite_runs(self):
+        """r3 should-fix 8: a suite that rewrites hidden.json cannot change what is graded."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"
+            root.mkdir()
+            rewrite = "import json; json.dump([], open('hidden.json', 'w'))"
+            config = {"adapter": "unittest", "tests": "test_*.py", "prepare": [[sys.executable, "-c", rewrite]]}
+            (root / "test_fixture.py").write_text(CASES)
+            for name, value in (("lab.json", config), ("hidden.json", [NEW, "test_fixture.py :: 0 :: Missing.test_x"]), ("baseline.json", [])):
+                (root / name).write_text(json.dumps(value))
+            report = Path(temporary) / "r.json"
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with mock.patch.dict(os.environ, {"ACCEPT_REPORT": str(report)}):
+                    self.assertEqual(lab_accept.main(["lab.json", "hidden.json", "baseline.json"]), 1)
+            finally:
+                os.chdir(cwd)
+            self.assertIn("test_fixture.py :: 0 :: Missing.test_x", json.loads(report.read_text()))
 
     def test_an_oversized_result_file_proves_nothing(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(lab_accept, "MAX_REPORT", 10):
