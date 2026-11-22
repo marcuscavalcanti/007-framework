@@ -284,6 +284,8 @@ class LabEndToEnd(unittest.TestCase):
                     lab.replay_eval.execute_cell(config, task, "high", 1, output, 30)
                 self.assertEqual(list(output.iterdir()), [])
         lab.plan(config, 1)
+        with self.assertRaisesRegex(ValueError, "acceptance_timeout_s of at least 900"):  # exit 3 could never show
+            lab.plan({**config, "tasks": [{**original, "acceptance_timeout_s": 600}]}, 1)
         # No contract means existing generic multi-command semantics are unchanged.
         legacy = {**original, "acceptance": original["acceptance"] * 2}
         legacy.pop("acceptance_exit_contract")
@@ -330,6 +332,24 @@ class LabEndToEnd(unittest.TestCase):
                          chunk=1, max_calls=2, max_usd=10, stop_usd=1, max_invalid=1)
         self.assertEqual({k: result[k] for k in ("calls", "invalid", "stop")},
                          {"calls": 1, "invalid": 1, "stop": "invalid-budget"})
+
+    def test_a_real_exit_3_that_leaves_descendants_is_a_valid_rejection(self):
+        """r2 should-fix 6: the grader exits 3 while a grandchild (as under `go test`) still runs; replay_eval's session cleanup
+        kills it, so the cell reaches the contract as a valid rejection, not CleanupIncomplete or a harness error."""
+        source = self.root / "contract-real-exit-3"
+        self.assertEqual(lab.mine(self.config, source, 2), 1)
+        config = json.loads((source / "replay-set.json").read_text())
+        task = json.loads(json.dumps(config["tasks"][0]))
+        stub = ("import subprocess, sys\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                "sys.exit(3)\n")
+        task["acceptance"] = [[sys.executable, "-c", stub]]
+        output = self.root / "real-exit-3"
+        output.mkdir()
+        row = lab.replay_eval.execute_cell(config, task, "high", 1, output, 30)
+        self.assertEqual([check["exit"] for check in row["acceptance"]], [3])
+        self.assertEqual((row["valid"], row["accepted"], row["failure_class"]), (True, False, "none"))
+        self.assertEqual(row["acceptance_outcomes"], "unavailable")
 
     def test_mine_pairs_a_commit_with_its_next_change(self):
         out = self.root / "lab"

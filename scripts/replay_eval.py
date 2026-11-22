@@ -580,6 +580,8 @@ def acceptance_exit_contract(task):
         commands = task.get("acceptance")
         if not isinstance(commands, list) or len(commands) != 1:
             raise ValueError("lab-accept-v1 requires exactly one acceptance command")
+        if task.get("acceptance_timeout_s", 900) < 900:  # below it the grader's 860 s grade deadline cannot show exit 3
+            raise ValueError("lab-accept-v1 requires acceptance_timeout_s of at least 900")
     return contract
 
 

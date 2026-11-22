@@ -18,23 +18,34 @@ schemas, and the dashboard snapshot.
   exit 0 as accepted, 1 and 3 as rejected, and any other exit as `acceptance-harness-error`, an invalid cell. In 1.10.0 a
   grader that crashed or could not start read as a rejection of the candidate. The contract also requires exactly one
   acceptance command, checked before any agent runs. Tasks without the field keep the 1.10.0 reading.
-- `lab_accept.py` exits 3, with no report, when a suite command does not finish within its 800 s. In 1.10.0 that timeout
-  surfaced as exit 2, which under the new contract would have made a hung candidate an invalid cell and dropped it from
-  its arm's denominator. The wait keeps 1.10.0's end condition (every holder of the output pipes closes them, then the
-  child exits), so a helper left holding the output is still waited for until the deadline. The deadline runs from the
-  child's start on a monotonic clock, re-read at least every second, so it holds when the grader itself is stopped and
-  continued. Output is dropped on arrival, except that the Go adapter keeps standard output in one buffer up to 64 MiB
-  (past the cap the run proves no pass), so a suite that prints without end cannot exhaust the grader's memory. Exit 3
-  prints one line on standard error naming the command.
-- A suite's own result file cut short by a crash (node's event stream, unittest's JSON, pytest's JUnit XML, a custom
-  report) made the grader raise and exit 2, an invalid cell under the contract where 1.10.0 recorded a rejection. It now
-  grades as no result, a rejection; `--collect` still fails, so `mine` drops the commit rather than keep an empty baseline.
-  The same holds for a `go test -json` stream past its cap. A cell whose grader exits 3 reads its outcomes as unavailable
-  without opening the report path.
-- `mine` reads a reference whose suite does not finish as `reference-fails-as-candidate`, not as a harness error.
-- Known limits of the contract, not closed by it: the suite runs as the grader's user and in its process group, so a suite
-  that kills the grader leaves an exit outside 0, 1 and 3 and an invalid cell (the invalid budget surfaces it); and exit 1
-  is read as a rejection without proof of a grade, so an interpreter crash that exits 1 still reads as one.
+- `lab_accept.py` exits 3, with no report, when a suite command does not finish in time. In 1.10.0 that timeout surfaced
+  as exit 2, which under the new contract would have made a hung candidate an invalid cell and dropped it from its arm's
+  denominator. Each command still has 800 s, and the commands of one grade (`prepare` and the suite) now share one 860 s
+  deadline, so the grader stops inside the cell's 900 s and exit 3 is observable whenever start-up and teardown take under
+  40 s. A contract task whose `acceptance_timeout_s` is below 900 is refused before any agent runs. The wait keeps 1.10.0's
+  end condition (every holder of the output pipes closes them, then the child exits), so a helper left holding the output
+  is still waited for until the deadline. The deadline runs on a monotonic clock, re-read at least every second, so it
+  holds when the grader itself is stopped and continued; a suite that exited meanwhile has its waiting output drained for
+  up to a second instead of reading as hung. Exit 3 prints one line on standard error naming the command.
+- The grader's memory is bounded. Output is dropped on arrival, except that the Go adapter keeps standard output in one
+  buffer up to 64 MiB (peak memory a few times that); past the cap the run proves no pass. A repository whose
+  `go test -json` stream exceeds 64 MiB can no longer be mined or graded, where 1.10.0 read it whole. A suite's own result
+  file over 64 MiB is treated as unreadable.
+- A suite's own result file that is cut short by a crash, malformed, of the wrong shape or over the cap (node's event
+  stream, unittest's JSON, pytest's JUnit XML, a custom report) made the grader raise and exit 2, an invalid cell under the
+  contract where 1.10.0 recorded a rejection. It now grades as no result: every hidden test "error", exit 1, one line on
+  standard error. `--collect` still fails, so `mine` drops the commit rather than keep an empty baseline. The same holds
+  for a `go test -json` stream past its cap, and for a command the candidate's tree made impossible to start (its
+  directory or an in-tree runner gone); a missing toolchain stays a grader failure. A cell whose grader exits 3 reads its
+  outcomes as unavailable without opening the report path. Node's records split on newlines only, since `JSON.stringify`
+  leaves U+2028, U+2029 and U+0085 raw.
+- `mine` reads a reference whose suite does not finish, or whose result file is unreadable, as
+  `reference-fails-as-candidate`, not as a harness error.
+- Known limits of the contract, not closed by it: the suite runs as the grader's user and in its process group (on purpose:
+  `replay_eval` kills that whole session when the grader returns, descendants of `go test` and `node --test` included), so
+  a suite that kills the grader, a shared memory limit or a full disk leaves an exit outside 0, 1 and 3 and an invalid cell
+  (the invalid budget surfaces it); exit 1 is read as a rejection without proof of a grade, so an interpreter crash that
+  exits 1 still reads as one; the grader needs a POSIX host (`select.poll`), as its suite environment already did.
 
 ## [1.10.0] - 2026-11-16
 

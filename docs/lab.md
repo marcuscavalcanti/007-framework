@@ -102,11 +102,16 @@ paired next change; the check runs once, under the mining load, with no retry al
 passed at its own tree while no patch could pass in a cell. `lab_accept.py` grades without `ACCEPT_REPORT` too: the exit code is
 the verdict and the report is optional, so a caller that forgets the variable no longer reads a harness error as a rejection. It
 exits 2, not 1, when the grader itself fails, and `mine` drops such a commit as `AcceptanceHarnessError`, not as a reference
-that fails. It exits 3, with no report, when a suite command does not finish in time: that is a rejection of the candidate.
-A suite result file cut short by a crash grades as no result (a rejection); under `--collect` it fails, and `mine` drops the commit.
-A task mined since 1.10.1 carries `acceptance_exit_contract: "lab-accept-v1"`, under which a cell reads 0 as accepted, 1 and
-3 as rejected, and any other exit as an invalid cell (`acceptance-harness-error`). The suite shares the grader's user and process group, so
-a suite that kills the grader still makes an invalid cell, and exit 1 is not proof that a grade was made. A mined task embeds its grader: sets mined before 1.10.0 keep the old one until they are mined again.
+that fails. It exits 3, with no report, when a suite command does not finish in time (800 s per command, 860 s for all the
+commands of one grade): that is a rejection of the candidate. A suite result file that is cut, malformed or over 64 MiB, or a
+command the candidate's tree made impossible to start, grades as no result (a rejection); under `--collect` it fails, and
+`mine` drops the commit. The Go adapter keeps at most 64 MiB of `go test -json` output, so a repository whose stream is
+larger cannot be mined. A task mined since 1.10.1 carries `acceptance_exit_contract: "lab-accept-v1"`, which requires
+exactly one acceptance command and `acceptance_timeout_s` of at least 900, and under which a cell reads 0 as accepted, 1
+and 3 as rejected, and any other exit as an invalid cell (`acceptance-harness-error`). The suite shares the grader's user
+and process group, so a suite that kills the grader, a shared memory limit or a full disk still makes an invalid cell, and
+exit 1 is not proof that a grade was made. The grader needs a POSIX host. A mined task embeds its grader: sets mined before
+1.10.0 keep the old one until they are mined again.
 
 A snapshot is not read isolation. A mined public repository may also sit on the host as an installed copy (a plugin cache, a
 module cache, a vendored checkout) that already holds the commit a task asks for, and an agent that searches outside its
