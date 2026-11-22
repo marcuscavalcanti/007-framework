@@ -298,7 +298,8 @@ class LabEndToEnd(unittest.TestCase):
         real_acceptance = lab.replay_eval.acceptance
 
         def hung(*args, **kwargs):  # lab_accept's exit when a suite command does not finish in time (800 s: not run here)
-            checks, _ = real_acceptance(*args, **kwargs)
+            checks, _ = real_acceptance(*args, **kwargs)  # the real grade leaves an all-pass report the exit 3 must not read
+            assert json.loads(Path(args[3]["ACCEPT_REPORT"]).read_text())
             return [{**checks[0], "exit": 3}], False
         for name, oracle_exit, valid, accepted in (
                 ("accept", 0, True, True), ("reject", 1, True, False),
@@ -319,6 +320,8 @@ class LabEndToEnd(unittest.TestCase):
                 self.assertEqual([check["exit"] for check in row["acceptance"]], [oracle_exit])
                 self.assertEqual((row["valid"], row["accepted"]), (valid, accepted))
                 self.assertEqual(row["failure_class"], "none" if valid else "acceptance-harness-error")
+                if name == "hung":
+                    self.assertEqual(row["acceptance_outcomes"], "unavailable")
         broken = json.loads(json.dumps(manifest))
         broken["tasks"][0]["acceptance"][0][-1] += ".missing"
         config_path = source / "broken.json"

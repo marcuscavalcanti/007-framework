@@ -807,8 +807,8 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
                         len(checks) != 1 or checks[0]["exit"] not in (0, 1, 3)
                     ):
                         hidden_failure = "acceptance-harness-error"
-                    elif len(checks) == 1:
-                        outcomes = acceptance_outcomes(report)
+                    elif len(checks) == 1 and not (exit_contract == LAB_ACCEPT_EXIT_CONTRACT and checks[0]["exit"] == 3):
+                        outcomes = acceptance_outcomes(report)  # exit 3 wrote no report: whatever sits there is not this grade
             except CleanupIncomplete as exc:
                 hidden_failure = cleanup_failure = exc.state
             except subprocess.TimeoutExpired:  # review r40 A1: the paid attempt still gets its cell

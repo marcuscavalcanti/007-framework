@@ -4,6 +4,7 @@ Before the fix, unittest's tearDownClass error and a `go test` package failure a
 Controls: a clean suite, a test already red at base, and a failure in a scope no graded test lives in still grade as before.
 """
 import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -258,7 +259,7 @@ class ProcessExit(unittest.TestCase):
         for adapter in ("node", "unittest", "pytest", "go"):
             with self.subTest(adapter=adapter), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); scratch = root / "scratch"; scratch.mkdir()
-                def run(argv, cwd, env):
+                def run(argv, cwd, env, **_):
                     stdout = b""
                     if adapter == "node":
                         (scratch / "events.jsonl").write_text(json.dumps({"f": "case.js", "d": 0, "n": "New", "o": "pass"}) + "\n")
@@ -319,16 +320,12 @@ class Custom(unittest.TestCase):
                              (0, {"new": "pass", "__module__": "pass"}))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SuiteDeadline(unittest.TestCase):
     """1.10.1: a suite that does not finish is a rejection (exit 3), never a grader failure (exit 2), and never exhausts memory.
     `subprocess.run(capture_output=True, timeout=)` raised TimeoutExpired, which the grader turned into exit 2; under the
     `lab-accept-v1` contract exit 2 makes the cell invalid, so a candidate whose code hangs left the arm's denominator."""
 
-    def run_child(self, source, timeout=1.5, cap=None):
+    def run_child(self, source, timeout=1.5, cap=None, keep=False):
         patches = [mock.patch.object(lab_accept, "TIMEOUT_S", timeout)]
         if cap is not None:
             patches.append(mock.patch.object(lab_accept, "MAX_STDOUT", cap))
@@ -337,7 +334,8 @@ class SuiteDeadline(unittest.TestCase):
                 stack.enter_context(patch)
             started = time.monotonic()
             try:
-                result = lab_accept._run([sys.executable, "-c", source], temporary, {"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+                result = lab_accept._run([sys.executable, "-c", source], temporary, {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+                                         keep_stdout=keep)
             except lab_accept.SuiteTimeout:
                 return "timeout", time.monotonic() - started
             return result, time.monotonic() - started
@@ -348,7 +346,7 @@ class SuiteDeadline(unittest.TestCase):
         self.assertLess(elapsed, 10)
 
     def test_a_suite_that_stops_itself_still_times_out(self):
-        """Round 4 of the lost branch: the wait has to count wall time while the child is stopped."""
+        """A stopped suite never ends on its own: the deadline still comes."""
         outcome, elapsed = self.run_child("import os, signal\nos.kill(os.getpid(), signal.SIGSTOP)")
         self.assertEqual(outcome, "timeout")
         self.assertLess(elapsed, 10)
@@ -356,7 +354,7 @@ class SuiteDeadline(unittest.TestCase):
     def test_a_helper_holding_the_output_is_waited_for_as_in_1_10_0(self):
         """1.10.0 read until every holder of the pipes closed them: a child that exits at once but leaves a helper with its
         output open was graded only when the deadline came. Accepting it at once changes when a suite counts as finished."""
-        helper = "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\nprint('done')"
+        helper = "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'])\nprint('done')"
         outcome, elapsed = self.run_child(helper)
         self.assertEqual(outcome, "timeout")
         self.assertGreaterEqual(elapsed, 1.4)
@@ -365,12 +363,43 @@ class SuiteDeadline(unittest.TestCase):
         flood = "import sys\nchunk = b'x' * 65536\nwhile True:\n    sys.stdout.buffer.write(chunk); sys.stderr.buffer.write(chunk)"
         outcome, _ = self.run_child(flood, timeout=1.5, cap=1 << 20)
         self.assertEqual(outcome, "timeout")
-        short = self.run_child("import sys\nsys.stdout.write('y' * (3 << 20))\nsys.stderr.write('z' * (3 << 20))", cap=1 << 20)[0]
+        source = "import sys\nsys.stdout.write('y' * (3 << 20))\nsys.stderr.write('z' * (3 << 20))"
+        short = self.run_child(source, cap=1 << 20, keep=True)[0]
         self.assertEqual((short.returncode, len(short.stdout), short.stdout_truncated, short.stderr), (0, 1 << 20, True, b""))
+        dropped = self.run_child(source, cap=1 << 20)[0]  # only the Go adapter asks for stdout; the rest keep none
+        self.assertEqual((dropped.returncode, len(dropped.stdout), dropped.stdout_truncated), (0, 0, False))
+
+    def test_many_tiny_writes_are_kept_in_one_buffer(self):
+        """Review 2026-11-22: a list of one bytes object per read cost ~50 bytes each, so 64 MiB in tiny reads took over 1 GiB."""
+        result = self.run_child("import os\nfor _ in range(20000): os.write(1, b'{')", timeout=30, keep=True)[0]
+        self.assertEqual((type(result.stdout), len(result.stdout)), (bytearray, 20000))
+        self.assertEqual(list(lab_accept._lines(bytearray(b"a\n\nb"))), [b"a", b"", b"b"])
 
     def test_a_suite_that_finishes_keeps_its_output_and_code(self):
-        result = self.run_child("import sys\nprint('ok')\nsys.exit(4)")[0]
+        result = self.run_child("import sys\nprint('ok')\nsys.exit(4)", keep=True)[0]
         self.assertEqual((result.returncode, result.stdout, result.stdout_truncated), (4, b"ok\n", False))
+
+    @unittest.skipUnless(hasattr(__import__("signal"), "SIGSTOP"), "needs job-control signals")
+    def test_a_grader_stopped_past_its_deadline_exits_3_once_continued(self):
+        """Round 4 of the lost branch: the grader itself stopped across the deadline. A wait that slept the whole remaining time
+        (select with the full timeout) could outlive the cell's own limit after SIGCONT; the deadline is re-read every second."""
+        import signal
+        source = ("import sys; sys.path.insert(0, sys.argv[1]); import lab_accept; lab_accept.TIMEOUT_S = 2\n"
+                  "try: lab_accept._run([sys.executable, '-c', 'import time; time.sleep(60)'], '.', {})\n"
+                  "except lab_accept.SuiteTimeout: raise SystemExit(3)\n")
+        grader = subprocess.Popen([sys.executable, "-I", "-c", source, str(ROOT / "scripts")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            time.sleep(0.5)
+            grader.send_signal(signal.SIGSTOP)
+            time.sleep(3)  # stopped past its deadline
+            grader.send_signal(signal.SIGCONT)
+            continued = time.monotonic()
+            self.assertEqual(grader.wait(timeout=10), 3)
+            self.assertLess(time.monotonic() - continued, 2.5)
+        finally:
+            if grader.poll() is None:
+                grader.kill()
+                grader.wait()
 
     def test_a_timeout_exits_3_and_writes_no_report(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -388,3 +417,89 @@ class SuiteDeadline(unittest.TestCase):
             finally:
                 os.chdir(cwd)
             self.assertFalse(report.exists())  # no grade was observed: the caller reads outcomes as unavailable
+
+    def test_every_adapter_and_the_unnamed_report_path_exit_3(self):
+        for adapter, named in (("node", True), ("pytest", True), ("go", True), ("custom", True), ("unittest", False)):
+            with self.subTest(adapter=adapter, named=named), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "tree"
+                root.mkdir()
+                config = {"adapter": adapter, "tests": "*", "command": ["true"]}
+                for name, value in (("lab.json", config), ("hidden.json", [NEW]), ("baseline.json", [])):
+                    (root / name).write_text(json.dumps(value))
+                report = Path(temporary) / "report.json"
+                env = {"ACCEPT_REPORT": str(report)} if named else {}
+                cwd = os.getcwd()
+                os.chdir(root)
+                try:
+                    with mock.patch.object(lab_accept, "_run", side_effect=lab_accept.SuiteTimeout("suite")), \
+                            mock.patch.dict(os.environ, env), contextlib.redirect_stderr(io.StringIO()) as err:
+                        if not named:
+                            os.environ.pop("ACCEPT_REPORT", None)
+                        self.assertEqual(lab_accept.main(["lab.json", "hidden.json", "baseline.json"]), 3)
+                finally:
+                    os.chdir(cwd)
+                self.assertFalse(report.exists())
+                self.assertEqual(err.getvalue(), f"lab_accept: suite did not finish within {lab_accept.TIMEOUT_S} s\n")
+
+
+class UnreadableReport(unittest.TestCase):
+    """Review 2026-11-22: a result file cut short by a crash raised in the adapter, so the grader exited 2 and, under
+    `lab-accept-v1`, the cell became invalid where 1.10.0 recorded a rejection. Grading now reads it as no result (exit 1);
+    --collect still fails (exit 2), so `mine` never keeps a baseline from a run that proves nothing."""
+
+    CUT = {"node": ("events.jsonl", '{"f": "case.js", "d": 0, "n": "New", "o": "pass"}\n{"f": "ca'),
+           "unittest": ("unittest.json", '[{"case.py :: 0 :: New": "pa'),
+           "pytest": ("junit.xml", '<testsuite><testcase file="case.py" classname="Case" name="New"/><testc'),
+           "custom": ("raw.json", '{"New": "pa'),
+           "custom-list": ("raw.json", '["New"]')}
+
+    def grade(self, adapter, collect):
+        name, text = self.CUT[adapter]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "tree"
+            root.mkdir()
+            config = {"adapter": adapter.split("-")[0], "tests": "*", "command": ["true"]}
+            for file, value in (("lab.json", config), ("hidden.json", ["case.py :: 0 :: New"]), ("baseline.json", [])):
+                (root / file).write_text(json.dumps(value))
+            report = Path(temporary) / "out" / "report.json"
+            report.parent.mkdir()
+
+            def run(argv, cwd, env, **_):
+                (report.parent / "lab" / name).write_text(text)
+                return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                with mock.patch.object(lab_accept, "_run", side_effect=run), mock.patch.dict(os.environ, {"ACCEPT_REPORT": str(report)}):
+                    if collect:
+                        with self.assertRaises(lab_accept.ReportUnreadable):
+                            lab_accept.main(["--collect", "lab.json"])
+                        return None
+                    return lab_accept.main(["lab.json", "hidden.json", "baseline.json"]), json.loads(report.read_text())
+            finally:
+                os.chdir(cwd)
+
+    def test_a_cut_result_file_is_a_rejection_when_grading(self):
+        for adapter in self.CUT:
+            with self.subTest(adapter=adapter):
+                self.assertEqual(self.grade(adapter, collect=False), (1, {"case.py :: 0 :: New": "error", "__module__": "pass"}))
+
+    def test_a_cut_result_file_fails_collection(self):
+        for adapter in self.CUT:
+            with self.subTest(adapter=adapter):
+                self.grade(adapter, collect=True)
+
+    def test_a_go_stream_past_the_cap_proves_nothing(self):
+        events = ({"Action": "pass", "Package": "ex", "Test": "TestNew"}, {"Action": "pass", "Package": "ex"})
+        proc = subprocess.CompletedProcess(["go"], 0, stdout="".join(json.dumps(e) + "\n" for e in events).encode())
+        proc.stdout_truncated = True
+        with mock.patch.object(lab_accept, "_run", return_value=proc), self.assertRaises(lab_accept.ReportUnreadable):
+            lab_accept.go(Path("."), Path("."), {"tests": "./..."}, {"PATH": os.environ.get("PATH", "")}, Path("."))
+        proc.stdout_truncated = False
+        with mock.patch.object(lab_accept, "_run", return_value=proc):
+            self.assertEqual(lab_accept.go(Path("."), Path("."), {"tests": "./..."}, {"PATH": os.environ.get("PATH", "")}, Path(".")),
+                             {"ex :: 0 :: TestNew": "pass"})
+
+
+if __name__ == "__main__":
+    unittest.main()

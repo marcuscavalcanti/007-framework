@@ -2,7 +2,8 @@
 
 Accepted = every hidden test passes and no baseline test regresses (key "__module__"). A test whose class, module or package
 fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed,
-3 a suite command did not finish in time (a rejection: the candidate's code hung; no report is written).
+3 a suite command did not finish in time (a rejection: the candidate's code hung; no report is written). A suite's own result
+file that cannot be read (cut short by a crash) grades as no result: a rejection, or exit 2 under --collect.
 Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
 import contextlib
@@ -19,7 +20,7 @@ import traceback
 import xml.etree.ElementTree as ElementTree
 
 TIMEOUT_S = 800
-MAX_STDOUT = 64 << 20  # ponytail: only `go test -json` reads stdout; past this the grade is charged as incomplete
+MAX_STDOUT = 64 << 20  # only `go test -json` keeps stdout, in one buffer; past this the run proves no pass
 NODE_REPORTER = """export default async function* (source) {
   for await (const e of source) {
     if (e.type !== 'test:pass' && e.type !== 'test:fail') continue;
@@ -63,37 +64,42 @@ class SuiteTimeout(Exception):
     """A suite command did not finish by TIMEOUT_S. The candidate's code hung: a rejection (exit 3), not a grader failure."""
 
 
-def _run(argv, cwd, env):
+class ReportUnreadable(Exception):
+    """The suite's own result file (or `go test -json` stream) is cut or malformed: the run proves no outcome. Grading reads it as
+    no result, a rejection; --collect fails (exit 2), so `mine` drops the commit instead of keeping an empty baseline."""
+
+
+def _run(argv, cwd, env, *, keep_stdout=False):
     """`subprocess.run(capture_output=True, timeout=TIMEOUT_S)` with the same end: both pipes closed by every holder, then the
     child's exit, so a helper the suite leaves holding its output is waited for until the deadline, as in 1.10.0. Two changes:
-    stderr is dropped on arrival and stdout kept up to MAX_STDOUT, so a suite that prints without end cannot exhaust memory;
-    the deadline is wall time on a monotonic clock, polled in short slices, so it runs while the child is stopped."""
-    deadline = time.monotonic() + TIMEOUT_S
+    output is read and dropped on arrival, except stdout with `keep_stdout`, kept in one buffer up to MAX_STDOUT, so a suite
+    that prints without end cannot exhaust memory; the deadline is wall time on a monotonic clock, polled in slices of at most
+    one second, so it also expires while the grader itself is stopped and continued."""
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out_fd, kept, size, truncated = process.stdout.fileno(), [], 0, False
+    deadline = time.monotonic() + TIMEOUT_S  # from the start of the child, as subprocess.run's timeout
+    out_fd, kept, truncated = process.stdout.fileno(), bytearray(), False
     streams = {process.stdout.fileno(): process.stdout, process.stderr.fileno(): process.stderr}
-    poller = select.poll()
-    for fd in streams:
-        poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
     try:
+        poller = select.poll()
+        for fd in streams:
+            poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
         while streams:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise SuiteTimeout
+                raise SuiteTimeout(argv[0])
             for fd, _ in poller.poll(min(remaining, 1.0) * 1000):
                 chunk = os.read(fd, 1 << 16)
                 if not chunk:
                     poller.unregister(fd)
                     streams.pop(fd).close()
-                elif fd == out_fd and not truncated:
-                    room = MAX_STDOUT - size
-                    kept.append(chunk[:room])
-                    size += min(len(chunk), room)
+                elif fd == out_fd and keep_stdout and not truncated:
+                    room = MAX_STDOUT - len(kept)
+                    kept += chunk[:room]
                     truncated = len(chunk) > room
         try:
             returncode = process.wait(timeout=max(deadline - time.monotonic(), 0))
         except subprocess.TimeoutExpired:
-            raise SuiteTimeout from None
+            raise SuiteTimeout(argv[0]) from None
     except BaseException:
         process.kill()
         process.wait()
@@ -101,9 +107,19 @@ def _run(argv, cwd, env):
     finally:
         for stream in streams.values():
             stream.close()
-    result = subprocess.CompletedProcess(argv, returncode, b"".join(kept), b"")
+    result = subprocess.CompletedProcess(argv, returncode, kept, b"")
     result.stdout_truncated = truncated
     return result
+
+
+def _lines(data):
+    """The lines of `data`, one at a time: a list of millions of short lines would cost far more than the bytes."""
+    start = 0
+    while start < len(data):
+        end = data.find(b"\n", start)
+        end = len(data) if end < 0 else end
+        yield data[start:end]
+        start = end + 1
 
 
 def _worst(final, key, outcome):
@@ -134,7 +150,10 @@ def node(root, cwd, config, env, scratch):
           f"--test-reporter-destination={events}", *tests], cwd, env)
     final, broken, prefix = {}, set(), str(root.resolve()) + "/"
     for line in events.read_text().splitlines() if events.exists() else []:
-        e = json.loads(line)
+        try:
+            e = json.loads(line)
+        except ValueError:  # the reporter's stream was cut: the runner died mid-write
+            raise ReportUnreadable("node") from None
         clean = lambda text: text.replace(prefix, "").replace(str(root) + "/", "")
         _worst(final, f"{clean(e.get('f') or '?')} :: {e['d']} :: {clean(e['n'])}", e["o"])
         if e.get("b"):
@@ -146,7 +165,10 @@ def unittest_(root, cwd, config, env, scratch):
     report = scratch / "unittest.json"
     pattern = Path(config["tests"]).name
     result = _run([sys.executable, "-B", "-c", UNITTEST_RUNNER, str(report), str(root), str(Path(config["tests"]).parent), pattern], cwd, env)
-    out, broken = json.loads(report.read_text()) if report.exists() else ({}, [])
+    try:
+        out, broken = json.loads(report.read_text()) if report.exists() else ({}, [])
+    except (ValueError, TypeError):
+        raise ReportUnreadable("unittest") from None
     return _process_status(_charge(out, broken), result, failure_exit=None)  # this child normally exits 0 even for red tests
 
 
@@ -154,21 +176,24 @@ def pytest(root, cwd, config, env, scratch):
     report = scratch / "junit.xml"
     result = _run([sys.executable, "-m", "pytest", "-q", "-o", "junit_family=xunit1", f"--junitxml={report}", config["tests"]], cwd, env)
     final = {}
-    if report.exists():
-        for case in ElementTree.parse(report).getroot().iter("testcase"):
-            bad = case.find("failure") is not None or case.find("error") is not None
-            _worst(final, f"{case.get('file', '?')} :: 0 :: {case.get('classname')}.{case.get('name')}", "fail" if bad else "skip" if case.find("skipped") is not None else "pass")
+    try:
+        cases = list(ElementTree.parse(report).getroot().iter("testcase")) if report.exists() else []
+    except ElementTree.ParseError:
+        raise ReportUnreadable("pytest") from None
+    for case in cases:
+        bad = case.find("failure") is not None or case.find("error") is not None
+        _worst(final, f"{case.get('file', '?')} :: 0 :: {case.get('classname')}.{case.get('name')}", "fail" if bad else "skip" if case.find("skipped") is not None else "pass")
     return _process_status(final, result)
 
 
 def go(root, cwd, config, env, scratch):
-    result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
+    result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env, keep_stdout=True)
     if getattr(result, "stdout_truncated", False):  # events past the cap are lost: no pass in this run is proven
-        return {}
+        raise ReportUnreadable("go")
     final, failed, red, unexplained, seen, completed, active = {}, set(), set(), set(), set(), set(), set()
-    for line in result.stdout.decode(errors="replace").splitlines():
+    for line in _lines(result.stdout):
         try:
-            e = json.loads(line)
+            e = json.loads(bytes(line).decode(errors="replace"))
         except ValueError:
             continue
         if e.get("Action") == "run" and e.get("Test"):
@@ -201,7 +226,12 @@ def custom(root, cwd, config, env, scratch):
     """config["command"] writes {test id: pass|fail|skip} to $LAB_RAW_REPORT."""
     raw = scratch / "raw.json"
     result = _run(config["command"], cwd, {**env, "LAB_RAW_REPORT": str(raw)})
-    final = json.loads(raw.read_text()) if raw.exists() else {}
+    try:
+        final = json.loads(raw.read_text()) if raw.exists() else {}
+    except ValueError:
+        raise ReportUnreadable("custom") from None
+    if not isinstance(final, dict):
+        raise ReportUnreadable("custom")
     return _process_status(final, result)
 
 
@@ -222,7 +252,12 @@ def suite(root, config, scratch):
 def _main(argv, report):
     root, collect = Path.cwd(), argv[0] == "--collect"
     config = json.loads(Path(argv[1 if collect else 0]).read_text())
-    final = suite(root, config, report.parent / "lab")
+    try:
+        final = suite(root, config, report.parent / "lab")
+    except ReportUnreadable:
+        if collect:
+            raise  # exit 2: a baseline is never collected from a run that proves nothing
+        final = {}  # every hidden test reads "error": a rejection, as when the suite wrote no result at all
     if collect:
         report.write_text(json.dumps(final))
         return 0
@@ -239,7 +274,8 @@ def main(argv):
     contract it records any non-zero exit as not accepted, as before. `mine` reads 2 as a harness error."""
     try:
         return _grade(argv)
-    except SuiteTimeout:
+    except SuiteTimeout as timeout:  # the command's name only: its arguments can carry paths
+        print(f"lab_accept: {Path(str(timeout)).name} did not finish within {TIMEOUT_S} s", file=sys.stderr)
         return 3
 
 
