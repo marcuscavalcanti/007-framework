@@ -69,8 +69,9 @@ into an invalid cell.
 ## Still open
 
 - Exit 1 is read as a rejection without proof of a grade: an interpreter crash that exits 1 still reads as one (1.11).
-- The suite shares the grader's user and process group: a suite that kills the grader, a shared memory limit or a full disk
-  makes an invalid cell. The invalid budget surfaces it.
+- The suite shares the grader's user and process group: a suite that kills the grader makes an invalid cell, which the
+  invalid budget surfaces. A shared memory limit or a full disk does the same when it hits the grader; when it hits the
+  suite, the usual case, the cell reads as a rejection that the invalid budget never sees.
 - The stopped-grader test discriminates only where `poll` restarts with the remaining time (seen on arm64 Linux); the
   one-second bound on every wait is tested on any kernel.
 - The Go adapter's new read path ran here only against mocks and on CI's toolchain; this Mac's Go cannot build.
