@@ -23,11 +23,11 @@ class ReviewRouteTests(unittest.TestCase):
             self.fail("review route is missing")
 
     def test_identity_level_never_takes_served_identity_from_the_request(self):
-        level, codex, claude = self.module().identity_level, {"cli": "codex", "model": "gpt-6-astra"}, {"cli": "claude", "model": "claude-fable-5-2"}
+        level, codex, claude = self.module().identity_level, {"cli": "codex", "model": "gpt-6.2-astra"}, {"cli": "claude", "model": "claude-fable-5-2"}
         done = [{"type": "thread.started"}, {"type": "turn.started"}, {"type": "item.completed", "item": {"type": "error", "message": "Code Mode is unavailable"}},
                 {"type": "turn.completed", "usage": {}}]
         self.assertEqual(level(codex, done), "pinned-no-reroute")  # a silent match is pinned, never verified
-        rerouted = {"type": "item.completed", "item": {"type": "error", "message": "model rerouted: gpt-6-astra -> gpt-5.2 (HighRiskCyberActivity)"}}
+        rerouted = {"type": "item.completed", "item": {"type": "error", "message": "model rerouted: gpt-6.2-astra -> gpt-5.2 (HighRiskCyberActivity)"}}
         self.assertEqual(level(codex, done[:2] + [rerouted] + done[2:]), "failed")
         self.assertEqual(level(codex, done[:2]), "failed")  # incomplete stream
         self.assertEqual(level(codex, done + [{"type": "turn.failed"}]), "failed")
@@ -39,7 +39,7 @@ class ReviewRouteTests(unittest.TestCase):
 
     def test_identity_level_rejects_later_turns_results_and_errors(self):
         level = self.module().identity_level
-        codex = {"cli": "codex", "model": "gpt-6-astra"}
+        codex = {"cli": "codex", "model": "gpt-6.2-astra"}
         done = [{"type": "turn.started"}, {"type": "turn.completed"}]
         for stream in (done + [{"type": "turn.started"}], done + done,
                        done + [{"type": "error"}], [{"type": "turn.completed"}]):
@@ -81,7 +81,7 @@ class ReviewRouteTests(unittest.TestCase):
         cases = [
             # 2026-11-12 (Marcus): the reviewer follows the implementer's family, by decision
             ("claude", ALL, ("anthropic", "claude", "claude-fable-5-2", "xhigh", "primary")),
-            ("codex", ALL, ("openai", "codex", "gpt-6-astra", "xhigh", "primary")),
+            ("codex", ALL, ("openai", "codex", "gpt-6.2-astra", "xhigh", "primary")),
         ]
         for host, available, expected in cases:
             with self.subTest(host=host, available=sorted(available)):
@@ -95,7 +95,7 @@ class ReviewRouteTests(unittest.TestCase):
             with self.subTest(host=host, available=sorted(available)):
                 self.assertIsNone(select(host, which=which_from(available), env={}))
         both = {"CLAUDECODE": "1", "CODEX_THREAD_ID": "thread"}
-        self.assertEqual(select("codex", which=which_from(ALL), env=both)["model"], "gpt-6-astra")
+        self.assertEqual(select("codex", which=which_from(ALL), env=both)["model"], "gpt-6.2-astra")
         with self.assertRaisesRegex(ValueError, "^host-ambiguous$"):
             select(which=which_from(ALL), env=both)
         with self.assertRaisesRegex(ValueError, "^host-unknown$"):
@@ -109,7 +109,7 @@ class ReviewRouteTests(unittest.TestCase):
         codex = module.select_reviewer("codex", which=which_from(ALL), env={})
         argv = module.review_argv(codex)
         validate_command("codex", argv)
-        for pair in (["-m", "gpt-6-astra"], ["-c", 'model_reasoning_effort="xhigh"'], ["--sandbox", "read-only"]):
+        for pair in (["-m", "gpt-6.2-astra"], ["-c", 'model_reasoning_effort="xhigh"'], ["--sandbox", "read-only"]):
             self.assertIn(pair, [argv[i:i + 2] for i in range(len(argv) - 1)])
         self.assertIn("--ignore-user-config", argv)
         # r33: the reviewer reads only the context on stdin — no shell (a read-only sandbox still reads the whole disk), no web,
@@ -119,7 +119,7 @@ class ReviewRouteTests(unittest.TestCase):
                               "computer_use", "in_app_browser", "code_mode_host"}, disabled)
         # The runner that launches the review must accept this exact argv (repeated --disable was refused after r42 R2).
         import native_runner
-        self.assertEqual(native_runner.native_request("codex", argv), (["gpt-6-astra"], ["xhigh"], ["openai"]))
+        self.assertEqual(native_runner.native_request("codex", argv), (["gpt-6.2-astra"], ["xhigh"], ["openai"]))
         self.assertIn(["-c", 'web_search="disabled"'], [argv[i:i + 2] for i in range(len(argv) - 1)])
         self.assertIn("--ignore-rules", argv)
         self.assertIsNone(codex["budget_control"])

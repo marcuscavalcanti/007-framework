@@ -64,6 +64,11 @@ Governance:
 
 ## Adversarial review policy
 
+Revision 2026-11-22 (Marcus): a Codex host's reviewer is OpenAI `gpt-6.2-astra`
+at `xhigh` (it was `gpt-6-astra`). A ChatGPT account refuses this model on Codex
+CLI 0.165, so the route needs a newer CLI; an older one fails the review, which
+stops it. Nothing else in the table below changes.
+
 Revision 2026-11-12 (Marcus): the reviewer follows the implementer. When Codex
 implements, OpenAI `gpt-6-astra` at `xhigh` reviews; when Claude implements,
 Claude Fable 5.2 at `xhigh` reviews. Both share the implementer's model family,
@@ -80,7 +85,7 @@ fallback model: the route fails closed.
 | Host session (detected) | Reviewer | Transport | Effort |
 | --- | --- | --- | --- |
 | Claude (`CLAUDECODE` set) | Anthropic `claude-fable-5-2` | Claude CLI, plan mode, tools disabled, no persistence, CLI budget cap | `xhigh` |
-| Codex (`CODEX_THREAD_ID` set) | OpenAI `gpt-6-astra` | Codex CLI, `exec`, read-only sandbox, user config ignored | `xhigh` |
+| Codex (`CODEX_THREAD_ID` set) | OpenAI `gpt-6.2-astra` | Codex CLI (newer than 0.165), `exec`, read-only sandbox, user config ignored | `xhigh` |
 
 - Both host markers present means nested sessions: the caller must declare the
   host; never guess.

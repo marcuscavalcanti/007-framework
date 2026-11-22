@@ -6,6 +6,12 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Changed
+
+- The release reviewer for a Codex host is OpenAI `gpt-6.2-astra` at `xhigh` (maintainer's decision, `AGENTS.md` revision
+  2026-11-22), in place of `gpt-6-astra`. A ChatGPT account refuses this model on Codex CLI 0.165, so the route needs a newer
+  CLI; on an older one the review fails and stops, with no other model tried. The Claude route is unchanged.
+
 ### Fixed
 
 - A task mined by 1.10.1 declares `acceptance_exit_contract: "lab-accept-v1"`. Under it a replay cell reads the grader's
