@@ -38,7 +38,9 @@ into an invalid cell.
   and the version change. Three failed. Two are the real-Go tests: this Mac's Homebrew Go cannot build any package that
   imports `os`, and they fail the same way on 1.10.0. The third was a version pin left at 1.10.0 in `tests/test_package.py`;
   it was corrected after the run and that module re-run (25 tests pass).
-- **CI:** CIRESULT
+- **CI:** pull request 27 passed its seven checks at `e3c0a2f`, the tree round 3 read plus its should-fix items and the
+  version change (run 45043938278: 1,061 tests on Python 3.11, 3.12 and 3.13 on ubuntu and 3.13 on macOS, the three real-Go
+  tests passing on ubuntu and skipped on macOS, which has no Go; CodeQL run 45043938291). The release notes carry the runs for the merge commit and the tag.
 - **Independent review** (Claude Fable 5.2, `max` requested by the maintainer in place of the policy's `xhigh`, no tools, same
   family as the implementer by the maintainer's policy; identity level `verified` in every round):
   - **Round 1** on `daa051d`, US$11.17: FIX FIRST. Blocking: the output cap counted bytes, not memory (one object per read
