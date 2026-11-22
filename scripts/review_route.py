@@ -1,8 +1,8 @@
 """Adversarial reviewer route by host session (AGENTS.md revision 2026-11-12; master plan 3.3).
 
 Selection only: it never launches a review and never authorizes a call. The reviewer follows the implementer, taken to be the
-host session, and shares its model family by the maintainer's decision: Claude -> Claude Fable 5.2, Codex -> OpenAI gpt-6-astra,
-both at xhigh. Only routes in this table get an argv or an identity level. Fail-closed: a missing primary CLI or an unrecognized
+host session, and shares its model family by the maintainer's decision: Claude -> Claude Fable 5.2, Codex -> OpenAI gpt-6.2-astra
+(since 2026-11-22; gpt-6-astra before), both at xhigh. Only routes in this table get an argv or an identity level. Fail-closed: a missing primary CLI or an unrecognized
 host yields no route (failed validation, stop); no fallback.
 """
 import json
@@ -11,8 +11,9 @@ import shutil
 
 ROUTES = {  # host session -> reviewer
     # 2026-11-12 (Marcus): the reviewer follows the implementer's family, at xhigh: Claude -> Fable 5.2, Codex -> Astra
+    # 2026-11-22 (Marcus): Codex -> gpt-6.2-astra; a ChatGPT account refuses it on Codex CLI 0.165, so the CLI must be newer
     "claude": {"provider": "anthropic", "cli": "claude", "model": "claude-fable-5-2", "effort": "xhigh", "budget_control": "cli-max-budget-usd"},
-    "codex": {"provider": "openai", "cli": "codex", "model": "gpt-6-astra", "effort": "xhigh", "budget_control": None},
+    "codex": {"provider": "openai", "cli": "codex", "model": "gpt-6.2-astra", "effort": "xhigh", "budget_control": None},
 }
 HOST_FAMILY = {"claude": "anthropic", "codex": "openai"}
 # r33: the Codex reviewer gets only the context on stdin — a read-only sandbox still reads the whole disk, so no shell, web or extensions

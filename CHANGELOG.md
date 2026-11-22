@@ -6,6 +6,58 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-22
+
+A patch release for `007 lab`'s grader. A replay cell now tells a grader failure from a rejection of the candidate, without
+turning a candidate that hangs, floods its output or crashes its own suite into an invalid cell. Tasks mined by 1.10.1 carry
+`acceptance_exit_contract: "lab-accept-v1"`; sets mined before keep their embedded grader and the 1.10.0 reading until they
+are mined again. Release qualification is recorded in [the release record](evidence/v1.10.1/release-evidence.md).
+
+### Changed
+
+- The release reviewer for a Codex host is OpenAI `gpt-6.2-astra` at `xhigh` (maintainer's decision, `AGENTS.md` revision
+  2026-11-22), in place of `gpt-6-astra`. A ChatGPT account refuses this model on Codex CLI 0.165, so the route needs a newer
+  CLI; on an older one the review fails and stops, with no other model tried. The Claude route is unchanged.
+
+### Fixed
+
+- A task mined by 1.10.1 declares `acceptance_exit_contract: "lab-accept-v1"`. Under it a replay cell reads the grader's
+  exit 0 as accepted, 1 and 3 as rejected, and any other exit as `acceptance-harness-error`, an invalid cell. In 1.10.0 a
+  grader that crashed or could not start read as a rejection of the candidate. The contract also requires exactly one
+  acceptance command, checked before any agent runs. Tasks without the field keep the 1.10.0 reading.
+- `lab_accept.py` exits 3, with no report, when a suite command does not finish in time. In 1.10.0 that timeout surfaced
+  as exit 2, which under the new contract would have made a hung candidate an invalid cell and dropped it from its arm's
+  denominator. Each command still has 800 s, and the commands of one grade (`prepare` and the suite) now share one 860 s
+  deadline, so the grader stops inside the cell's 900 s and exit 3 is observable whenever start-up and teardown take under
+  40 s. A contract task whose `acceptance_timeout_s` is below 900 is refused before any agent runs. The wait keeps 1.10.0's
+  end condition (every holder of the output pipes closes them, then the child exits), so a helper left holding the output
+  is still waited for until the deadline. The deadline runs on a monotonic clock, re-read at least every second, so it
+  holds when the grader itself is stopped and continued; a suite that exited meanwhile has its waiting output drained for
+  up to a second instead of reading as hung. Exit 3 prints one line on standard error naming the command.
+- The grader's memory is bounded. Output is dropped on arrival, except that the Go adapter keeps standard output in one
+  buffer up to 64 MiB (peak memory a few times that); past the cap the run proves no pass. A repository whose
+  `go test -json` stream exceeds 64 MiB can no longer be mined or graded, where 1.10.0 read it whole. A suite's own result
+  file over 64 MiB is treated as unreadable.
+- A suite's own result file that is cut short by a crash, malformed, of the wrong shape or over the cap (node's event
+  stream, unittest's JSON, pytest's JUnit XML, a custom report) made the grader raise and exit 2, an invalid cell under the
+  contract where 1.10.0 recorded a rejection. It now grades as no result: every hidden test "error", exit 1, one line on
+  standard error. `--collect` still fails, so `mine` drops the commit rather than keep an empty baseline. The same holds
+  for a `go test -json` stream past its cap, and for a command the candidate's tree made impossible to start (its
+  directory or an in-tree runner gone, by `errno`); a missing toolchain, or a fork the host refused, stays a grader failure.
+  A result file that is not a regular file or not valid UTF-8 is unreadable too, and `hidden.json` and `baseline.json` are
+  read before the suite runs in the tree. A cell whose grader exits 3 reads its
+  outcomes as unavailable without opening the report path. Node's records split on newlines only, since `JSON.stringify`
+  leaves U+2028, U+2029 and U+0085 raw.
+- `mine` reads a reference whose suite does not finish, or whose result file is unreadable, as
+  `reference-fails-as-candidate`, not as a harness error.
+- Known limits of the contract, not closed by it: the suite runs as the grader's user and in its process group (on purpose:
+  `replay_eval` kills that whole session when the grader returns, descendants of `go test` and `node --test` included), so
+  a suite that kills the grader leaves an exit outside 0, 1 and 3 and an invalid cell (the invalid budget surfaces it). A
+  shared memory limit or a full disk can do the same when it hits the grader; when it hits the suite, the usual case, the
+  cell reads as a rejection that the invalid budget never sees. Exit 1 is read as a rejection without proof of a grade, so
+  an interpreter crash that exits 1 still reads as one. The grader needs a POSIX host (`select.poll`), as its suite
+  environment already did.
+
 ## [1.10.0] - 2026-11-16
 
 A minor release for `007 lab`, mostly corrections to the instrument. It adds a second sensitivity operator, off by default,
@@ -870,7 +922,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...v1.9.0
 [1.8.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.0...v1.8.1

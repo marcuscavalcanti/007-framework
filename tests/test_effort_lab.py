@@ -267,6 +267,90 @@ class LabEndToEnd(unittest.TestCase):
                        "arms": {e: {"provider": "none", "model": "none", "effort": e, "doctrine": ""} for e in ("medium", "high")},
                        "compare": {"candidate": "medium", "reference": "high"}, "served_identity": "requested-only"}
 
+    def test_lab_contract_rejects_wrong_command_count_before_execution(self):
+        source = self.root / "contract-preflight"
+        self.assertEqual(lab.mine(self.config, source, 2), 1)
+        config = json.loads((source / "replay-set.json").read_text())
+        original = config["tasks"][0]
+        for count in (0, 2):
+            task = {**original, "acceptance": original["acceptance"] * count}
+            with self.subTest(count=count, boundary="plan"):
+                with self.assertRaisesRegex(ValueError, "requires exactly one acceptance command"):
+                    lab.plan({**config, "tasks": [task]}, 1)
+            with self.subTest(count=count, boundary="direct"):
+                output = self.root / f"invalid-contract-{count}"
+                output.mkdir()
+                with self.assertRaisesRegex(ValueError, "requires exactly one acceptance command"):
+                    lab.replay_eval.execute_cell(config, task, "high", 1, output, 30)
+                self.assertEqual(list(output.iterdir()), [])
+        lab.plan(config, 1)
+        with self.assertRaisesRegex(ValueError, "acceptance_timeout_s of at least 900"):  # exit 3 could never show
+            lab.plan({**config, "tasks": [{**original, "acceptance_timeout_s": 600}]}, 1)
+        # No contract means existing generic multi-command semantics are unchanged.
+        legacy = {**original, "acceptance": original["acceptance"] * 2}
+        legacy.pop("acceptance_exit_contract")
+        lab.plan({**config, "tasks": [legacy]}, 1)
+
+    def test_lab_oracle_error_is_invalid_but_candidate_rejection_is_valid(self):
+        source = self.root / "contract-classification"
+        self.assertEqual(lab.mine(self.config, source, 2), 1)
+        manifest = json.loads((source / "replay-set.json").read_text())
+        original = manifest["tasks"][0]
+        self.assertEqual(original["acceptance_exit_contract"], "lab-accept-v1")
+        real_acceptance = lab.replay_eval.acceptance
+
+        def hung(*args, **kwargs):  # lab_accept's exit when a suite command does not finish in time (800 s: not run here)
+            checks, _ = real_acceptance(*args, **kwargs)  # the real grade leaves an all-pass report the exit 3 must not read
+            assert json.loads(Path(args[3]["ACCEPT_REPORT"]).read_text())
+            return [{**checks[0], "exit": 3}], False
+        for name, oracle_exit, valid, accepted in (
+                ("accept", 0, True, True), ("reject", 1, True, False),
+                ("broken", 2, False, False), ("legacy", 2, True, False), ("hung", 3, True, False)):
+            with self.subTest(name=name):
+                task = json.loads(json.dumps(original))
+                config = json.loads(json.dumps(manifest))
+                if name in ("broken", "legacy"):
+                    task["acceptance"][0][-1] += ".missing"
+                if name == "legacy":
+                    task.pop("acceptance_exit_contract")
+                if name == "reject":
+                    config["agent_command"][-2] = "def add(a, b):\n    return -887\n"
+                output = self.root / name
+                output.mkdir()
+                with mock.patch.object(lab.replay_eval, "acceptance", side_effect=hung if name == "hung" else real_acceptance):
+                    row = lab.replay_eval.execute_cell(config, task, "high", 1, output, 30)
+                self.assertEqual([check["exit"] for check in row["acceptance"]], [oracle_exit])
+                self.assertEqual((row["valid"], row["accepted"]), (valid, accepted))
+                self.assertEqual(row["failure_class"], "none" if valid else "acceptance-harness-error")
+                if name == "hung":
+                    self.assertEqual(row["acceptance_outcomes"], "unavailable")
+        broken = json.loads(json.dumps(manifest))
+        broken["tasks"][0]["acceptance"][0][-1] += ".missing"
+        config_path = source / "broken.json"
+        config_path.write_text(json.dumps(broken))
+        result = lab.run(config_path, self.root / "controlled", replicates=1, jobs=1,
+                         chunk=1, max_calls=2, max_usd=10, stop_usd=1, max_invalid=1)
+        self.assertEqual({k: result[k] for k in ("calls", "invalid", "stop")},
+                         {"calls": 1, "invalid": 1, "stop": "invalid-budget"})
+
+    def test_a_real_exit_3_that_leaves_descendants_is_a_valid_rejection(self):
+        """r2 should-fix 6: the grader exits 3 while a grandchild (as under `go test`) still runs; replay_eval's session cleanup
+        kills it, so the cell reaches the contract as a valid rejection, not CleanupIncomplete or a harness error."""
+        source = self.root / "contract-real-exit-3"
+        self.assertEqual(lab.mine(self.config, source, 2), 1)
+        config = json.loads((source / "replay-set.json").read_text())
+        task = json.loads(json.dumps(config["tasks"][0]))
+        stub = ("import subprocess, sys\n"
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+                "sys.exit(3)\n")
+        task["acceptance"] = [[sys.executable, "-c", stub]]
+        output = self.root / "real-exit-3"
+        output.mkdir()
+        row = lab.replay_eval.execute_cell(config, task, "high", 1, output, 30)
+        self.assertEqual([check["exit"] for check in row["acceptance"]], [3])
+        self.assertEqual((row["valid"], row["accepted"], row["failure_class"]), (True, False, "none"))
+        self.assertEqual(row["acceptance_outcomes"], "unavailable")
+
     def test_mine_pairs_a_commit_with_its_next_change(self):
         out = self.root / "lab"
         self.assertEqual(lab.mine(self.config, out, 2), 1)
@@ -550,6 +634,13 @@ class LabEndToEnd(unittest.TestCase):
         drops = {json.loads(l)["sha"]: json.loads(l).get("drop") for l in (out / "mine.jsonl").read_text().splitlines()}
         self.assertTrue(drops[self.sha].startswith("AcceptanceHarnessError"), drops)  # with its message when the set keeps diagnostic text
         self.assertEqual(list((out / "tasks").glob("*")), [])
+
+    def test_a_reference_whose_suite_hangs_fails_as_a_candidate(self):
+        out = self.root / "lab"
+        with mock.patch.object(lab.replay_eval, "acceptance", side_effect=lambda *a, **k: ([{"exit": 3}], False)):
+            self.assertEqual(lab.mine(self.config, out, 2), 0)
+        drops = {json.loads(l)["sha"]: json.loads(l).get("drop") for l in (out / "mine.jsonl").read_text().splitlines()}
+        self.assertEqual(drops[self.sha], "reference-fails-as-candidate")
 
     def test_a_failing_next_reference_is_named_as_such(self):
         out = self.root / "lab"

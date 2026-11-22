@@ -1,21 +1,32 @@
 """Per-test acceptance for `007 lab`. Stdlib only: it is copied into each candidate tree and runs inside the acceptance sandbox.
 
 Accepted = every hidden test passes and no baseline test regresses (key "__module__"). A test whose class, module or package
-fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed.
+fails outside any test reads "error", not "pass". No test output is kept. Exit 0 accepted, 1 rejected, 2 the grader failed,
+3 a suite command did not finish in time (a rejection: the candidate's code hung; no report is written). A suite's own result
+file that cannot be read (cut short by a crash) grades as no result: a rejection, or exit 2 under --collect.
 Usage: lab_accept.py --collect lab.json | lab_accept.py lab.json hidden.json baseline.json   (ACCEPT_REPORT names the report; optional when grading)
 """
 import contextlib
+import errno
 import json
 import os
 from pathlib import Path
+import select
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import xml.etree.ElementTree as ElementTree
 
-TIMEOUT_S = 800
+TIMEOUT_S = 800  # one suite command
+GRADE_S = 860  # every command of one grade together: a cell allows 900 s, so start-up and teardown keep 40 s and exit 3 shows
+GRACE_S = 1.0  # past a deadline, a suite that already exited has its waiting output drained this long, so it is not read as hung
+MAX_STDOUT = 64 << 20  # only `go test -json` keeps stdout, in one buffer; past this the run proves no pass (peak RAM a few times this)
+MAX_REPORT = 64 << 20  # a suite's own result file past this proves nothing, as a cut one
+_grade_deadline = None  # set by _main for the whole grade; _run alone (tests) uses TIMEOUT_S only
 NODE_REPORTER = """export default async function* (source) {
   for await (const e of source) {
     if (e.type !== 'test:pass' && e.type !== 'test:fail') continue;
@@ -55,8 +66,117 @@ json.dump([out, broken], open(sys.argv[1], "w"))
 """
 
 
-def _run(argv, cwd, env):
-    return subprocess.run(argv, cwd=cwd, env=env, capture_output=True, timeout=TIMEOUT_S)
+class SuiteTimeout(Exception):
+    """A suite command did not finish by TIMEOUT_S. The candidate's code hung: a rejection (exit 3), not a grader failure."""
+
+
+class ReportUnreadable(Exception):
+    """The suite's own result file (or `go test -json` stream) is cut or malformed: the run proves no outcome. Grading reads it as
+    no result, a rejection; --collect fails (exit 2), so `mine` drops the commit instead of keeping an empty baseline. Also raised
+    when the candidate's tree makes a command impossible to start (its directory or an in-tree executable gone)."""
+
+
+_TREE_ERRNOS = {errno.ENOENT, errno.ENOTDIR, errno.EACCES, errno.ENOEXEC, errno.ELOOP, errno.ENAMETOOLONG}
+
+
+def _spawn(argv, cwd, env):
+    """Popen; a start failure the candidate's tree caused (cwd gone, an in-tree relative executable gone or not executable) is
+    no result, a rejection. A missing toolchain on PATH or an absolute path stays a grader failure (exit 2): reading it as a
+    rejection would reject every candidate, the 0/124 failure."""
+    try:
+        return subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as error:
+        first = str(argv[0]) if argv else ""
+        tree_made = error.errno in _TREE_ERRNOS  # EAGAIN, ENOMEM, EMFILE...: the host failed, not the candidate
+        if tree_made and (not Path(cwd).is_dir() or ("/" in first and not first.startswith("/"))):
+            raise ReportUnreadable(f"start {Path(first).name}") from None
+        raise
+
+
+def _run(argv, cwd, env, *, keep_stdout=False):
+    """`subprocess.run(capture_output=True, timeout=TIMEOUT_S)` with the same end: both pipes closed by every holder, then the
+    child's exit, so a helper the suite leaves holding its output is waited for until the deadline, as in 1.10.0. Two changes:
+    output is read and dropped on arrival, except stdout with `keep_stdout`, kept in one buffer up to MAX_STDOUT, so a suite
+    that prints without end cannot exhaust memory; the deadline is wall time on a monotonic clock, polled in slices of at most
+    one second, so it also expires while the grader itself is stopped and continued. A grade's commands also share
+    `_grade_deadline`. The suite stays in the grader's process group on purpose: `replay_eval.run` kills that whole session
+    when the grader returns, descendants of `go test` and `node --test` included. POSIX only (`select.poll`), as the suite
+    environment already was."""
+    process = _spawn(argv, cwd, env)
+    deadline = time.monotonic() + TIMEOUT_S  # from the start of the child, as subprocess.run's timeout
+    if _grade_deadline is not None:
+        deadline = min(deadline, _grade_deadline)
+    out_fd, kept, truncated = process.stdout.fileno(), bytearray(), False
+    streams = {process.stdout.fileno(): process.stdout, process.stderr.fileno(): process.stderr}
+    try:
+        poller = select.poll()
+        for fd in streams:
+            poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        drain_until = None
+        while streams:
+            now = time.monotonic()
+            if now >= deadline and drain_until is None:
+                if process.poll() is None:  # still running at its deadline: hung
+                    raise SuiteTimeout(argv[0])
+                drain_until = now + GRACE_S  # it finished (the grader was stopped or busy): read what is waiting, briefly
+            if drain_until is not None and now >= drain_until:
+                raise SuiteTimeout(argv[0])  # a helper still holds the output past the deadline, as in 1.10.0
+            events = poller.poll(max(min((drain_until or deadline) - now, 1.0), 0) * 1000)
+            for fd, _ in events:
+                chunk = os.read(fd, 1 << 16)
+                if not chunk:
+                    poller.unregister(fd)
+                    streams.pop(fd).close()
+                elif fd == out_fd and keep_stdout and not truncated:
+                    room = MAX_STDOUT - len(kept)
+                    kept += chunk[:room]
+                    truncated = len(chunk) > room
+        while True:  # pipes closed, child maybe still running: re-read the deadline at least every second
+            try:
+                returncode = process.wait(timeout=min(max(deadline - time.monotonic(), 0.05), 1.0))
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    raise SuiteTimeout(argv[0]) from None
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        for stream in streams.values():
+            stream.close()
+    result = subprocess.CompletedProcess(argv, returncode, kept, b"")
+    result.stdout_truncated = truncated
+    return result
+
+
+def _lines(data):
+    """The lines of `data`, one at a time: a list of millions of short lines would cost far more than the bytes."""
+    start = 0
+    while start < len(data):
+        end = data.find(b"\n", start)
+        end = len(data) if end < 0 else end
+        yield data[start:end]
+        start = end + 1
+
+
+def _read(path, adapter):
+    """A suite's own result file as text, or None when absent. Not a regular file, past MAX_REPORT, unreadable or not valid
+    UTF-8 (a stream cut inside a character), it proves nothing."""
+    try:
+        if not os.path.lexists(path):
+            return None
+        # O_NONBLOCK: opening a FIFO for reading would wait for a writer forever; one handle for the check and the read
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ReportUnreadable(adapter)  # a FIFO or device reports size 0 and could be read without end
+            data = handle.read(MAX_REPORT + 1)  # a file still growing is bounded too
+        if len(data) > MAX_REPORT:
+            raise ReportUnreadable(adapter)
+        return data.decode("utf-8")  # strict: replacement could merge two ids that differ only in the bad bytes
+    except (OSError, UnicodeDecodeError):
+        raise ReportUnreadable(adapter) from None
 
 
 def _worst(final, key, outcome):
@@ -86,12 +206,18 @@ def node(root, cwd, config, env, scratch):
     result = _run([shutil.which("node", path=env["PATH"]), "--test", "--test-concurrency=4", "--test-timeout=120000", f"--test-reporter={reporter}",
           f"--test-reporter-destination={events}", *tests], cwd, env)
     final, broken, prefix = {}, set(), str(root.resolve()) + "/"
-    for line in events.read_text().splitlines() if events.exists() else []:
-        e = json.loads(line)
-        clean = lambda text: text.replace(prefix, "").replace(str(root) + "/", "")
-        _worst(final, f"{clean(e.get('f') or '?')} :: {e['d']} :: {clean(e['n'])}", e["o"])
-        if e.get("b"):
-            broken.add(f"{clean(e.get('f') or '?')} :: ")
+    text = _read(events, "node") or ""
+    clean = lambda value: value.replace(prefix, "").replace(str(root) + "/", "")
+    for line in text.split("\n"):  # JSON.stringify leaves U+2028, U+2029 and U+0085 raw: only "\n" ends a record
+        if not line:
+            continue
+        try:  # a cut stream (the runner died mid-write) or a record of the wrong shape proves nothing
+            e = json.loads(line)
+            _worst(final, f"{clean(e.get('f') or '?')} :: {e['d']} :: {clean(e['n'])}", e["o"] if isinstance(e["o"], str) else "error")
+            if e.get("b"):
+                broken.add(f"{clean(e.get('f') or '?')} :: ")
+        except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+            raise ReportUnreadable("node") from None
     return _process_status(_charge(final, broken), result)
 
 
@@ -99,7 +225,14 @@ def unittest_(root, cwd, config, env, scratch):
     report = scratch / "unittest.json"
     pattern = Path(config["tests"]).name
     result = _run([sys.executable, "-B", "-c", UNITTEST_RUNNER, str(report), str(root), str(Path(config["tests"]).parent), pattern], cwd, env)
-    out, broken = json.loads(report.read_text()) if report.exists() else ({}, [])
+    text = _read(report, "unittest")
+    try:
+        out, broken = json.loads(text) if text is not None else ({}, [])
+        if not isinstance(out, dict) or not all(isinstance(b, str) for b in broken):
+            raise TypeError
+        out = {k: v if isinstance(v, str) else "error" for k, v in out.items()}
+    except (ValueError, TypeError, RecursionError):
+        raise ReportUnreadable("unittest") from None
     return _process_status(_charge(out, broken), result, failure_exit=None)  # this child normally exits 0 even for red tests
 
 
@@ -107,20 +240,28 @@ def pytest(root, cwd, config, env, scratch):
     report = scratch / "junit.xml"
     result = _run([sys.executable, "-m", "pytest", "-q", "-o", "junit_family=xunit1", f"--junitxml={report}", config["tests"]], cwd, env)
     final = {}
-    if report.exists():
-        for case in ElementTree.parse(report).getroot().iter("testcase"):
-            bad = case.find("failure") is not None or case.find("error") is not None
-            _worst(final, f"{case.get('file', '?')} :: 0 :: {case.get('classname')}.{case.get('name')}", "fail" if bad else "skip" if case.find("skipped") is not None else "pass")
+    text = _read(report, "pytest")
+    try:
+        cases = list(ElementTree.fromstring(text).iter("testcase")) if text is not None else []
+    except ElementTree.ParseError:
+        raise ReportUnreadable("pytest") from None
+    for case in cases:
+        bad = case.find("failure") is not None or case.find("error") is not None
+        _worst(final, f"{case.get('file', '?')} :: 0 :: {case.get('classname')}.{case.get('name')}", "fail" if bad else "skip" if case.find("skipped") is not None else "pass")
     return _process_status(final, result)
 
 
 def go(root, cwd, config, env, scratch):
-    result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env)
+    result = _run([shutil.which("go", path=env["PATH"]), "test", "-json", config["tests"]], cwd, env, keep_stdout=True)
+    if getattr(result, "stdout_truncated", False):  # events past the cap are lost: no pass in this run is proven
+        raise ReportUnreadable("go")
     final, failed, red, unexplained, seen, completed, active = {}, set(), set(), set(), set(), set(), set()
-    for line in result.stdout.decode(errors="replace").splitlines():
+    for line in _lines(result.stdout):
         try:
-            e = json.loads(line)
-        except ValueError:
+            e = json.loads(line.decode(errors="replace"))
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(e, dict):
             continue
         if e.get("Action") == "run" and e.get("Test"):
             seen.add(e["Package"])
@@ -152,7 +293,13 @@ def custom(root, cwd, config, env, scratch):
     """config["command"] writes {test id: pass|fail|skip} to $LAB_RAW_REPORT."""
     raw = scratch / "raw.json"
     result = _run(config["command"], cwd, {**env, "LAB_RAW_REPORT": str(raw)})
-    final = json.loads(raw.read_text()) if raw.exists() else {}
+    text = _read(raw, "custom")
+    try:
+        final = json.loads(text) if text is not None else {}
+    except (ValueError, RecursionError):
+        raise ReportUnreadable("custom") from None
+    if not isinstance(final, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in final.items()):
+        raise ReportUnreadable("custom")
     return _process_status(final, result)
 
 
@@ -171,13 +318,30 @@ def suite(root, config, scratch):
 
 
 def _main(argv, report):
+    global _grade_deadline
+    _grade_deadline = time.monotonic() + GRADE_S
+    try:
+        return _graded(argv, report)
+    finally:
+        _grade_deadline = None
+
+
+def _graded(argv, report):
     root, collect = Path.cwd(), argv[0] == "--collect"
     config = json.loads(Path(argv[1 if collect else 0]).read_text())
-    final = suite(root, config, report.parent / "lab")
+    # read before the suite runs in this tree: nothing it does to these files can change what is graded
+    hidden, baseline = ([], []) if collect else (json.loads(Path(p).read_text()) for p in argv[1:3])
+    try:
+        final = suite(root, config, report.parent / "lab")
+    except ReportUnreadable as unreadable:
+        if collect:
+            raise  # exit 2: a baseline is never collected from a run that proves nothing
+        print(f"lab_accept: {unreadable} result unreadable, graded as no result", file=sys.stderr)
+        report.write_text(json.dumps({**{name: "error" for name in hidden}, "__module__": "fail"}, sort_keys=True))
+        return 1  # a rejection even when nothing is hidden: no grade was made
     if collect:
         report.write_text(json.dumps(final))
         return 0
-    hidden, baseline = (json.loads(Path(p).read_text()) for p in argv[1:3])
     result = {name: final.get(name, "error") for name in hidden}
     result["__module__"] = "fail" if any(final.get(name) != "pass" for name in baseline) else "pass"
     report.write_text(json.dumps(result, sort_keys=True))
@@ -185,8 +349,18 @@ def _main(argv, report):
 
 
 def main(argv):
-    """0 accepted, 1 rejected, 2 the grader itself failed. `mine` reads 2 as a harness error; a replay cell records any non-zero
-    exit as not accepted, with the code, as before."""
+    """0 accepted, 1 rejected, 2 the grader itself failed, 3 a suite command did not finish (rejected, no report). Under the
+    `lab-accept-v1` contract a replay cell reads 0, 1 and 3 as verdicts and any other exit as a harness error; without the
+    contract it records any non-zero exit as not accepted, as before. `mine` reads 2 as a harness error."""
+    try:
+        return _grade(argv)
+    except SuiteTimeout as timeout:  # the command's name only: its arguments can carry paths
+        print(f"lab_accept: {Path(str(timeout)).name} did not finish within its deadline ({TIMEOUT_S} s per command,"
+              f" {GRADE_S} s per grade)", file=sys.stderr)
+        return 3
+
+
+def _grade(argv):
     named = os.environ.get("ACCEPT_REPORT")
     if named:  # the lab's own path: no temporary directory, as in 1.9.0 (an exact environment may leave none writable)
         return _main(argv, Path(named))
