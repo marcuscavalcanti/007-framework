@@ -41,6 +41,7 @@ import tokenize
 import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cli_telemetry  # noqa: E402
 import commit_replay  # noqa: E402
 import harness_report  # noqa: E402
 import replay_eval  # noqa: E402
@@ -916,21 +917,44 @@ def _controller_failure(out, task, arm, rep, error, retain=True):
 RATE_LIMIT_COOLDOWN_S = 600
 
 
-def refused(out, cid):
-    """The provider refused the call: its receipt names a rate limit and reports no usage. It is still charged as any invalid cell
-    (its receipt cost, else the --stop-usd reserve), but it does not count toward --max-invalid and it pauses the run. A limit can
-    be per model, so it can hit one arm more than the other: the report counts refused cells per arm."""
+def _receipt(out, cid):
+    """The cell's runner receipt as an object, or {} when it is absent, unreadable or not an object (it names no refusal)."""
     receipt = out / f"{cid}.runner.json"
     try:
         value = json.loads(receipt.read_text()) if receipt.is_file() else {}
     except (OSError, ValueError):
-        return False
-    if not isinstance(value, dict):  # a receipt that is JSON but not an object names no refusal
-        return False
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def usage_limit(out, cid):
+    """{"source", "resets_at"} when the Claude account's usage limit stopped the call, else None. native_runner writes the
+    receipt's `usage_limit` from the stream only: the CLI's "usage limit reached" result or a rejected rate_limit_event, with the
+    reset time the provider gave (Unix seconds) or None."""
+    value = _receipt(out, cid)
+    limit = value.get("usage_limit")
+    if value.get("problem") != "native-error-rate-limit" or not isinstance(limit, dict) or limit.get("source") not in ("result", "rate-limit-event"):
+        return None
+    return {"source": limit["source"], "resets_at": cli_telemetry.reset_epoch(limit.get("resets_at"))}
+
+
+def refused(out, cid):
+    """The provider refused the call: its receipt names a rate limit and reports no usage, or names the Claude account's usage
+    limit (`usage_limit`), which also covers a call the limit cut after the agent had worked. It is still charged as any invalid
+    cell (its receipt cost, else the --stop-usd reserve), but it does not count toward --max-invalid and it pauses the run. A limit
+    can be per model, so it can hit one arm more than the other: the report counts refused cells per arm."""
+    value = _receipt(out, cid)
     usage = value.get("usage")
     # no usage: absent, or every count zero (the real Claude runner writes a zero-filled one for a refused call)
     unused = not usage or isinstance(usage, dict) and all(type(n) is int and n == 0 for n in usage.values())
-    return value.get("problem") == "native-error-rate-limit" and unused
+    return value.get("problem") == "native-error-rate-limit" and (unused or usage_limit(out, cid) is not None)
+
+
+def contaminated(row):
+    """The cell's stream touched a protected path (replay_eval.scan_stream). It stays invalid as `contaminated` even when the
+    provider also refused the call: the label that excludes a cell for what the agent read wins over the one that requeues it."""
+    scan = row.get("contamination")
+    return row.get("failure_class") == "contaminated" or isinstance(scan, dict) and scan.get("status") == "contaminated"
 
 
 def cost_of(out, cid, row):
@@ -1195,7 +1219,7 @@ def quota_check(config, out, left):
     Appends the decision to quota.jsonl."""
     validate_quota_probe(config)
     probe = config["quota_probe"]
-    events, exit_code, cost = [], None, None
+    events, exit_code, cost, limited, resets = [], None, None, False, []
     try:
         with tempfile.TemporaryDirectory(prefix="007-quota-") as scratch:
             done = subprocess.run(probe["command"], cwd=scratch, capture_output=True, text=True, timeout=QUOTA_TIMEOUT_S, stdin=subprocess.DEVNULL)
@@ -1207,14 +1231,25 @@ def quota_check(config, out, left):
                 continue
             if isinstance(row, dict) and row.get("type") == "rate_limit_event" and isinstance(row.get("rate_limit_info"), dict):
                 events.append(row["rate_limit_info"])
+                if row["rate_limit_info"].get("status") == "rejected":
+                    resets.append(cli_telemetry.reset_epoch(row["rate_limit_info"].get("resetsAt")))
+            if isinstance(row, dict) and row.get("type") == "result" and row.get("is_error") is not False and isinstance(row.get("result"), str):
+                found = cli_telemetry.CLAUDE_USAGE_LIMIT.search(row["result"])  # the probe's own call hit the account's limit
+                if found:
+                    limited = True
+                    resets.append(cli_telemetry.reset_epoch(int(found[1])) if found[1] else None)
             if isinstance(row, dict) and row.get("type") == "result" and harness_report._valid_money(row.get("total_cost_usd")):
                 cost = row["total_cost_usd"]  # the probe is a real call: its cost joins the run's spend
     except (OSError, subprocess.TimeoutExpired) as error:
         exit_code = type(error).__name__
     ok, reason, used = quota_judge(events, left, tuple(probe.get("windows", ("seven_day",))), probe.get("need", .60), probe.get("ceiling", .95))
+    if limited:  # the reading that names the limit, never "no rate_limit_event"; and a probe the limit stopped never passes
+        ok, reason = False, "usage limit reached"
+    known = [r for r in resets if r is not None]
     with (out / "quota.jsonl").open("a") as handle:
         handle.write(json.dumps({"at": _now(), "ok": ok, "reason": reason, "utilization": used, "cells_left_share": left,
-                                 "probe_exit": exit_code, "probe_cost_usd": cost, "events": events}) + "\n")
+                                 "probe_exit": exit_code, "probe_cost_usd": cost, "events": events,
+                                 "resets_at": max(known) if known else None}) + "\n")
     return ok, reason, cost
 
 
@@ -1378,6 +1413,11 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     refusals = [row for row in history if "finished_at" in row and row.get("refused") is True]
     remaining = any(replay_eval.cell_id(t, a, r) not in done for t, r, a in cells)
+    # a Claude usage limit lasts until the reset its refusal named, not 10 minutes: hold until then, as a failed quota gate does
+    resets = [row["resets_at"] for row in refusals if row.get("usage_limit") is True and cli_telemetry.reset_epoch(row.get("resets_at"))]
+    if resets and remaining and max(resets) > datetime.now(timezone.utc).timestamp():
+        return {"stop": "quota-hold", "calls": 0, "resets_at": max(resets),
+                "retry_after_s": math.ceil(max(resets) - datetime.now(timezone.utc).timestamp())}
     if refusals and remaining:  # resuming inside the outage would only lose cells to it (the newest refusal counts); a finished run has none to lose
         age = (datetime.now(timezone.utc) - max(harness_report._instant(row["finished_at"]) for row in refusals)).total_seconds()
         if age < RATE_LIMIT_COOLDOWN_S:
@@ -1437,7 +1477,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     arm_of = {cell_name(c): c[2] for c in cells}
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
     refused_per_arm = {arm: 0 for arm in config["arms"]}
-    over, requeued = 0, 0
+    over, requeued, limit_resets = 0, 0, None
 
     def charge(cost):
         nonlocal spent, stop
@@ -1560,7 +1600,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                     for future in finished:
                         cell, row = future.result()
                         cid = cell_name(cell)
-                        rate_limited = row.get("valid") is not True and refused(out, cid)
+                        rate_limited = row.get("valid") is not True and not contaminated(row) and refused(out, cid)
+                        limit = usage_limit(out, cid) if rate_limited else None
                         if rate_limited:
                             row = {**row, "failure_class": "provider-rate-limit", "failure_class_observed": row.get("failure_class")}
                             with tempfile.NamedTemporaryFile("w", dir=out, prefix=f".{cid}.", delete=False) as handle:
@@ -1569,7 +1610,12 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                                 os.fsync(handle.fileno())
                             os.replace(handle.name, out / f"{cid}.json")
                             refused_per_arm[cell[2]] += 1
-                            stop = "rate-limit" if stop in (None, "call-budget") else stop  # a pause outranks a planned call budget
+                            if limit:  # the account's limit: no cell is dispatched again before its reset, as on a failed quota gate
+                                stop = "quota-hold" if stop in (None, "call-budget", "rate-limit") else stop
+                                if limit["resets_at"]:
+                                    limit_resets = max(limit_resets or 0, limit["resets_at"])
+                            else:
+                                stop = "rate-limit" if stop in (None, "call-budget") else stop  # a pause outranks a planned call budget
                         cost = cost_of(out, cid, row)
                         again = rate_limited and options["requeue_refused"]
                         if again:  # dispatched again after the pause; its files kept under refused/
@@ -1579,7 +1625,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                             done.add(cid)
                         with lock, ledger.open("a") as handle:
                             handle.write(json.dumps({"cell": cid, "finished_at": _now(), "cost_usd": cost, "valid": row.get("valid"),
-                                                     **({"refused": True} if rate_limited else {}), **({"requeued": True} if again else {})}) + "\n")
+                                                     **({"refused": True} if rate_limited else {}), **({"requeued": True} if again else {}),
+                                                     **({"usage_limit": True, "resets_at": limit["resets_at"]} if limit else {})}) + "\n")
                         invalid += row.get("valid") is not True and not rate_limited
                         if cost is None and row.get("valid") is True:
                             stop = "cost-unavailable"
@@ -1601,7 +1648,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         (out / "STOP.json").write_text(json.dumps({"stop": stop, "at": _now(), "spent": spent, "calls": calls}))
     return {"stop": stop, "calls": calls, "spent": spent, "invalid": invalid, "refused": sum(refused_per_arm.values()),
             "refused_per_arm": refused_per_arm, "requeued": requeued, "over_limit_cells": over, "cells": len(cells),
-            "quota_probe_usd": probe_usd, "quota_probes_unmeasured": probe_unmeasured}
+            "quota_probe_usd": probe_usd, "quota_probes_unmeasured": probe_unmeasured, **({"resets_at": limit_resets} if limit_resets else {})}
 
 
 # ---- score and report
@@ -2549,7 +2596,8 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     valid = sum(r["valid"] is True for r in rows) + sum(r["valid"] is True for r in following)
     tier = verdict(c, ci["durable_diff_ci95"], valid=valid, tasks=len(tasks), split_tasks=split, sensitive=sense["passed"],
                    accepted_share=sum(r["accepted"] for r in rows) / len(rows), next_share=sum(r["accepted"] for r in following) / max(1, len(following)))
-    reasoning = {a: statistics.median(r["usage"]["reasoning_output_tokens"] for r in rows if r["arm"] == a) for a in (low, ref)}
+    tokens = {a: [r["usage"]["reasoning_output_tokens"] for r in rows if r["arm"] == a] for a in (low, ref)}
+    reasoning = {a: statistics.median(v) if v else None for a, v in tokens.items()}  # an arm with no valid cell has no median
     faster = sum(per_task[t][low]["agent_wall_s"] < per_task[t][ref]["agent_wall_s"] for t in tasks)
     hidden = {t: [k for k in json.loads((config_path.parent / "tasks" / t / "hidden.json").read_text()) if k != "__module__"] for t in tasks}
     tests = unseen(rows, hidden, low, ref)
@@ -2578,6 +2626,10 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     tier["refused_unequal"] = len({a.get("refused", 0) for a in accounting["arms"].values()}) > 1
     tier["next_run_binding"] = stage2["state"] if stage2 else None
     tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, margin, critical=math.inf if critical is None else critical)
+    # an arm with no valid cell pairs no task: the verdict is NO-INFORMATION, and the report says why instead of a bare default
+    tier["arms_without_valid_cells"] = [a for a in (low, ref) if not tokens[a]]
+    if tier["arms_without_valid_cells"]:  # nor time, durability or rework: an empty arm's zero wall time would read as no rework
+        tier.update(thesis="UNPROVEN", same_change_reachable="NO-INFORMATION", time="NO-INFORMATION", durability="NO-INFORMATION", rework_ok=None)
     proof = {"critical": critical, "statistic": studentized(diffs, margin) if len(diffs) > 1 else None,
              "t975": t975(len(diffs) - 1) if len(diffs) > 1 else None, "t_false_proven": false_proven(rows, task_dir, low, ref, config["seed"], margin, reach=frozen_reach)}
     if tier["same_change_reachable"] == "KILL":
@@ -2678,6 +2730,7 @@ def summary(result, low, ref, attempts):
     interval = f" (mean {points(r['mean'])} points, 95% interval {points(r['ci95'][0])} to {points(r['ci95'][1])}, {r['tasks']} commits)" if r.get("ci95") else ""
     saving = f"{100 * c['reduction']:.0f}% less agent time per accepted change" if c["reduction"] is not None else "agent time not comparable"
     reasoning = result["median_reasoning_tokens"]
+    tokens = lambda value: "none (no valid cell)" if value is None else f"{value:.0f}"
     sealed = result.get("run_manifest")  # absent from reports written before 1.8
     binding = {"sealed": "the set, the agent command's sealed files, 007 and Python matched the seal, made before the first dispatch, each time the run started or resumed",
                "sealed-late": "sealed only after some attempts had run: those earlier attempts are not bound to it",
@@ -2698,7 +2751,10 @@ def summary(result, low, ref, attempts):
         *(["**Oracle-suspect:** an oracle alarm is open. The verdict below is computed as usual but is not a clean verdict until a person "
            "acknowledges the alarm (`007 lab status --ack-oracle REASON`).", ""]
           if result.get("verdict", {}).get("oracle_suspect") else []),
-        f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {reasoning[low]:.0f} vs {reasoning[ref]:.0f}.",
+        *([f"- **No comparison:** {' and '.join(f'`{a}`' for a in empty)} {'has' if len(empty) == 1 else 'have'} no valid cell, so no task "
+           "pairs the arms and every verdict below reads NO-INFORMATION or UNPROVEN for that reason, not for the arms' behaviour."]
+          if (empty := tier.get("arms_without_valid_cells")) else []),
+        f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {tokens(reasoning[low])} vs {tokens(reasoning[ref])}.",
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
         *([f"- **Run binding:** {binding}."] if binding else []),

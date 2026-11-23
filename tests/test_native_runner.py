@@ -221,7 +221,9 @@ class NativeRunnerTests(unittest.TestCase):
                 second = effort_lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=9, stop_usd=1, requeue_refused=True)
         finally:
             os.environ.pop("FAKE_MODE") if old is None else os.environ.update(FAKE_MODE=old)
-        self.assertEqual((first["stop"], first["refused"], first["requeued"], first["spent"]), ("rate-limit", 1, 1, 0.0))
+        # 1.11.0: a usage limit holds like a failed quota gate, until the reset its result named (here past, so the resume runs)
+        self.assertEqual((first["stop"], first["refused"], first["requeued"], first["spent"]), ("quota-hold", 1, 1, 0.0))
+        self.assertEqual(first["resets_at"], 1795039200)
         self.assertEqual((second["stop"], second["calls"], second["spent"]), (None, 1, 0.01))
         kept = {p.name for p in (out / "refused").iterdir()}  # the refused attempt's files, nothing deleted
         self.assertLessEqual({"t1-r01-claude.1.json", "t1-r01-claude.1.runner.json", "t1-r01-claude.1.stream.jsonl"}, kept)

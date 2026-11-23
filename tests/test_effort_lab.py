@@ -515,6 +515,40 @@ class LabEndToEnd(unittest.TestCase):
         chained = lab.chain(path, results, self.root / "stage2-skip")
         self.assertIn(f"{first}-r01-high", chained["broken"])
 
+    def test_an_arm_without_a_valid_cell_is_reported_with_its_reason_instead_of_raising(self):
+        # 1.11.0: the median reasoning tokens of an empty arm raised statistics.StatisticsError and no report was written
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path = out / "replay-set.json"
+        lab.sensitivity(path, 2)
+        for dead in ("medium", "high", None):
+            with self.subTest(dead=dead):
+                results = self.root / f"results-{dead}"
+
+                def failing(config, task, arm, rep, out_, timeout):
+                    if arm == dead:
+                        raise RuntimeError("snapshot refused")
+                    return lab.replay_eval.execute_cell(config, task, arm, rep, out_, timeout)
+                lab.run(path, results, replicates=2, jobs=1, max_calls=9, max_usd=10, stop_usd=1, max_invalid=9, execute=failing)
+                result = lab.report(path, results, None, missing_data_guard_reserve=1.0, planned_replicates=2)
+                tier, text = result["verdict"], (results / "report.md").read_text()
+                if dead is None:  # both arms valid: the new label is empty and the verdict is computed as before
+                    self.assertEqual(tier["arms_without_valid_cells"], [])
+                    self.assertNotIn("No comparison", text)
+                    continue
+                self.assertEqual({k: tier[k] for k in ("arms_without_valid_cells", "same_change_reachable", "thesis", "time", "durability", "rework_ok")},
+                                 {"arms_without_valid_cells": [dead], "same_change_reachable": "NO-INFORMATION", "thesis": "UNPROVEN",
+                                  "time": "NO-INFORMATION", "durability": "NO-INFORMATION", "rework_ok": None})
+                self.assertIsNone(result["median_reasoning_tokens"][dead])
+                self.assertEqual(result["missing_data_guard"]["verdict"], "NO-INFORMATION")
+                self.assertIn(f"**No comparison:** `{dead}` has no valid cell", text)
+                self.assertIn("none (no valid cell)", text)
+        with self.assertRaisesRegex(ValueError, "no valid cells to report"):  # no arm at all: still an explicit refusal
+            results = self.root / "results-all"
+            lab.run(path, results, replicates=1, jobs=1, max_calls=9, max_usd=10, stop_usd=1, max_invalid=9,
+                    execute=lambda *a: (_ for _ in ()).throw(RuntimeError("snapshot refused")))
+            lab.report(path, results, None)
+
     def test_report_uses_the_shared_classifier_for_receipt_like_arm_names(self):
         self.config["arms"]["high.runner"] = self.config["arms"].pop("high")
         self.config["compare"]["reference"] = "high.runner"

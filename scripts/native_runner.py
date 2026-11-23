@@ -205,6 +205,8 @@ def main(argv=None):
              "problem": result["problem"], "settings_sha256": settings_digest}  # pilot cell 3: fixed telemetry code (e.g. native-error), never stream content
     if digest is not None:
         value["price_table_sha256"] = digest
+    if result.get("usage_limit") and result["problem"] == "native-error-rate-limit":  # the account's limit stopped the call: source, reset time
+        value["usage_limit"] = result["usage_limit"]
     if result["continuations"]:
         value["continuations"] = result["continuations"]  # turns the CLI reopened for a background task (counted in usage)
     if copy is not None:

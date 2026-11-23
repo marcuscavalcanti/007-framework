@@ -853,6 +853,33 @@ class ClaudeRefusalAndContinuationTests(unittest.TestCase):
         allowed = self.parse("claude", [self.init, rejected, self.result()])  # served after all (overage): a valid session
         self.assertEqual((allowed["status"], allowed["problem"]), ("complete", None))
 
+    def test_a_usage_limit_is_recorded_with_its_reset_even_after_the_agent_worked(self):
+        # 1.11.0: the limit can cut a call the agent had worked in; the reset time and the source leave, never the text
+        worked = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]}, "session_id": "s"}
+        cut = self.result(is_error=True, result="Claude AI usage limit reached|1795039200", total_cost_usd=0.4,
+                          usage={"input_tokens": 900, "output_tokens": 300})
+        got = self.parse("claude", [self.init, worked, cut])
+        self.assertEqual((got["problem"], got["usage"]["total_tokens"], got["usage_limit"]),
+                         ("native-error-rate-limit", 1200, {"source": "result", "resets_at": 1795039200}))
+        self.assertNotIn("usage limit reached", json.dumps(got))
+        rejected = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "resetsAt": 1794434400, "rateLimitType": "seven_day"}}
+        error = self.result(is_error=True, subtype="error_during_execution", result="API Error")
+        self.assertEqual(self.parse("claude", [self.init, rejected, error])["usage_limit"], {"source": "rate-limit-event", "resets_at": 1794434400})
+        # the event comes first and names no reset: the result's reset fills it, the source stays the first evidence
+        self.assertEqual(self.parse("claude", [self.init, {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}, cut])["usage_limit"],
+                         {"source": "rate-limit-event", "resets_at": 1795039200})
+        for text in ("Claude AI usage limit reached", "Claude AI usage limit reached|12"):  # no reset, or one that is no Unix time
+            self.assertEqual(self.parse("claude", [self.init, self.result(is_error=True, result=text)])["usage_limit"], {"source": "result", "resets_at": None})
+
+    def test_other_errors_and_served_calls_name_no_usage_limit(self):
+        for rows in ([self.init, self.result()],
+                     [self.init, self.result(is_error=True, subtype="error_max_turns", result="Reached max turns")],
+                     [self.init, self.result(is_error=True, result="API Error: 429 rate_limit_error")],  # a rate limit, not the account's
+                     [self.init, {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "resetsAt": 1795039200}}, self.result()]):
+            self.assertIsNone(self.parse("claude", rows)["usage_limit"])
+        self.assertEqual(self.parse("claude", [self.init, self.result(is_error=True, result="API Error: 429 rate_limit_error")])["problem"],
+                         "native-error-rate-limit")
+
     def test_usage_numbers_never_classify_an_error(self):
         error = self.result(is_error=True, subtype="error_during_execution", result="boom",
                             usage={"input_tokens": 429, "output_tokens": 429})

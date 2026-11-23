@@ -111,6 +111,26 @@ schemas, and the dashboard snapshot.
   and power is 55.8%. A `compare.critical_floor` computed before 1.11.0 covers independent loss only: rebuild it. Study F's
   frozen analysis is unchanged; its rule needs a new calibrated control before reuse. See
   [the lab guide](docs/lab.md#proven-under-a-clustered-loss).
+- **A Claude usage limit that cut a call after the agent had worked read as an invalid cell.** 1.9.0 covered only refusals with
+  no usage, so with `--jobs 4` the cells in flight when the account's limit started could spend a `--max-invalid` of 3 and end
+  the run for good (`STOP.json`). The runner receipt now records `usage_limit`: its source (the CLI's "usage limit reached"
+  result or a rejected `rate_limit_event`) and the reset time the provider gave, in Unix seconds, or none; never the text. Such a
+  call is refused whatever its usage (its cost is still charged), labelled `provider-rate-limit`, kept out of `--max-invalid`, and
+  set aside and dispatched again with `--requeue-refused`. Any other rate limit after the agent worked is still an invalid cell.
+- **A Claude usage limit now stops dispatch as a failed quota gate does.** A usage-limit refusal pauses the run with
+  `quota-hold`, not `rate-limit`, so `--rate-limit-wait-s` no longer retries a five-hour or seven-day window every 10 minutes.
+  The ledger row records `usage_limit` and `resets_at`, `run` returns `resets_at`, and while that reset lies ahead (and planned
+  cells remain) a resume stops at once with `quota-hold`, `resets_at` and `retry_after_s`, dispatching nothing. A limit that
+  named no reset falls back to the 10-minute cooldown. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
+  limit as `usage limit reached` instead of `no rate_limit_event`, and `quota.jsonl` records `resets_at`.
+- A refused call whose stream touched a protected path stays `contaminated`: it counts against `--max-invalid`, is never
+  relabelled `provider-rate-limit` and is never requeued. Before, a contaminated cell whose receipt also named a refusal was
+  relabelled, kept out of `--max-invalid`, and with `--requeue-refused` moved to `refused/` and dispatched again.
+- `007 lab report` raised `statistics.StatisticsError` when an arm of the comparison had no valid cell, and wrote no report. It
+  now writes one: the verdict carries `arms_without_valid_cells` (empty when both arms have one), the same-change, time and
+  durability verdicts read `NO-INFORMATION`, the thesis `UNPROVEN`, `rework_ok` is null instead of a vacuous true, the empty arm's
+  median reasoning tokens are null, and `report.md` opens with a "No comparison" line naming the arm. With no valid cell in
+  either arm, `report` still refuses with "no valid cells to report".
 
 ## [1.10.1] - 2026-11-22
 

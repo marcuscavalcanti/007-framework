@@ -33,6 +33,15 @@ def validate_command(provider, command):
 
 
 SEVERITY = ["native-error-transient", "native-error", "native-error-rate-limit"]
+# A Claude subscription usage limit (1.11.0): the CLI's error result names it, "Claude AI usage limit reached|<reset epoch>" in
+# study F-1's receipt, or a rate_limit_event says "rejected" with the window's resetsAt. Only that fact, its source and the reset
+# time leave the stream, never the text. It is evidence that the account, not the cell, stopped the call, even after the agent worked.
+CLAUDE_USAGE_LIMIT = re.compile(r"usage limit reached(?:\|(\d{9,11}))?", re.I)
+
+
+def reset_epoch(value):
+    """A reset time in Unix seconds, or None: never a guessed one."""
+    return value if type(value) is int and 10**9 <= value < 10**11 else None
 MAX_ROW_BYTES, MAX_STREAM_BYTES = 1024 * 1024, 256 * 1024 * 1024  # r48: was 32 MiB; memory stays bounded by the row limit
 # Large content still carries identity. Only string bodies may be compacted;
 # json.loads validates the remaining envelope, including metadata after content.
@@ -145,6 +154,13 @@ class NativeTelemetry:
         self.cost, self.models = None, {}
         # Claude: a rejected rate_limit_event, and a background task that ended after the result (it opens one more turn)
         self.refused, self.background_done, self.continuations = False, False, 0
+        self.usage_limit = None  # Claude: {"source", "resets_at"} once the stream shows the account's usage limit
+
+    def note_usage_limit(self, source, resets_at):
+        if self.usage_limit is None:
+            self.usage_limit = {"source": source, "resets_at": resets_at}
+        elif self.usage_limit["resets_at"] is None:
+            self.usage_limit["resets_at"] = resets_at
 
     def feed(self, chunk):
         self.digest.update(chunk)
@@ -206,7 +222,10 @@ class NativeTelemetry:
             claude_init = self.provider == "claude" and kind == "system" and row.get("subtype") == "init"
             if self.provider == "claude" and kind == "rate_limit_event":
                 info = row.get("rate_limit_info")
-                self.refused |= isinstance(info, dict) and info.get("status") == "rejected"
+                rejected = isinstance(info, dict) and info.get("status") == "rejected"
+                self.refused |= rejected
+                if rejected:
+                    self.note_usage_limit("rate-limit-event", reset_epoch(info.get("resetsAt")))
             if self.provider == "claude" and kind == "system" and row.get("subtype") == "task_notification" and self.result_seen:
                 self.background_done = True
             if codex_init or claude_init:
@@ -265,6 +284,9 @@ class NativeTelemetry:
                 if row.get("subtype") != "success" or row.get("is_error") is not False:
                     # the error text only (never usage numbers): "usage limit reached" is a rate limit, like a rejected event
                     text = {key: row.get(key) for key in ("subtype", "result", "error", "errors", "api_error_status")}
+                    limit = CLAUDE_USAGE_LIMIT.search(row["result"]) if isinstance(row.get("result"), str) else None
+                    if limit:
+                        self.note_usage_limit("result", reset_epoch(int(limit[1])) if limit[1] else None)
                     raise ValueError("native-error-rate-limit" if self.refused else native_error_class(text))
         except (ValueError, TypeError, AttributeError, UnicodeDecodeError, RecursionError) as error:
             # keep our own fixed codes (e.g. native-error); anything else, such as a JSON parser message, stays generic
@@ -333,7 +355,7 @@ class NativeTelemetry:
             "cost_basis": "client-estimate" if self.cost is not None else "unavailable",
             "reported_model": next(iter(self.models)) if len(self.models) == 1 else "unmeasured",
             "model_usage": self.models, "problem": self.problem, "oversized_content_rows": self.oversized,
-            "continuations": self.continuations,
+            "continuations": self.continuations, "usage_limit": self.usage_limit,
         }
 
 
