@@ -55,8 +55,8 @@ Without an A/A, a disagreement such as 3 pairs in 62 cannot be told apart from n
 tasks and replicates: its copy is a third arm, `ARM-aa`, with ARM's model, effort and doctrine and the same agent command. Its cells
 are shuffled into each replicate with the others, dispatched, charged and stopped like ARM's: they take a `--stop-usd` reserve, count
 toward `--max-calls`, `--max-usd`, `--max-invalid`, refusals and the cost marker, and `arm_accounting` lists `ARM-aa` as an arm.
-The copy's workspace carries ARM's name, not the label, so the agent sees the same path; the runner's own receipt path does carry
-the label. `run-manifest.json` records `aa` (`{"arm", "label"}`, or `null`); a resume with A/A turned on or off, or on another arm,
+Its agent sees a token like every other cell's (see [Blind arms](#blind-arms-what-the-agent-sees)), never ARM's name or the label.
+`run-manifest.json` records `aa` (`{"arm", "label"}`, or `null`); a resume with A/A turned on or off, or on another arm,
 stops with `manifest-mismatch` (`aa`), so the copy is either planned from the first dispatch or not at all. `chain` does not chain
 the copies (`aa_not_chained`).
 
@@ -80,6 +80,38 @@ cost alone.
 `pseudo_aa`, which splits one arm's replicate 1 against its later replicates, stays in the report; it is not this check. Study F's
 recorded A/A (3.55% of permutation splits whose interval excluded zero) was the standing check on the Codex top-up's `high` cells,
 not on F's cells or on Claude attempts (`TESE-SCORECARD` erratum of 2026-11-14).
+
+## Blind arms: what the agent sees
+
+Since 1.11.0, no path, argument or file name a cell's agent sees names its arm. Before its first dispatch, `run` seals a random
+salt, `blind_salt` (32 hex digits), in `run-manifest.json`. A cell's token is sixteen digits of SHA-256 over the salt and the cell
+id (`replay_eval.blind_token`). The agent works in `007-<token>-<random>` under the temporary directory. Its runner receipt and
+stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `--out/.blind/`, and the grader runs in
+`007-acceptance-<token>-<random>`. When the agent exits, the controller renames both files to the cell's own names
+(`<task>-r01-<arm>.runner.json`). Results, `dispatch.jsonl`, `status`, `report` and `chain` therefore keep the real arm names, and
+each cell records its `blind_token`. The receipt is kept byte for byte, so its `stream_copy` field names
+`<token>.stream.jsonl`. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`
+under its token, where `report` does not count it as an orphan receipt; the dispatch ledger still marks the attempt, so a resume
+stops with `uncertain-attempts` as before, and `blind_token(salt, cell)` names the file. The A/A copy gets a token like any other cell. So does a stage-2 cell, whose task id names
+its stage-1 cell and arm. The salt is not part of the set, so it never moves `set_sha256`. A resume reads it from the manifest, so a
+cell's token is the same on every resume. A salt that is not 32 hex digits stops a resume with `manifest-mismatch` (`blind_salt`).
+
+What still differs between arms is the treatment itself:
+
+- the model and effort flags in the agent command (`{model}`, `{effort}`);
+- the doctrine appended to the prompt, when the arms' doctrines differ;
+- whatever the CLI does differently at another model or effort, such as speed or output length.
+
+The token hides the arm from the agent's own paths. It does not hide it from anyone who reads `--out`, where the manifest's salt and
+the cell files map tokens back to arms. An agent that can read `--out` from outside its workspace can read them too: deny that read,
+as with a host copy of the repository (see [Limits](#limits)).
+
+**Runs before 1.11.0, Study F included, exposed the arm label to the agent.** The workspace path, which is the agent's working
+directory, carried the arm name (`007-<task>-<arm>-r01-<random>`). The runner receipt path in the agent command's arguments
+carried it too (`<task>-r01-<arm>.runner.json`). A stage-2 workspace also carried the stage-1 arm, through its task id. This was a
+visible difference between the arms of the main comparison, and its effect on any verdict was not measured. A run sealed before
+1.11.0 has no salt. Resumed with 1.11.0, it keeps its labelled paths, so one run never mixes the two procedures; its report and
+verdict are unchanged. `replay_eval`'s own experiment runner, outside `007 lab`, still names workspaces and receipts by arm.
 
 ## Oracle health: `status` and the report
 

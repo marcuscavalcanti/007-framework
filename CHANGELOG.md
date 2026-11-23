@@ -27,7 +27,7 @@ schemas, and the dashboard snapshot.
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
   computation with it, and their output is unchanged.
 - `007 lab run --aa ARM` runs ARM twice on the same tasks, so a verdict carries its own noise floor. The copy is a third arm,
-  `ARM-aa`, with ARM's model, effort, doctrine and workspace name. Its cells are dispatched, charged and stopped like ARM's, and
+  `ARM-aa`, with ARM's model, effort and doctrine. Its cells are dispatched, charged and stopped like ARM's, and
   they count toward every budget and stop rule. `run-manifest.json` records the copy, and a resume that turns it on, off or onto
   another arm stops with `manifest-mismatch`. `chain` skips the copies. `report` reads the copy from the manifest and keeps the
   verdict on the set's two arms, so the verdict is unchanged. Next to the verdict, the `aa` block gives:
@@ -54,6 +54,23 @@ schemas, and the dashboard snapshot.
   `oracle_suspect`, and `report.md` opens with a notice until a person runs `status --ack-oracle REASON`. That command writes
   `ORACLE-ACK.json`, bound to the counts it saw, so any new cell reopens the alarm. Runs whose cells record no grader exit read
   `unmeasured` and keep every verdict value. See [the lab guide](docs/lab.md#oracle-health-status-and-the-report).
+
+### Fixed
+
+- **Runs before 1.11.0, Study F included, exposed the arm label to the agent.** The agent's working directory was
+  `007-<task>-<arm>-r01-<random>`, and the runner receipt path in its arguments was `<task>-r01-<arm>.runner.json`. A stage-2
+  task id also carried its stage-1 arm. This was a visible difference between the arms of the main comparison, and its effect
+  on any verdict was not measured. Since 1.11.0, `run` seals a random `blind_salt` in `run-manifest.json`. Each cell gets a token,
+  sixteen digits of a salted SHA-256 of its id, and its agent sees only that token:
+  - the workspace is `007-<token>-<random>`;
+  - the receipt and stream copy are written under `--out/.blind/` and renamed to the cell's own names once the agent exits;
+  - the grading directory is `007-acceptance-<token>-<random>`.
+
+  The A/A copy and stage-2 cells get tokens like any other cell. Results, `status`, `report` and `chain` keep the real arm
+  names, and each cell records its `blind_token`. The token is stable across resume, and a malformed salt stops a resume with
+  `manifest-mismatch`. A run sealed before 1.11.0 resumes with its labelled paths, and its report and verdict are unchanged. The
+  model and effort flags, and any doctrine that differs between arms, still reach the agent: they are the treatment. See
+  [the lab guide](docs/lab.md#blind-arms-what-the-agent-sees).
 
 ## [1.10.1] - 2026-11-22
 

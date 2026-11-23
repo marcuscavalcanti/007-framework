@@ -1,9 +1,11 @@
 """`007 lab` end to end: a synthetic repository, a fake agent, no model and no vendor."""
 import contextlib
 import difflib
+import hashlib
 import io
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 import subprocess
@@ -28,6 +30,13 @@ requested = {"provider": "none", "model": "none", "effort": effort}
 json.dump({"schema": "007-framework/runner-receipt/v1", "valid": True, "requested": requested, "served": requested, "identity_source": "fake", "source_sha256": "0" * 64,
            "cost_usd": 0.5, "cost_source": "fake", "usage": {"reasoning_output_tokens": 100}}, open(receipt, "w"))
 """
+# the leakage probe: FAKE_AGENT after a record of everything the agent process sees, written where LAB_CAPTURE says
+CAPTURE_AGENT = """import json, os, sys, uuid
+here = os.getcwd()
+tree = sorted(os.path.relpath(os.path.join(top, name), here) for top, dirs, files in os.walk(here) for name in dirs + files)
+seen = {"cwd": here, "argv": sys.argv, "env": dict(os.environ), "tree": tree, "stdin": sys.stdin.read(), "prompt_file": open(sys.argv[4]).read()}
+json.dump(seen, open(os.path.join(os.environ["LAB_CAPTURE"], uuid.uuid4().hex + ".json"), "w"))
+""" + FAKE_AGENT
 GOOD = "def add(a, b):\n    return a + b\n\n\ndef clamp_total(a, b):\n    return min(add(a, b), 100)\n"
 PARTIAL = "def add(a, b):\n    return a + b\n\n\ndef clamp_total(a, b):\n    return add(a, b)\n"
 
@@ -605,8 +614,9 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual((state["stop"], state["calls"], state["cells"]), (None, 6 * tasks, 6 * tasks))
         workspaces = [c.kwargs.get("prefix", "") for c in made.call_args_list if c.kwargs.get("prefix", "").startswith("007-") and "acceptance" not in c.kwargs["prefix"]]
         self.assertEqual(len(workspaces), 6 * tasks)
-        self.assertFalse([w for w in workspaces if "-aa" in w])  # the copy works under its arm's name: the agent sees the same path
-        self.assertEqual(sum("-high-r" in w for w in workspaces), 4 * tasks)
+        # 1.11.0: every cell, the copy's included, works under its own salted token: no arm name, effort word or A/A suffix
+        self.assertEqual([w for w in workspaces if not re.fullmatch(r"007-\d{16}-", w)], [])
+        self.assertEqual(len(set(workspaces)), 6 * tasks)
         without, with_ = lab.report(path, plain, None), lab.report(path, twin, None)
         # the verdict reads the set's arms only: the copy changes none of it
         for key in ("same_change_reachable", "durability", "margin", "refused_unequal"):
@@ -632,6 +642,81 @@ class LabEndToEnd(unittest.TestCase):
         chained = lab.chain(path, twin, self.root / "stage2-twin")  # the copies are no part of the contrast stage 2 serves
         self.assertEqual((chained["tasks"], chained["aa_not_chained"]), (4 * tasks, 2 * tasks))
         self.assertNotIn("aa_not_chained", lab.chain(path, plain, self.root / "stage2-plain"))
+
+    def test_nothing_the_agent_sees_names_its_arm(self):
+        """1.11.0: the agent's cwd, argv, environment, workspace names and prompt carry no arm name, effort word or A/A marker, in
+        stage 1 (A/A copy included) and in stage 2, whose task ids name stage-1 cells. Only the effort flag itself differs."""
+        (self.root / "agent.py").write_text(CAPTURE_AGENT)
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results, stage2, capture = out / "replay-set.json", self.root / "results", self.root / "stage2", self.root / "capture"
+        capture.mkdir()
+        lab.sensitivity(path, 2)
+        inherited = {**os.environ, "LAB_CAPTURE": str(capture)}
+        with mock.patch.dict(os.environ, {"LAB_CAPTURE": str(capture)}):
+            first = lab.run(path, results, replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1, aa="high")
+            again = lab.run(path, results, replicates=2, jobs=2, max_calls=99, max_usd=99, stop_usd=1, aa="high")  # a resume
+            lab.chain(path, results, stage2)
+            last = lab.run(stage2 / "replay-set.json", self.root / "later", replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1)
+        self.assertEqual([s["stop"] for s in (first, again, last)], [None, None, None])
+        captures = [json.loads(p.read_text()) for p in sorted(capture.iterdir())]
+        self.assertEqual(len(captures), first["calls"] + again["calls"] + last["calls"])
+        self.assertEqual(len({json.dumps(c["env"], sort_keys=True) for c in captures}), 1)  # one environment for all; never printed
+        roots = sorted({str(p) for base in (self.root, Path(tempfile.gettempdir())) for p in (base, base.resolve())}, key=len, reverse=True)
+        words = ("medium", "high", "xhigh", "low", "aa", "next")  # the arms, effort words, the A/A suffix and stage 2's arm
+        leaks = []
+        for seen in captures:
+            self.assertRegex(Path(seen["cwd"]).name, r"^007-\d{16}-")
+            self.assertRegex(Path(seen["argv"][2]).name, r"^\d{16}\.runner\.json$")
+            fields = {"cwd": seen["cwd"], "argv": seen["argv"][:3] + seen["argv"][4:],  # argv[3] is {effort}: the treatment itself
+                      "env": {k: v for k, v in seen["env"].items() if inherited.get(k) != v},
+                      "tree": [name for name in seen["tree"] if name.split(os.sep)[0] != ".git"],  # git's own hex object names
+                      "stdin": seen["stdin"], "prompt_file": seen["prompt_file"]}
+            for field, value in fields.items():
+                text = json.dumps(value)
+                for root in roots:
+                    text = text.replace(root, "/")
+                leaks += [(field, w) for w in words if re.search(rf"(?<![A-Za-z0-9_]){w}(?![A-Za-z0-9_])", text, re.I)]
+        self.assertEqual(sorted(set(leaks)), [])
+        # the human side keeps the real names; each cell records the token its agent saw, all from the one salt the seal holds
+        tokens = {Path(seen["argv"][2]).name.removesuffix(".runner.json") for seen in captures}
+        for directory in (results, self.root / "later"):
+            salt = json.loads((directory / "run-manifest.json").read_text())["blind_salt"]
+            self.assertRegex(salt, r"^[0-9a-f]{32}$")
+            self.assertEqual(list((directory / ".blind").iterdir()), [])  # every receipt moved to its cell's name
+            for cell in lab.load_cells(directory):
+                self.assertTrue((directory / f"{cell['cell']}.runner.json").is_file())
+                self.assertEqual(cell["blind_token"], lab.replay_eval.blind_token(salt, cell["cell"]))
+                tokens.discard(cell["blind_token"])
+        self.assertEqual(tokens, set())
+        report = lab.report(path, results, self.root / "later")
+        self.assertEqual(sorted(report["arm_accounting"]["arms"]), ["high", "high-aa", "medium"])
+        self.assertEqual(report["aa"]["label"], "high-aa")
+
+    def test_a_run_sealed_before_1_11_resumes_with_its_labelled_paths(self):
+        """A manifest without a salt (1.10 and before) keeps labelled workspaces on resume: one run never mixes the two."""
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        lab.sensitivity(path, 2)
+        with mock.patch.object(lab.secrets, "token_hex", return_value=None):
+            self.assertIsNone(lab.run(path, results, replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1)["stop"])
+        sealed = results / "run-manifest.json"
+        old = sealed.read_bytes()
+        manifest = json.loads(old)
+        del manifest["blind_salt"]  # the manifest exactly as 1.10 wrote it, and the ledger bound to it
+        sealed.write_text(json.dumps(manifest, indent=1) + "\n")
+        ledger = results / "dispatch.jsonl"
+        ledger.write_text(ledger.read_text().replace(hashlib.sha256(old).hexdigest(), lab._sha256(sealed)))
+        with mock.patch.object(lab.replay_eval.tempfile, "mkdtemp", wraps=tempfile.mkdtemp) as made:
+            state = lab.run(path, results, replicates=2, jobs=2, max_calls=99, max_usd=99, stop_usd=1)
+        self.assertEqual((state["stop"], state["calls"]), (None, state["cells"] // 2))
+        workspaces = [c.kwargs["prefix"] for c in made.call_args_list if c.kwargs.get("prefix", "").startswith("007-")
+                      and "acceptance" not in c.kwargs["prefix"]]
+        self.assertEqual(sorted(w.split("-")[-3] for w in workspaces), sorted(["high", "medium"] * (state["cells"] // 4)))
+        self.assertFalse([cell for cell in lab.load_cells(results) if "blind_token" in cell])
+        self.assertFalse((results / ".blind").exists())
+        self.assertEqual(lab.report(path, results, None)["run_manifest"]["state"], "sealed")
 
     def test_oracle_health_is_blind_in_status_never_moves_the_verdict_and_holds_until_acknowledged(self):
         out = self.root / "lab"

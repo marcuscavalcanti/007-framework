@@ -673,6 +673,15 @@ def cell_id(task, arm, replicate):
     return f"{task['id']}-r{replicate:02d}-{arm}"
 
 
+BLIND_DIR = ".blind"  # where an agent writes its receipt under its token; moved to the cell's own name once the agent is done
+
+
+def blind_token(salt, cell):
+    """The name an agent sees for its cell (1.11.0): sixteen digits of a salted SHA-256, so neither an arm name, an effort word, an
+    A/A suffix nor a task id reaches its workspace or argv. The salt is the run's, sealed in its manifest: stable across resume."""
+    return f"{int(hashlib.sha256(f'{salt}:{cell}'.encode()).hexdigest(), 16) % 10**16:016d}"
+
+
 def execute_reserved_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root, budget, upper_usd, bound_source_sha256):
     _diagnostic_retention(config, output_dir)
     if "replay_ref" in task or vault_root is not None:
@@ -746,8 +755,10 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
         source_repo = Path(config["repos"][task["repo"]]).expanduser().resolve()
     validate_timeout(task.get("acceptance_timeout_s", 900))
     policy = config["arms"][arm]
-    # an A/A copy (`007 lab run --aa`) works under its arm's name, so the agent sees the same path as the arm's own cells
-    workspace = Path(tempfile.mkdtemp(prefix=f"007-{task['id']}-{policy.get('aa_of', arm)}-r{replicate:02d}-")).resolve()
+    # blinded (a lab run sealed by 1.11.0 or later): the agent sees only its token; else, as before, the arm's name (an A/A copy's arm)
+    token = blind_token(config["blind_salt"], attempt_id) if config.get("blind_salt") else None
+    named = token or f"{task['id']}-{policy.get('aa_of', arm)}-r{replicate:02d}"
+    workspace = Path(tempfile.mkdtemp(prefix=f"007-{named}-")).resolve()
     try:
         if metadata is None:
             export_snapshot(source_repo, task["base"], workspace)
@@ -763,13 +774,21 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             prompt_artifact = output_dir / (attempt_id + ".prompt.txt")
             replay_capture.write_bytes_no_replace(prompt_artifact, effective_prompt.encode("utf-8"), "replay effective prompt")
         runner_receipt = output_dir / f"{task['id']}-r{replicate:02d}-{arm}.runner.json"
-        if runner_receipt.exists():
-            raise RuntimeError(f"runner receipt already exists: {runner_receipt}")
+        stream_copy = output_dir / f"{attempt_id}.stream.jsonl"
+        staged = {runner_receipt: runner_receipt, stream_copy: stream_copy}
+        if token:
+            (output_dir / BLIND_DIR).mkdir(mode=0o700, exist_ok=True)
+            staged = {output_dir / BLIND_DIR / f"{token}{suffix}": final
+                      for suffix, final in ((".runner.json", runner_receipt), (".stream.jsonl", stream_copy))}
+        for path in (runner_receipt, *staged):
+            if path.exists() or path.is_symlink():
+                raise RuntimeError(f"runner receipt already exists: {path}")
+        seen = {final: path for path, final in staged.items()}
         replacements = {
             "{cwd}": str(workspace), "{prompt_file}": str(prompt),
             "{model}": policy["model"], "{effort}": policy["effort"],
-            "{runner_receipt}": str(runner_receipt),
-            "{stream_copy}": str(output_dir / f"{attempt_id}.stream.jsonl"),  # native_runner --stream-copy, opt-in
+            "{runner_receipt}": str(seen[runner_receipt]),
+            "{stream_copy}": str(seen[stream_copy]),  # native_runner --stream-copy, opt-in
         }
         argv = []
         for part in config["agent_command"]:
@@ -789,13 +808,17 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             cleanup_failure = exc.state
             timed_out = isinstance(exc.original, subprocess.TimeoutExpired)
             exit_code, tail = (-9, "TIMEOUT") if timed_out else (exc.returncode, str(exc) if retain_text else exc.state)
+        finally:  # whatever the agent did: its receipt and stream take the cell's own names before anything reads them
+            for path, final in staged.items():
+                if path != final and (path.exists() or path.is_symlink()):
+                    os.rename(path, final)
         agent_wall_s = round(time.monotonic() - started, 2)  # r46: the agent alone; wall_s also spans grading
         prompt.unlink(missing_ok=True)
         # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
         hidden_failure, checks, checks_passed, outcomes = cleanup_failure, [], False, "unavailable"
         if cleanup_failure is None:
             try:
-                with tempfile.TemporaryDirectory(prefix=f"007-acceptance-{task['id']}-") as acceptance_tmp:
+                with tempfile.TemporaryDirectory(prefix=f"007-acceptance-{token or task['id']}-") as acceptance_tmp:
                     acceptance_workspace = Path(acceptance_tmp) / "workspace"
                     shutil.copytree(workspace, acceptance_workspace, symlinks=True)
                     report = Path(acceptance_tmp) / "accept-report.json"  # r45: beside the copy, never inside it
@@ -879,6 +902,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             "agent_tail": tail,
             "agent_output": agent_output,
             "diagnostic_text_retained": retain_text,
+            **({"blind_token": token} if token else {}),
         }
         if retained_ref is not None:
             record.update(task_id=attempt_id, project_id=project, source_replay_ref=task["replay_ref"], replay_ref=retained_ref,

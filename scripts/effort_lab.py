@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 import random
 import re
+import secrets
 import shutil
 import statistics
 import subprocess
@@ -869,8 +870,8 @@ AA_SUFFIX = "-aa"
 
 def aa_arms(config, arm):
     """The set's arms plus the A/A copy of `arm` (`run --aa`): a third label, `<arm>-aa`, with the arm's own model, effort and
-    doctrine, so its cells are planned, shuffled into each replicate, dispatched, charged and stopped like the arm's. Its workspace
-    takes the arm's name, not the label (`aa_of`), so the agent sees the same path."""
+    doctrine, so its cells are planned, shuffled into each replicate, dispatched, charged and stopped like the arm's. Its agent sees a
+    token like any other cell's (`blind_salt`); in a run sealed before 1.11.0 its workspace takes the arm's name (`aa_of`)."""
     arms = config.get("arms", {})
     if arm not in arms:
         raise ValueError(f"--aa names no arm of the set: {arm}")
@@ -1386,9 +1387,11 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     if recorded is None:
         if bound:  # dispatches named a manifest that is gone: never re-seal over them
             return {"stop": "manifest-missing", "calls": 0}
+        # the agent's names come from this salt (replay_eval.blind_token); a directory with cells already run keeps their labelled paths
+        salt = None if done else secrets.token_hex(16)
         # a directory from before 1.8 is sealed now and reported as sealed-late; written whole, then renamed
         with tempfile.NamedTemporaryFile("w", dir=out, prefix="." + RUN_MANIFEST + ".", delete=False) as handle:
-            handle.write(json.dumps({**sealed, "compare": config.get("compare"), "aa": aa, "sealed_at": _now(), "cells_before_seal": len(done),
+            handle.write(json.dumps({**sealed, "compare": config.get("compare"), "aa": aa, "blind_salt": salt, "sealed_at": _now(), "cells_before_seal": len(done),
                                      "dispatches_before_seal": sum("dispatched_at" in row for row in history),
                                      "version": _version(), "set_file_sha256": _sha256(config_path)}, indent=1) + "\n")
             handle.flush()
@@ -1403,6 +1406,9 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         changed += [f"executables:{part}" for part in parts]
         if recorded.get("aa") != aa:  # A/A on or off, or another arm, against what was sealed (none, before 1.11)
             changed.append("aa")
+        salt = recorded.get("blind_salt")  # none before 1.11.0: that run resumes with the labelled paths it began with
+        if salt is not None and not (isinstance(salt, str) and re.fullmatch(r"[0-9a-f]{32}", salt)):
+            changed.append("blind_salt")
         details = {part: {"sealed": old.get(part), "found": new.get(part)} for part in parts}
         if "toolchain" in changed:
             details["toolchain"] = {"sealed": recorded.get("toolchain"), "found": sealed["toolchain"]}
@@ -1416,6 +1422,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         if changed:  # not a STOP: restoring what was sealed makes the run resumable again, except an unbound one
             return {"stop": "manifest-mismatch", "changed": changed, "details": details, "calls": 0}
     sealed_digest = _sha256(manifest)
+    if salt:  # the executor names the agent's workspace and receipt from it; the set as written, and its seal, never hold it
+        config = {**config, "blind_salt": salt}
     cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
     arm_of = {cell_name(c): c[2] for c in cells}
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()

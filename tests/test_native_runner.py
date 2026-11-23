@@ -227,7 +227,9 @@ class NativeRunnerTests(unittest.TestCase):
         self.assertLessEqual({"t1-r01-claude.1.json", "t1-r01-claude.1.runner.json", "t1-r01-claude.1.stream.jsonl"}, kept)
         cell = json.loads((out / "t1-r01-claude.json").read_text())
         self.assertEqual((cell["valid"], cell["accepted"]), (True, True))
-        self.assertEqual(json.loads((out / "t1-r01-claude.runner.json").read_text())["stream_copy"], "t1-r01-claude.stream.jsonl")
+        # 1.11.0: the runner wrote under the cell's token and its receipt, kept byte for byte, names that file; the cell links the two
+        self.assertEqual(json.loads((out / "t1-r01-claude.runner.json").read_text())["stream_copy"], cell["blind_token"] + ".stream.jsonl")
+        self.assertTrue((out / "t1-r01-claude.stream.jsonl").is_file())
 
     def test_a_reopened_turn_and_the_opt_in_stream_copy(self):
         record, receipt = self.cell("claude", mode="continued")
