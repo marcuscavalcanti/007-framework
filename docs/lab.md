@@ -291,7 +291,12 @@ floor = max(v for v in values if v is not None)    # compare.critical_floor
   `loss=("independent",)` and once with `loss=("clustered",)`; the floor is the largest value of all.
 - Write the floor, each pool's values and the hashes of the pools into the pre-registration. Rebuilding Study F's floor this
   way gives 2.4768209601363016 (Codex pool: independent 2.2315, clustered 2.4768; Claude run: 2.2269 and 2.4636). That is the
-  floor any reuse of Study F's rule uses. The product does not hard-code a floor.
+  floor a reuse of Study F's rule at Study F's shape uses: 41 tasks, two attempts per arm, a 20-point margin, Study F's pools.
+- The floor is specific to that shape. `proven_critical` simulates one draw per task of the pool it is given, so the floor
+  holds for studies with that many tasks; a studentized statistic over fewer tasks has heavier tails. A study of a different
+  size (a 12-task replication, say), with other attempts per arm or another margin rebuilds its own floor from earlier
+  attempts on its own tasks, with its own `attempts` and margin, and needs its own calibrated control before its `PROVEN` is
+  read. The product does not hard-code a floor.
 
 Study F's analysis is frozen and unchanged, and its rule needs a new calibrated control before it is reused. Not covered:
 - a partly clustered loss sits between the two models, and is covered only if the error moves monotonically between them,
