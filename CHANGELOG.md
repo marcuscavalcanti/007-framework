@@ -90,6 +90,24 @@ schemas, and the dashboard snapshot.
 - `replay_eval run`, outside `007 lab`, named each agent's workspace and receipt by its arm. It now uses the same salted tokens
   and seals the salt as `blind_salt` in its `summary.json`, written before the first cell. Outputs without a salt load as
   before.
+- **`PROVEN` was too easy when a task's attempts fail together.** A calibrated positive control of Study F's rule (41 go-json
+  tasks, two attempts per arm, a 20-point margin, 4,000 replicates per loss model) labelled it NOT-CALIBRATED. A true loss of
+  the margin read `PROVEN` 3.50% of the time (Wilson 2.97–4.12%) when both `medium` attempts of a task failed together,
+  against 2.03% when attempts failed alone and the 2.5% the rule promises. The missing-data guard was not the cause: L2 changed
+  no verdict in either model. The cause was `proven_critical`, and the floor Study F built with it: both simulated the loss as
+  attempts that fail independently. A clustered loss halves the number of independent loss units, so it doubles the loss's
+  share of the variance and skews the per-task differences. The 97.5% point of the statistic rose from 2.18 to 2.44, while
+  Study F's floor sat at 2.23. `proven_critical` (and
+  `whole_loss_draws(..., clustered=True)`) now also simulates the clustered loss, with the same expected loss, and keeps the
+  larger value. `proven_critical(..., loss=("independent",))` returns the earlier value draw for draw.
+
+  The main verdict, the A/A statistic and `report --missing-data-guard` all use the new value. A new
+  `guard_decision` returns the guard's verdict without the cost ratio. On the control's replicates, with the floor rebuilt the
+  way Study F built it (2.4768 instead of 2.2315), `PROVEN` at the margin is 2.33% clustered and 1.43% independent, and power
+  at a true loss of 10 points falls from 56.5% to 49.0%. With Study F's floor kept, the rates are 2.75% (2.29–3.30%) and 1.88%
+  and power is 55.8%. A `compare.critical_floor` computed before 1.11.0 covers independent loss only: rebuild it. Study F's
+  frozen analysis is unchanged; its rule needs a new calibrated control before reuse. See
+  [the lab guide](docs/lab.md#proven-under-a-clustered-loss).
 
 ## [1.10.1] - 2026-11-22
 

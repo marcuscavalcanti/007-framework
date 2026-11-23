@@ -9,6 +9,7 @@ import re
 import shutil
 from pathlib import Path
 import subprocess
+import statistics
 import sys
 import tempfile
 import threading
@@ -1757,6 +1758,32 @@ class ReachableBehaviour(unittest.TestCase):
                 planned = lab.proven_critical(rows, root / "tasks", "medium", "xhigh", 7, attempts=8)
                 self.assertNotEqual(planned, critical)
                 self.assertEqual(planned, lab.proven_critical(rows, root / "tasks", "medium", "xhigh", 7, attempts=8))
+
+    def test_proven_critical_takes_the_larger_of_independent_and_clustered_loss(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 10)
+            rows = [cell(f"T{i}", arm, rep, {"a", "b", "c"} if (i + rep) % 3 else {"a", "b"}) for i in range(10) for arm in ("medium", "xhigh") for rep in (1, 2)]
+            with mock.patch.dict(lab.GATES, {"draws": 300}):
+                # pinned from the code before 1.11.0 (proven_critical without `loss`): the independent model is unchanged draw for draw
+                self.assertEqual(lab.proven_critical(rows, root / "tasks", "medium", "xhigh", 7, loss=("independent",)), 2.749545416973504)
+                self.assertEqual(lab.proven_critical(rows, root / "tasks", "medium", "xhigh", 7, attempts=8, loss=("independent",)), 2.588732983824029)
+                each = [lab.proven_critical(rows, root / "tasks", "medium", "xhigh", 7, loss=(m,)) for m in lab.LOSS_MODELS]
+                self.assertEqual(lab.proven_critical(rows, root / "tasks", "medium", "xhigh", 7), max(each))
+                for bad in ((), ("correlated",)):
+                    with self.assertRaises(ValueError):
+                        lab.proven_critical(rows, root / "tasks", "medium", "xhigh", 7, loss=bad)
+            with mock.patch.dict(lab.GATES, {"draws": 2000}):
+                for attempts in (1, 2, 4):
+                    draws = {m: list(lab.whole_loss_draws(rows, root / "tasks", "medium", "xhigh", 7, .3, attempts=attempts, clustered=m))
+                             for m in (False, True)}
+                    for m, sets in draws.items():  # both models lose the margin on average
+                        self.assertAlmostEqual(statistics.fmean(v for s in sets for v in s.values()), -.3, delta=.02, msg=(attempts, m))
+                    if attempts == 1:  # one attempt: losing it alone or with the task's others is the same draw
+                        self.assertEqual(draws[False], draws[True])
+                    else:  # clustered: a lost task's attempts all fail, so per-task differences spread further
+                        spread = {m: statistics.pstdev(v for s in sets for v in s.values()) for m, sets in draws.items()}
+                        self.assertGreater(spread[True], spread[False])
 
     def test_a_frozen_reach_set_fixes_the_denominator(self):
         with tempfile.TemporaryDirectory() as d:

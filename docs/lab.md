@@ -32,7 +32,7 @@ Study F ran Claude Opus 5.5 through `007 lab` 1.8.1 wrapped in scripts. Since 1.
 | `--rate-limit-wait-s S` | wait out `rate-limit` pauses inside the run, 10 minutes at a time, up to S seconds in all; it needs `--requeue-refused`, since without it every refused cell of a long outage would be lost |
 | `--over-limit record` | a cell above `--stop-usd` is counted (`over_limit_cells`) and the run goes on; only `--max-usd` stops it. Without it, such a cell ends the run even if a pause was set in the same pass |
 | `report --single-look` | refuses while a run holds the results' lock, then writes `LOOK.json` with the report's digest: after it, `report` refuses to read these results again and `run` refuses to add to them (`looked`; a run also checks for `LOOK.json` between chunks, though a run holds the lock that `--single-look` needs, so that check only meets a `LOOK.json` written by other means). Plain `report` calls before it leave no trace, so `LOOK.json` shows the look was taken, not that it was the first |
-| `report --missing-data-guard --reserve-usd X --replicates N` | adds `missing_data_guard`; N is the run's `--replicates`, which fixes the plan (the run does not record it; fewer than the cells reached is refused): readings P (valid cells) and B (pairs with both arms), the worse deciding; L2 imputes every planned cell without a usable result as the worst case for the candidate arm (it fails every reachable test, the reference passes every one), and PROVEN needs L0 and L2 both PROVEN in P and B (otherwise NOT-PROVEN, "not decisive by missing data"); the cost per accepted change at the candidate over the reference, with a task-bootstrap interval and a worst case (no cost at X for the candidate and 0 for the reference, an invalid reference cell counted accepted); answer PAYS, PROVEN-NOT-ECONOMIC, DOES-NOT-PAY or the verdict. `compare.critical_floor` in the set sets a floor for the guard's critical value only (the main verdict ignores it, so the two can differ). Without `--frozen-reach`, a task with no valid cell has no reach, so L2 imputes nothing for it. The serial re-grade and A/A are not part of it |
+| `report --missing-data-guard --reserve-usd X --replicates N` | adds `missing_data_guard`; N is the run's `--replicates`, which fixes the plan (the run does not record it; fewer than the cells reached is refused): readings P (valid cells) and B (pairs with both arms), the worse deciding; L2 imputes every planned cell without a usable result as the worst case for the candidate arm (it fails every reachable test, the reference passes every one), and PROVEN needs L0 and L2 both PROVEN in P and B (otherwise NOT-PROVEN, "not decisive by missing data"); the cost per accepted change at the candidate over the reference, with a task-bootstrap interval and a worst case (no cost at X for the candidate and 0 for the reference, an invalid reference cell counted accepted); answer PAYS, PROVEN-NOT-ECONOMIC, DOES-NOT-PAY or the verdict. `compare.critical_floor` in the set sets a floor for the guard's critical value only (the main verdict ignores it, so the two can differ). Since 1.11.0 the simulated critical value covers a clustered loss too ([PROVEN under a clustered loss](#proven-under-a-clustered-loss)); a floor built with `proven_critical(..., attempts=)` before 1.11.0 covers independent loss only and should be rebuilt; `guard_decision` gives the guard's verdict without the cost ratio. Without `--frozen-reach`, a task with no valid cell has no reach, so L2 imputes nothing for it. The serial re-grade and A/A are not part of it |
 | `report --frozen-reach FILE` | `{task: [tests]}` fixed before the attempts replaces the reach the run's own cells give. The report records the digest of its canonical JSON (`frozen_reach_sha256`, sorted keys: not the file's own hash); it is not sealed |
 
 Validated on published results: on the 2026-11-07 Claude go-json run the guard reproduces L0 4.666643 (critical values 2.2315 and 2.2367), L2 4.0385 and R 0.300 (0.267 to 0.344); its own simulated L2 critical value, 2.2014, equals the one study F's hashed analysis script gives. On study F it reproduces every statistic, critical value and cost ratio of `f-result.json`.
@@ -231,10 +231,51 @@ alarm. `run` does not read health and does not stop on it.
 | Claim | Gate |
 |---|---|
 | Less time | At least 25% less agent time per accepted change; fewer accepted changes raise that time, and whether the changes are the same is the next row |
-| The same change | `same_change_reachable`: per task, the difference between the arms' pass rates on reachable behaviours (hidden tests red at base that some cell of the task passes), with a 95% t interval over tasks. `KILL` if the whole interval is below minus the declared margin (`compare.margin`, 3 points by default). `PROVEN` if `(mean + margin) / standard error` beats `proven_critical`: the 97.5% point of that statistic when the run's own cells are redrawn with a loss of the margin injected as whole failed attempts, so such a loss is called `PROVEN` about 2.5% of the time (in go-json simulations at 3 points: under 1% at two attempts per arm and 2.6–2.8% at about eight, where the plain t interval reached 5.6% and 3.4%; the report shows the plain rate as `t_false_proven`). That rate assumes attempts fail independently: when one cause fails every attempt of a task at once, an exact counter-example at 24 tasks, 3 attempts per arm and a 20-point margin calls the loss `PROVEN` 3.31% of the time (one counter-example, not a bound). A planned run can also fix a floor for the critical value from earlier attempts (`proven_critical(..., attempts=)`) and a frozen reach set (`reach=`). Otherwise `NOT-PROVEN`; under 8 tasks, `NO-INFORMATION`. A `KILL` here kills the thesis. The older point-estimate rule (tests that split a task's cells, -5 points) is kept only as `unseen_behaviour.superseded_verdict` |
+| The same change | `same_change_reachable`: per task, the difference between the arms' pass rates on reachable behaviours (hidden tests red at base that some cell of the task passes), with a 95% t interval over tasks. `KILL` if the whole interval is below minus the declared margin (`compare.margin`, 3 points by default). `PROVEN` if `(mean + margin) / standard error` beats `proven_critical`: the 97.5% point of that statistic when the run's own cells are redrawn with a loss of the margin injected as whole failed attempts, so such a loss is called `PROVEN` about 2.5% of the time (in go-json simulations at 3 points: under 1% at two attempts per arm and 2.6–2.8% at about eight, where the plain t interval reached 5.6% and 3.4%; the report shows the plain rate as `t_false_proven`). Since 1.11.0 the critical value is the larger of two simulations: attempts failing independently, and all of a task's candidate attempts failing together (a clustered loss); before it only the first was simulated, which let a clustered loss through more often (see [PROVEN under a clustered loss](#proven-under-a-clustered-loss)). A planned run can also fix a floor for the critical value from earlier attempts (`proven_critical(..., attempts=)`) and a frozen reach set (`reach=`). Otherwise `NOT-PROVEN`; under 8 tasks, `NO-INFORMATION`. A `KILL` here kills the thesis. The older point-estimate rule (tests that split a task's cells, -5 points) is kept only as `unseen_behaviour.superseded_verdict` |
 | Durable | The change survives the next real change to the same code; requires `require_next` and `chain` |
 
 Gates are fixed in code. If the oracle cannot reject planted defects, the verdict is `NO-INFORMATION`, never a pass.
+
+## PROVEN under a clustered loss
+
+A calibrated positive control of Study F's rule (go-json, 41 tasks, two attempts per arm, Opus 5.5 `medium` against `xhigh`,
+a 20-point margin; 2026-11-23) planted a true loss by replacing `medium` attempts with an empty patch, either one attempt at a
+time (independent) or both attempts of a task together (clustered). At exactly the margin, the rule said `PROVEN` 81 times in
+4,000 bootstrap replicates (2.03%, Wilson 1.63–2.51%) under independent loss and 140 times (3.50%, 2.97–4.12%) under clustered
+loss. It promises 2.5%, so the control was labelled NOT-CALIBRATED.
+
+The missing-data guard was not the cause. Apart from Study F's one invalid cell, no cell was missing, and L2 changed no verdict
+at the margin. The cause was the critical value. `proven_critical` simulated a loss of the margin as attempts that fail
+independently, and Study F's floor, 2.2315, came from the same simulation on earlier attempts. A clustered loss has half as many
+independent loss units (41 tasks instead of 82 attempts). On the control's replicates the standard deviation of the mean
+difference rose from 0.047 to 0.066 (about the square root of two), and the per-task differences became more skewed. The 97.5%
+point of the studentized statistic therefore rose from 2.18 to 2.44. The floor sat between the two: it decided 128 of the 140
+false `PROVEN`.
+
+`proven_critical` now also simulates the clustered loss, with the same probability and so the same expected loss, and keeps the
+larger value. `proven_critical(..., loss=("independent",))` returns the earlier value draw for draw. The main verdict
+(`same_change_reachable`), the A/A statistic and `report --missing-data-guard` (L0 and L2) all use the new value.
+
+`compare.critical_floor` is an input, not something `report` computes. Rebuilt the way Study F built it (the larger of
+`proven_critical(..., attempts=2)` on its two earlier pools), it rises from 2.2315 to 2.4768. The same replicates, with PROVEN
+counted per 4,000 at the margin and per 400 at a true loss of 10 points:
+
+| Rule | Margin, independent | Margin, clustered | −10 points, independent | −10 points, clustered |
+|---|---|---|---|---|
+| before 1.11.0 | 81 = 2.03% (1.63–2.51) | 140 = 3.50% (2.97–4.12) | 226 = 56.5% (51.6–61.3) | 185 = 46.3% (41.4–51.2) |
+| new critical value, Study F's floor | 75 = 1.88% (1.50–2.34) | 110 = 2.75% (2.29–3.30) | 223 = 55.8% (50.9–60.5) | 170 = 42.5% (37.8–47.4) |
+| new critical value, rebuilt floor | 57 = 1.43% (1.10–1.84) | 93 = 2.33% (1.90–2.84) | 196 = 49.0% (44.1–53.9) | 164 = 41.0% (36.3–45.9) |
+
+With the rebuilt floor, both loss models stay under 2.5%. Power at −10 points falls from 56.5% to 49.0%: 30 of the 400 replicates
+lose `PROVEN` and none gain it. With Study F's floor kept, power hardly moves, but the clustered rate is 2.75%. That is within
+Monte Carlo error of 2.5%, yet above it. Neither version reaches 80% power at 41 tasks: the answer to low power is more tasks,
+not a lower floor.
+
+Study F's analysis is frozen and unchanged, and its rule needs a new calibrated control before it is reused. Not covered:
+- a partly clustered loss sits between the two models, and is covered only if the error moves monotonically between them,
+  which was not tested;
+- a loss spread over a task's tests, rather than over whole attempts, is outside both models;
+- these numbers hold for one set of 41 tasks.
 
 ## What one repository can answer
 

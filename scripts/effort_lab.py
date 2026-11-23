@@ -1726,12 +1726,13 @@ def reachable_diffs(rows, task_dir, low, ref, split=None, reach=None):
     return out
 
 
-def whole_loss_draws(rows, task_dir, low, ref, seed, margin, reach=None, attempts=None):
+def whole_loss_draws(rows, task_dir, low, ref, seed, margin, reach=None, attempts=None, clustered=False):
     """GATES["draws"] sets of per-task differences in which `low` truly loses `margin` as whole failed attempts. Each task's cells of
     both arms are pooled (no difference), each arm is redrawn at its observed cell count, and a drawn `low` cell fails every
     reachable test with the probability that makes the expected loss exactly `margin`. None when there are too few tasks or too
     little passing to take `margin` away. `attempts` redraws every task at that many attempts per arm instead, to fix a critical
-    value for a planned run from earlier attempts."""
+    value for a planned run from earlier attempts. `clustered` loses every `low` attempt of a task together, with the same
+    probability and so the same expected loss: one cause that fails the task, not each attempt on its own."""
     pools = {}
     for task, cells in reach_rates(rows, task_dir, reach).items():
         nx, ny = sum(c["arm"] == low for c, _ in cells), sum(c["arm"] == ref for c, _ in cells)
@@ -1741,6 +1742,9 @@ def whole_loss_draws(rows, task_dir, low, ref, seed, margin, reach=None, attempt
     if len(pools) < GATES["min_signal_tasks"] or margin > level:
         return None
     q, rng = margin / level, random.Random(seed)
+    if clustered:
+        return ({task: (0.0 if rng.random() < q else sum(rng.choice(pool) for _ in range(nx)) / nx) - sum(rng.choice(pool) for _ in range(ny)) / ny
+                 for task, (pool, nx, ny) in pools.items()} for _ in range(GATES["draws"]))
     return ({task: sum(0.0 if rng.random() < q else rng.choice(pool) for _ in range(nx)) / nx - sum(rng.choice(pool) for _ in range(ny)) / ny
              for task, (pool, nx, ny) in pools.items()} for _ in range(GATES["draws"]))
 
@@ -1760,19 +1764,33 @@ def false_proven(rows, task_dir, low, ref, seed, margin=None, reach=None, attemp
     return None if draws is None else sum(behaviour_verdict(paired_interval(d), True, margin) == "PROVEN" for d in draws) / GATES["draws"]
 
 
-def proven_critical(rows, task_dir, low, ref, seed, margin=None, reach=None, attempts=None):
+LOSS_MODELS = ("independent", "clustered")
+
+
+def proven_critical(rows, task_dir, low, ref, seed, margin=None, reach=None, attempts=None, loss=LOSS_MODELS):
     """The critical value PROVEN must beat: the upper GATES["false_proven"] point of `studentized` when `low` truly loses `margin` in
-    whole failed attempts, simulated from the run's own cells. In go-json simulations at 3 points it kept that loss under 1 % PROVEN
-    at two attempts per arm and at 2.6-2.8 % with about eight, where the t interval reached 5.6 % and 3.4 %: the loss it guards
-    against puts failures into the pooled cells and lowers the value. Those rates hold for the scenarios simulated, with the reach
-    set taken as given: a confirmatory run should freeze `reach` beforehand. A planned run can take the larger of this and a value
-    fixed beforehand from earlier attempts (`attempts`), which held 2.4 % in simulation."""
+    whole failed attempts, simulated from the run's own cells, taken as the largest over the loss models in `loss`. "independent"
+    fails each attempt on its own; "clustered" fails all of a task's `low` attempts together. Under independent loss alone, go-json
+    simulations at 3 points kept that loss under 1 % PROVEN at two attempts per arm and at 2.6-2.8 % with about eight, where the t
+    interval reached 5.6 % and 3.4 %: the loss it guards against puts failures into the pooled cells and lowers the value. That
+    value was too low when the loss is clustered: the calibrated control of Study F's rule (41 tasks, two attempts per arm, 20
+    points) called a clustered loss of the margin PROVEN 3.50 % of the time against 2.03 % for an independent one. A clustered loss
+    has half as many independent loss units: it doubles the variance of the per-task differences and skews them, and the 97.5 %
+    point of `studentized` rose from 2.18 to 2.44 there. With both models, and the floor rebuilt the same way, the control's
+    replicates read 2.33 % and 1.43 %. `loss=("independent",)` gives the value before 1.11.0, draw for draw. Those rates
+    hold for the scenarios simulated, with the reach set taken as given: a confirmatory run should freeze `reach` beforehand. A
+    planned run can take the larger of this and a value fixed beforehand from earlier attempts (`attempts`)."""
     margin = GATES["reachable_margin"] if margin is None else margin
-    draws = whole_loss_draws(rows, task_dir, low, ref, seed, margin, reach, attempts)
-    if draws is None:
-        return None
-    values = sorted(studentized(d, margin) for d in draws)
-    return values[min(len(values) - 1, int((1 - GATES["false_proven"]) * len(values)))]
+    if not loss or set(loss) - set(LOSS_MODELS):
+        raise ValueError(f"loss must name some of {LOSS_MODELS}")
+    values = []
+    for model in loss:
+        draws = whole_loss_draws(rows, task_dir, low, ref, seed, margin, reach, attempts, clustered=model == "clustered")
+        if draws is None:
+            return None
+        ranked = sorted(studentized(d, margin) for d in draws)
+        values.append(ranked[min(len(ranked) - 1, int((1 - GATES["false_proven"]) * len(ranked)))])
+    return max(values)
 
 
 def paired_interval(diffs):
@@ -2163,7 +2181,7 @@ def _unusable(row):
     return "absent" if row is None else "refused" if row.get("failure_class") == "provider-rate-limit" else "unreadable" if row.get("valid") is True else "invalid"
 
 
-def _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=True):
+def _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=True, loss=LOSS_MODELS):
     diffs = reachable_diffs(cells, task_dir, low, ref, reach=reach)
     s = paired_interval(diffs)
     e = {"tasks": s["tasks"], "mean": s["mean"], "ci95": s["ci95"], "statistic": studentized(diffs, margin) if s["tasks"] > 1 else None}
@@ -2172,7 +2190,7 @@ def _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=Tru
     elif s["ci95"][1] < -margin:
         e["verdict"] = "KILL"
     elif critical:
-        own = proven_critical(cells, task_dir, low, ref, seed, margin=margin, reach=reach)
+        own = proven_critical(cells, task_dir, low, ref, seed, margin=margin, reach=reach, loss=loss)
         e.update(critical_own=own, critical=max(floor or -math.inf, math.inf if own is None else own))
         e["verdict"] = "PROVEN" if e["statistic"] > e["critical"] else "NOT-PROVEN"
     else:
@@ -2204,6 +2222,36 @@ def _ratio_interval(cells, results, low, ref, reserve, seed, worst):
     return [draws[int(.025 * len(draws))], draws[int(.975 * len(draws)) - 1]]
 
 
+def guard_decision(every, planned, task_dir, low, ref, margin, seed, reach, floor, loss=LOSS_MODELS):
+    """The verdict of `missing_data_guard` without the cost ratio: (verdict, readings, missing_data). L0 reads the valid cells of
+    `every` in readings P and B, the worse deciding; L2 imputes each planned cell without a usable result as `low`'s worst case and
+    reads again, with its own critical value, only when L0 is PROVEN. The critical value is the larger of `floor` and
+    `proven_critical` over the loss models in `loss`. Reach must be given: imputed cells must not move the denominator."""
+    rows = [r for r in every if r.get("valid") is True]
+    readings = {name: _reading(cells, task_dir, low, ref, margin, seed, reach, floor, loss=loss)
+                for name, cells in (("P", rows), ("B", _paired(rows, low, ref)))}
+    verdict = min((e["verdict"] for e in readings.values()), key=VERDICT_ORDER.index)
+    by = {(r["task"], r["replicate"], r["arm"]): r for r in every}
+    imputed, reasons = [], {}
+    for task, rep, arm in planned:
+        r = by.get((task, rep, arm))
+        if _usable(r):
+            imputed.append(r)
+            continue
+        why = _unusable(r)
+        reasons[why] = reasons.get(why, 0) + 1
+        imputed.append({"task": task, "replicate": rep, "arm": arm, "cell": replay_eval.cell_id({"id": task}, arm, rep), "valid": True,
+                        "imputed": why, "acceptance_outcomes": {k: "fail" if arm == low else "pass" for k in reach.get(task, [])}})
+    guard = {"planned": len(planned), "usable": len(planned) - sum(reasons.values()), "imputed_in_L2": reasons, "label": None,
+             "unusable_cells": sorted(r["cell"] for r in every if not _usable(r))}
+    if reasons:
+        guard["L2"] = {name: _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=verdict == "PROVEN", loss=loss)
+                       for name, cells in (("P", imputed), ("B", _paired(imputed, low, ref)))}
+        if verdict == "PROVEN" and any(e["verdict"] != "PROVEN" for e in guard["L2"].values()):
+            verdict, guard["label"] = "NOT-PROVEN", "not decisive by missing data"
+    return verdict, readings, guard
+
+
 def missing_data_guard(config, results, task_dir, every, planned, low, ref, margin, reserve, reach=None):
     """F-1's missing-data guard, made native (`report --missing-data-guard`). L0 reads the valid cells, in readings P (all) and B
     (pairs with both arms); the worse decides. L2 takes the plan and imputes every planned cell without a usable valid result
@@ -2221,26 +2269,7 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
             hidden = [k for k in json.loads((task_dir / task / "hidden.json").read_text()) if k != "__module__"]
             base = set(json.loads((task_dir / task / "baseline.json").read_text()))
             reach[task] = [k for k in hidden if k not in base and any(c["acceptance_outcomes"].get(k) == "pass" for c in rows if c["task"] == task)]
-    readings = {name: _reading(cells, task_dir, low, ref, margin, seed, reach, floor) for name, cells in (("P", rows), ("B", _paired(rows, low, ref)))}
-    verdict = min((e["verdict"] for e in readings.values()), key=VERDICT_ORDER.index)
-    by = {(r["task"], r["replicate"], r["arm"]): r for r in every}
-    imputed, reasons = [], {}
-    for task, rep, arm in planned:
-        r = by.get((task, rep, arm))
-        if _usable(r):
-            imputed.append(r)
-            continue
-        why = _unusable(r)
-        reasons[why] = reasons.get(why, 0) + 1
-        imputed.append({"task": task, "replicate": rep, "arm": arm, "cell": replay_eval.cell_id({"id": task}, arm, rep), "valid": True,
-                        "imputed": why, "acceptance_outcomes": {k: "fail" if arm == low else "pass" for k in reach.get(task, [])}})
-    guard = {"planned": len(planned), "usable": len(planned) - sum(reasons.values()), "imputed_in_L2": reasons, "label": None,
-             "unusable_cells": sorted(r["cell"] for r in every if not _usable(r))}
-    if reasons:
-        guard["L2"] = {name: _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=verdict == "PROVEN")
-                       for name, cells in (("P", imputed), ("B", _paired(imputed, low, ref)))}
-        if verdict == "PROVEN" and any(e["verdict"] != "PROVEN" for e in guard["L2"].values()):
-            verdict, guard["label"] = "NOT-PROVEN", "not decisive by missing data"
+    verdict, readings, guard = guard_decision(every, planned, task_dir, low, ref, margin, seed, reach, floor)
     dispatched = [r for r in every if r.get("failure_class") != "provider-rate-limit"]
     ratio, ratio_worst = (_cost_ratio(dispatched, results, low, ref, reserve, w) for w in (False, True))
     ci, ci_worst = (_ratio_interval(dispatched, results, low, ref, reserve, seed, w) for w in (False, True))

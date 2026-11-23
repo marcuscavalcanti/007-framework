@@ -496,6 +496,43 @@ class MissingDataGuard(unittest.TestCase):
         g = self.guard(self.cells())
         self.assertEqual((g["readings"]["P"]["critical"], g["verdict"], g["critical_floor"]), (99.0, "NOT-PROVEN", 99.0))
 
+    def clustered(self):
+        """Every cell valid; both lo attempts of T0 and T1 fail every test (a task-level loss), plus one noise cell each way."""
+        rows = self.cells(low_fail={(t, r) for t in ("T0", "T1") for r in (1, 2)})
+        for r in rows:
+            i = int(r["task"][1:])
+            if r["arm"] == "lo" and i < 2:
+                r["acceptance_outcomes"] = {"x": "fail", "y": "fail"}
+            else:
+                y = "fail" if (r["arm"], r["replicate"], i) in (("lo", 1, 2), ("hi", 2, 20)) else "pass"
+                r["acceptance_outcomes"] = {"x": "pass", "y": y}
+        return rows
+
+    def test_a_clustered_loss_no_longer_proves(self):
+        """1.11.0: the critical value is the larger over independent and clustered loss. Here the statistic (2.787) beat the
+        independent value (2.122) and reads PROVEN before 1.11.0; the clustered value (2.878) keeps it NOT-PROVEN. No cell is missing,
+        so L2 is not what changes it."""
+        rows, reach = self.clustered(), {t: ["x", "y"] for t in self.tasks}
+        old = lab.guard_decision(rows, self.planned, self.root, "lo", "hi", .2, 3, reach, None, loss=("independent",))
+        new = lab.guard_decision(rows, self.planned, self.root, "lo", "hi", .2, 3, reach, None)
+        self.assertEqual((old[0], new[0]), ("PROVEN", "NOT-PROVEN"))
+        self.assertEqual(new[2]["imputed_in_L2"], {})
+        self.assertAlmostEqual(new[1]["P"]["statistic"], old[1]["P"]["statistic"])
+        self.assertLess(old[1]["P"]["critical"], new[1]["P"]["statistic"])
+        self.assertGreaterEqual(new[1]["P"]["critical"], new[1]["P"]["statistic"])
+        g = self.guard(rows)  # the report's path, its reach taken from the valid cells
+        self.assertEqual((g["verdict"], g["answer"], g["missing_data"]["label"]), ("NOT-PROVEN", "NOT-PROVEN", None))
+
+    def test_without_a_task_level_loss_the_verdicts_stand(self):
+        """The regression side: on cells with no task-level loss the larger critical value does not move a verdict."""
+        reach = {t: ["x", "y"] for t in self.tasks}
+        invalid = {(t, 2, "lo") for t in self.tasks[:30] if int(t[1:]) % 10 >= 6}
+        for rows, verdict in ((self.cells(), "PROVEN"), (self.cells(invalid=invalid), "NOT-PROVEN"),
+                              (self.cells(low_fail={(t, r) for t in self.tasks for r in (1, 2)}), "KILL")):
+            got = [lab.guard_decision(rows, self.planned, self.root, "lo", "hi", .2, 3, reach, None, loss=loss)[0]
+                   for loss in (("independent",), lab.LOSS_MODELS)]
+            self.assertEqual(got, [verdict, verdict])
+
     def test_a_kill_does_not_pay(self):
         g = self.guard(self.cells(low_fail={(t, r) for t in self.tasks for r in (1, 2)}))
         self.assertEqual((g["verdict"], g["answer"]), ("KILL", "DOES-NOT-PAY"))
