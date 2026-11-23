@@ -746,7 +746,8 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
         source_repo = Path(config["repos"][task["repo"]]).expanduser().resolve()
     validate_timeout(task.get("acceptance_timeout_s", 900))
     policy = config["arms"][arm]
-    workspace = Path(tempfile.mkdtemp(prefix=f"007-{task['id']}-{arm}-r{replicate:02d}-")).resolve()
+    # an A/A copy (`007 lab run --aa`) works under its arm's name, so the agent sees the same path as the arm's own cells
+    workspace = Path(tempfile.mkdtemp(prefix=f"007-{task['id']}-{policy.get('aa_of', arm)}-r{replicate:02d}-")).resolve()
     try:
         if metadata is None:
             export_snapshot(source_repo, task["base"], workspace)

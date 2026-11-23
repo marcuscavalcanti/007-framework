@@ -26,6 +26,20 @@ schemas, and the dashboard snapshot.
   4.3% of cells, which also makes `PAYS` unreachable and leaves the study underpowered. Study F's go-json numbers read
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
   computation with it, and their output is unchanged.
+- `007 lab run --aa ARM` runs ARM twice on the same tasks, so a verdict carries its own noise floor. The copy is a third arm,
+  `ARM-aa`, with ARM's model, effort, doctrine and workspace name. Its cells are dispatched, charged and stopped like ARM's, and
+  they count toward every budget and stop rule. `run-manifest.json` records the copy, and a resume that turns it on, off or onto
+  another arm stops with `manifest-mismatch`. `chain` skips the copies. `report` reads the copy from the manifest and keeps the
+  verdict on the set's two arms, so the verdict is unchanged. Next to the verdict, the `aa` block gives:
+  - the acceptance discordance per task and overall, with a Clopper-Pearson interval;
+  - missing, refused, invalid or unreadable copies, counted and named but never as agreement, with a worst case that counts
+    them discordant;
+  - the verdict's own statistic computed A against A;
+  - `rejects_equality` when its 95% interval excludes zero.
+
+  The printed verdict gains `aa_status` and `aa_qualified`. `aa_qualified` is false whenever there are no A/A cells, and
+  `report.md` then says the verdict carries no measured noise floor. Reports of runs without `--aa` keep every earlier field and
+  value. See [the lab guide](docs/lab.md#the-aa-check-run---aa-arm).
 
 ## [1.10.1] - 2026-11-22
 

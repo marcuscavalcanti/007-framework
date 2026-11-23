@@ -592,6 +592,47 @@ class LabEndToEnd(unittest.TestCase):
         huge = {"cell": "A-r" + "9" * 5000 + "-low", "valid": True, "accepted": True}  # unread, never millions of planned cells
         self.assertEqual(lab.arm_accounting(config, self.root, [huge], {})["unread_cells"], 1)
 
+    def test_report_with_and_without_aa_and_the_verdict_unchanged_by_the_copy(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path = out / "replay-set.json"
+        lab.sensitivity(path, 2)
+        plain, twin = self.root / "plain", self.root / "twin"
+        lab.run(path, plain, replicates=2, jobs=2, max_calls=99, max_usd=99, stop_usd=1)
+        with mock.patch.object(lab.replay_eval.tempfile, "mkdtemp", wraps=tempfile.mkdtemp) as made:
+            state = lab.run(path, twin, replicates=2, jobs=2, max_calls=99, max_usd=99, stop_usd=1, aa="high")
+        tasks = len(json.loads(path.read_text())["tasks"])
+        self.assertEqual((state["stop"], state["calls"], state["cells"]), (None, 6 * tasks, 6 * tasks))
+        workspaces = [c.kwargs.get("prefix", "") for c in made.call_args_list if c.kwargs.get("prefix", "").startswith("007-") and "acceptance" not in c.kwargs["prefix"]]
+        self.assertEqual(len(workspaces), 6 * tasks)
+        self.assertFalse([w for w in workspaces if "-aa" in w])  # the copy works under its arm's name: the agent sees the same path
+        self.assertEqual(sum("-high-r" in w for w in workspaces), 4 * tasks)
+        without, with_ = lab.report(path, plain, None), lab.report(path, twin, None)
+        # the verdict reads the set's arms only: the copy changes none of it
+        for key in ("same_change_reachable", "durability", "margin", "refused_unequal"):
+            self.assertEqual(without["verdict"][key], with_["verdict"][key])
+        self.assertEqual(without["reachable_behaviour"], with_["reachable_behaviour"])
+        self.assertEqual(without["unseen_behaviour"], with_["unseen_behaviour"])
+        self.assertEqual(without["excluded_invalid"], with_["excluded_invalid"])
+        self.assertEqual((without["contrast"]["high"]["units"], without["contrast"]["high"]["accepted"]),
+                         (with_["contrast"]["high"]["units"], with_["contrast"]["high"]["accepted"]))
+        self.assertEqual((without["aa"], without["verdict"]["aa_status"], without["verdict"]["aa_qualified"]), (None, "absent", False))
+        self.assertIn("no A/A cells, so this verdict carries no measured noise floor and is not A/A-qualified", (plain / "report.md").read_text())
+        aa = with_["aa"]
+        self.assertEqual((aa["arm"], aa["label"], aa["rejects_equality"]), ("high", "high-aa", False))
+        self.assertEqual(aa["discordance"]["pairs"], 2 * tasks)
+        self.assertEqual((aa["discordance"]["discordant"], aa["discordance"]["missing_pairs"], aa["missing_cells"]), (0, 0, {}))
+        self.assertEqual((with_["verdict"]["aa_status"], with_["verdict"]["aa_qualified"]), ("too-few-tasks", False))  # under 8 tasks
+        self.assertEqual(with_["arm_accounting"]["arms"]["high-aa"]["valid"], 2 * tasks)
+        self.assertEqual(with_["arm_accounting"]["unread_cells"], 0)
+        text = (twin / "report.md").read_text()
+        self.assertIn("- **A/A, `high` twice:** not A/A-qualified: fewer than 8 tasks", text)
+        self.assertIn(f"acceptance differs in 0 of {2 * tasks} pairs", text)
+        self.assertIn(f"- **Cells, `high-aa`:** {2 * tasks} planned", text)
+        chained = lab.chain(path, twin, self.root / "stage2-twin")  # the copies are no part of the contrast stage 2 serves
+        self.assertEqual((chained["tasks"], chained["aa_not_chained"]), (4 * tasks, 2 * tasks))
+        self.assertNotIn("aa_not_chained", lab.chain(path, plain, self.root / "stage2-plain"))
+
     def test_the_report_reads_the_declared_margin_and_says_it_in_plain_words(self):
         out = self.root / "lab"
         lab.mine(self.config, out, 2)
@@ -1796,6 +1837,129 @@ class Viability(unittest.TestCase):
                 with self.subTest(argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:
                     lab.main(argv)
                 self.assertEqual(stop.exception.code, 2)
+
+
+class AA(unittest.TestCase):
+    """`run --aa`: the same arm twice, its discordance and the verdict's own statistic A against A, next to the verdict."""
+
+    def tasks(self, root, n):
+        for i in range(n):
+            (root / "tasks" / f"T{i}").mkdir(parents=True)
+            (root / "tasks" / f"T{i}" / "hidden.json").write_text(json.dumps(["__module__", "a", "b", "c", "d"]))
+            (root / "tasks" / f"T{i}" / "baseline.json").write_text(json.dumps(["a"]))
+
+    def check(self, root, cells, tasks=10, replicates=2):
+        with mock.patch.dict(lab.GATES, {"draws": 300}):
+            return lab.aa_check(cells, root / "tasks", {"arm": "xhigh", "label": "xhigh-aa"}, .03, 7, True,
+                                [f"T{i}" for i in range(tasks)], replicates)
+
+    @staticmethod
+    def accepted(row):
+        return {**row, "accepted": all(v == "pass" for k, v in row["acceptance_outcomes"].items() if k != "a")}
+
+    def test_the_copy_is_dispatched_accounted_and_budgeted_like_its_arm(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            path = root / "set.json"
+            arms = {"low": {"model": "m", "effort": "medium", "doctrine": ""}, "xhigh": {"model": "m", "effort": "xhigh", "doctrine": ""}}
+            path.write_text(json.dumps({"seed": 1, "arms": arms, "tasks": [{"id": f"T{i}"} for i in range(4)]}))
+            seen = []
+
+            def execute(config, task, arm, rep, out, timeout):
+                seen.append((arm, config["arms"][arm]))
+                cid = f"{task['id']}-r{rep:02d}-{arm}"
+                (out / f"{cid}.runner.json").write_text("{}")
+                row = {"valid": True, "cost_usd": 1.0}
+                (out / f"{cid}.json").write_text(json.dumps(row))
+                return row
+            with self.assertRaisesRegex(ValueError, "names no arm"):
+                lab.run(path, root / "bad", replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute, aa="high")
+            with self.assertRaisesRegex(ValueError, "must name an arm"):
+                lab.run(path, root / "bad", replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute, aa=True)
+            self.assertEqual(seen, [])
+            # the copy's cells take their reserve and their cost like the arm's: the cap stops the run at 9 of 12 cells
+            state = lab.run(path, root / "capped", replicates=1, jobs=1, max_calls=99, max_usd=9, stop_usd=1, execute=execute, aa="xhigh")
+            self.assertEqual((state["stop"], state["calls"], state["spent"], state["cells"]), ("usd-budget", 9, 9.0, 12))
+            self.assertEqual(state["refused_per_arm"], {"low": 0, "xhigh": 0, "xhigh-aa": 0})
+            out = root / "out"
+            self.assertEqual(lab.run(path, out, replicates=1, jobs=1, max_calls=9, max_usd=99, stop_usd=1, execute=execute, aa="xhigh")["stop"], "call-budget")
+            copies = [policy for arm, policy in seen if arm == "xhigh-aa"]
+            self.assertTrue(copies)
+            self.assertTrue(all({k: v for k, v in p.items() if k != "aa_of"} == arms["xhigh"] and p["aa_of"] == "xhigh" for p in copies))
+            manifest = json.loads((out / "run-manifest.json").read_text())
+            self.assertEqual((manifest["aa"], manifest["arms"]), ({"arm": "xhigh", "label": "xhigh-aa"}, arms))  # the set as written
+            self.assertEqual(lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute)["changed"], ["aa"])
+            self.assertEqual(lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute, aa="low")["changed"], ["aa"])
+            resumed = lab.run(path, out, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute, aa="xhigh")
+            self.assertEqual((resumed["stop"], resumed["calls"], resumed["spent"]), (None, 3, 12.0))
+            self.assertEqual(sum(1 for _ in out.glob("*-xhigh-aa.json")), 4)
+            plain = root / "plain"  # without --aa nothing changes: two arms, no copy, aa sealed as none
+            self.assertEqual(lab.run(path, plain, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute)["cells"], 8)
+            self.assertIsNone(json.loads((plain / "run-manifest.json").read_text())["aa"])
+            self.assertEqual(lab.run(path, plain, replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute, aa="xhigh")["changed"], ["aa"])
+            config = json.loads(path.read_text())
+            path.write_text(json.dumps({**config, "arms": {**arms, "xhigh-aa": arms["xhigh"]}}))
+            with self.assertRaisesRegex(ValueError, "already has an arm"):
+                lab.run(path, root / "clash", replicates=1, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=execute, aa="xhigh")
+
+    def test_an_identical_copy_gives_zero_discordance_and_qualifies(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 10)
+            base = [self.accepted(cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"} if (i + rep) % 3 else {"a", "b"})) for i in range(10) for rep in (1, 2)]
+            out = self.check(root, base + [{**r, "arm": "xhigh-aa"} for r in base])
+            self.assertEqual(out["discordance"]["pairs"], 20)
+            self.assertEqual((out["discordance"]["discordant"], out["discordance"]["rate"], out["discordance"]["missing_pairs"]), (0, 0.0, 0))
+            self.assertEqual(out["discordance"]["ci95"][0], 0.0)
+            self.assertLess(out["discordance"]["ci95"][1], .2)  # Clopper-Pearson upper bound for 0 of 20: 0.168
+            self.assertEqual((out["reachable_behaviour"]["mean"], out["reachable_behaviour"]["ci95"]), (0, [0.0, 0.0]))
+            self.assertEqual((out["rejects_equality"], out["status"], out["same_change_reachable"]), (False, "qualified", "PROVEN"))
+            self.assertEqual(out["per_task"]["T0"], {"pairs": 2, "discordant": 0, "missing": 0})
+            only = self.check(root, base)  # the arm alone: no copy, never qualified
+            self.assertEqual((only["status"], only["discordance"]["pairs"], only["discordance"]["missing_pairs"]), ("absent", 0, 20))
+            few = self.check(root, base[:4] + [{**r, "arm": "xhigh-aa"} for r in base[:4]], tasks=2)
+            self.assertEqual(few["status"], "too-few-tasks")
+
+    def test_a_planted_noisy_copy_rejects_equality_and_is_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 10)
+            base = [self.accepted(cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"} if (i + rep) % 4 else {"a", "b", "c"})) for i in range(10) for rep in (1, 2)]
+            # planted: the copy loses one or two of the three reachable tests on every task, as a noisy instrument would
+            noisy = [self.accepted(cell(f"T{i}", "xhigh-aa", rep, {"a", "b"} if (i + rep) % 2 else {"a", "b", "c"})) for i in range(10) for rep in (1, 2)]
+            out = self.check(root, base + noisy)
+            self.assertTrue(out["rejects_equality"])
+            self.assertGreater(out["reachable_behaviour"]["ci95"][0], 0)
+            self.assertEqual(out["status"], "rejects-equality")
+            self.assertGreater(out["discordance"]["discordant"], 0)
+            self.assertEqual(out["discordance"]["rate"], out["discordance"]["discordant"] / 20)
+            line = lab.aa_line(out, .03)
+            self.assertIn("the A/A rejects equality at the verdict's 95% level", line)
+            self.assertIn("the verdict is not A/A-qualified", line)
+
+    def test_missing_refused_invalid_and_unreadable_copies_are_reported_never_agreement(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 10)
+            base = [self.accepted(cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"})) for i in range(10) for rep in (1, 2)]
+            twins = {(r["task"], r["replicate"]): {**r, "arm": "xhigh-aa"} for r in base}
+            del twins[("T0", 1)]  # never dispatched or lost
+            twins[("T1", 1)] = {**twins[("T1", 1)], "valid": False, "accepted": False, "failure_class": "timeout"}
+            twins[("T2", 2)] = {**twins[("T2", 2)], "valid": False, "accepted": False, "failure_class": "provider-rate-limit"}
+            twins[("T3", 1)] = {**twins[("T3", 1)], "outcomes_unreadable": True, "accepted": False}
+            arm = [r if (r["task"], r["replicate"]) != ("T4", 2) else {**r, "valid": False, "failure_class": "agent-exit"} for r in base]
+            out = self.check(root, arm + list(twins.values()))
+            d_ = out["discordance"]
+            self.assertEqual((d_["pairs"], d_["discordant"], d_["missing_pairs"]), (15, 0, 5))
+            self.assertEqual(out["missing_cells"], {"absent": ["T0-r01-xhigh-aa"], "invalid": ["T1-r01-xhigh-aa", "T4-r02-xhigh"],
+                                                    "refused": ["T2-r02-xhigh-aa"], "unreadable": ["T3-r01-xhigh-aa"]})
+            self.assertEqual(out["per_task"]["T1"], {"pairs": 1, "discordant": 0, "missing": 1})
+            self.assertEqual((d_["rate"], d_["worst_case_rate"]), (0.0, 5 / 20))  # missing pairs count as discordant, never as agreement
+            line = lab.aa_line(out, .03)
+            self.assertIn("acceptance differs in 0 of 15 pairs", line)
+            self.assertIn("5 pairs have an absent or unusable cell, never counted as agreement (worst case 25.0%)", line)
+            self.assertIn("not A/A-qualified", lab.aa_line(None, .03))
+            self.assertIn("not A/A-qualified", lab.aa_line(self.check(root, arm), .03))
 
 
 if __name__ == "__main__":

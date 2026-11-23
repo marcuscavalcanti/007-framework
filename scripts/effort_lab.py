@@ -472,8 +472,11 @@ def chain(config_path, results, out):
     mirror = out / "mirror.git"
     if not mirror.exists():
         subprocess.run(["git", "clone", "-q", "--bare", "--no-hardlinks", str(repo), str(mirror)], check=True, capture_output=True)
-    next_tasks, broken = [], []
+    next_tasks, broken, aa, copies = [], [], parent_state.get("aa"), 0
     for row in load_cells(results):
+        if aa and row.get("arm") == aa["label"]:  # an A/A copy is no part of the contrast stage 2 serves
+            copies += 1
+            continue
         meta, task = pairs[row["task"]], tasks[row["task"]]
         if not isinstance(row.get("candidate_patch"), dict) or row.get("failure_class") == "provider-rate-limit":
             broken.append(row["cell"])  # no candidate to chain from: a controller error or a refused call
@@ -495,7 +498,7 @@ def chain(config_path, results, out):
         raise ValueError(f"a different chain set already exists in {out}: chain into a new directory")
     existing.write_text(data)
     (out / "pairs.json").write_text("{}")
-    return {"tasks": len(next_tasks), "broken": broken}
+    return {"tasks": len(next_tasks), "broken": broken, **({"aa_not_chained": copies} if aa else {})}
 
 
 # ---- sensitivity
@@ -861,6 +864,21 @@ def sensitivity_v2_summary(rows, tasks, floor=None, seed=1, draws=GATES["draws"]
 
 # ---- run
 
+AA_SUFFIX = "-aa"
+
+
+def aa_arms(config, arm):
+    """The set's arms plus the A/A copy of `arm` (`run --aa`): a third label, `<arm>-aa`, with the arm's own model, effort and
+    doctrine, so its cells are planned, shuffled into each replicate, dispatched, charged and stopped like the arm's. Its workspace
+    takes the arm's name, not the label (`aa_of`), so the agent sees the same path."""
+    arms = config.get("arms", {})
+    if arm not in arms:
+        raise ValueError(f"--aa names no arm of the set: {arm}")
+    if arm + AA_SUFFIX in arms:
+        raise ValueError(f"the set already has an arm named {arm + AA_SUFFIX}: --aa cannot add its copy")
+    return {**arms, arm + AA_SUFFIX: {**arms[arm], "aa_of": arm}}
+
+
 def plan(config, replicates):
     """Whole replicates first, so a pilot of replicate 1 is a prefix of the full run and nothing is wasted."""
     cells, rng = [], random.Random(config["seed"])
@@ -1072,7 +1090,7 @@ def sealed_state(config, results):
         if bound:
             raise ValueError(f"run manifest missing for sealed dispatches: {results}")
         return {"state": "absent", "compare_changed": None, "sha256": None, "program_sealed": None, "sealed_parts": None,
-                "unbound_dispatches": None, "unbound_cells": None}
+                "unbound_dispatches": None, "unbound_cells": None, "aa": None}
     digest = _sha256(results / RUN_MANIFEST)
     if bound and bound != {digest}:
         raise ValueError(f"run manifest changed after dispatch: {results}")
@@ -1081,7 +1099,8 @@ def sealed_state(config, results):
     state, unbound, unbound_cells = _binding(results, recorded, digest, history)
     return {"state": state, "compare_changed": recorded.get("compare") != config.get("compare"), "sha256": digest,
             "program_sealed": recorded.get("program_sealed"), "sealed_parts": recorded.get("sealed_parts"),
-            "unsealed_files": recorded.get("unsealed_files"), "unbound_dispatches": unbound, "unbound_cells": unbound_cells}
+            "unsealed_files": recorded.get("unsealed_files"), "unbound_dispatches": unbound, "unbound_cells": unbound_cells,
+            "aa": recorded.get("aa") if isinstance(recorded.get("aa"), dict) else None}
 
 
 def _binding(results, recorded, digest, history):
@@ -1270,9 +1289,11 @@ def _set_aside(out, cid):
 
 def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s=3600, execute=None, max_invalid=3,
         requeue_refused=False, over_limit="stop", chunk=None, max_load=None, load_wait_s=3600, quota_gate=False,
-        cost_marker_at=None, cost_marker_hold_usd=None, rate_limit_wait_s=0, strict_jobs=False):
+        cost_marker_at=None, cost_marker_hold_usd=None, rate_limit_wait_s=0, strict_jobs=False, aa=None):
     """Serialize controllers sharing an output directory before checking or publishing dispatch history. The options after
-    max_invalid are off by default, so a run without them behaves as in 1.8.1."""
+    max_invalid are off by default, so a run without them behaves as in 1.8.1. `aa` (an arm of the set) adds its A/A copy."""
+    if aa is not None and not isinstance(aa, str):
+        raise ValueError("aa must name an arm of the set")
     if not all(harness_report._valid_money(value) for value in (max_usd, stop_usd)):
         raise ValueError("budget values must be finite nonnegative numbers")
     for name, value, minimum in (("replicates", replicates, 1), ("jobs", jobs, 1), ("max_calls", max_calls, 0), ("max_invalid", max_invalid, 1),
@@ -1302,7 +1323,7 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
             return {"stop": "run-already-active", "calls": 0}
         options = {"requeue_refused": requeue_refused, "over_limit": over_limit, "chunk": chunk, "max_load": max_load,
                    "load_wait_s": load_wait_s, "quota_gate": quota_gate, "cost_marker_at": cost_marker_at,
-                   "cost_marker_hold_usd": cost_marker_hold_usd, "rate_limit_wait_s": rate_limit_wait_s}
+                   "cost_marker_hold_usd": cost_marker_hold_usd, "rate_limit_wait_s": rate_limit_wait_s, "aa": aa}
         return _run(config_path, out, replicates=replicates, jobs=jobs, max_calls=max_calls, max_usd=max_usd,
                     stop_usd=stop_usd, timeout_s=timeout_s, execute=execute, max_invalid=max_invalid, options=options)
 
@@ -1310,7 +1331,10 @@ def run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, tim
 def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, timeout_s, execute, max_invalid, options):
     """Spend rule: a cell is dispatched only if the spend so far plus stop_usd for it and for each cell in flight stays under max_usd.
     A failed call that reports no cost is charged stop_usd (its reserve), never zero; only a valid cell without a cost stops the run."""
-    config = json.loads(config_path.read_text())
+    config = written = json.loads(config_path.read_text())
+    aa = {"arm": options["aa"], "label": options["aa"] + AA_SUFFIX} if options["aa"] is not None else None
+    if aa:  # the copy is a third arm of this run only; the seal binds the set as written, and records the copy
+        config = {**config, "arms": aa_arms(config, aa["arm"])}
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     execute = execute or replay_eval.execute_cell
     ledger = out / "dispatch.jsonl"
@@ -1350,7 +1374,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         if age < RATE_LIMIT_COOLDOWN_S:
             return {"stop": "rate-limit-cooldown", "calls": 0, "retry_after_s": round(RATE_LIMIT_COOLDOWN_S - age)}
     try:
-        sealed = seal(config, config_path.parent)
+        sealed = seal(written, config_path.parent)
     except OSError:
         return {"stop": "executable-unreadable", "calls": 0}
     manifest = out / RUN_MANIFEST
@@ -1364,7 +1388,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
             return {"stop": "manifest-missing", "calls": 0}
         # a directory from before 1.8 is sealed now and reported as sealed-late; written whole, then renamed
         with tempfile.NamedTemporaryFile("w", dir=out, prefix="." + RUN_MANIFEST + ".", delete=False) as handle:
-            handle.write(json.dumps({**sealed, "compare": config.get("compare"), "sealed_at": _now(), "cells_before_seal": len(done),
+            handle.write(json.dumps({**sealed, "compare": config.get("compare"), "aa": aa, "sealed_at": _now(), "cells_before_seal": len(done),
                                      "dispatches_before_seal": sum("dispatched_at" in row for row in history),
                                      "version": _version(), "set_file_sha256": _sha256(config_path)}, indent=1) + "\n")
             handle.flush()
@@ -1377,6 +1401,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         old, new = recorded.get("executables") or {}, sealed["executables"]
         parts = sorted(part for part in set(old) | set(new) if old.get(part) != new.get(part))
         changed += [f"executables:{part}" for part in parts]
+        if recorded.get("aa") != aa:  # A/A on or off, or another arm, against what was sealed (none, before 1.11)
+            changed.append("aa")
         details = {part: {"sealed": old.get(part), "found": new.get(part)} for part in parts}
         if "toolchain" in changed:
             details["toolchain"] = {"sealed": recorded.get("toolchain"), "found": sealed["toolchain"]}
@@ -2116,6 +2142,10 @@ def _usable(row):
     return row is not None and row.get("valid") is True and not row.get("outcomes_unreadable")
 
 
+def _unusable(row):
+    return "absent" if row is None else "refused" if row.get("failure_class") == "provider-rate-limit" else "unreadable" if row.get("valid") is True else "invalid"
+
+
 def _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=True):
     diffs = reachable_diffs(cells, task_dir, low, ref, reach=reach)
     s = paired_interval(diffs)
@@ -2183,7 +2213,7 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
         if _usable(r):
             imputed.append(r)
             continue
-        why = "absent" if r is None else "refused" if r.get("failure_class") == "provider-rate-limit" else "unreadable" if r.get("valid") is True else "invalid"
+        why = _unusable(r)
         reasons[why] = reasons.get(why, 0) + 1
         imputed.append({"task": task, "replicate": rep, "arm": arm, "cell": replay_eval.cell_id({"id": task}, arm, rep), "valid": True,
                         "imputed": why, "acceptance_outcomes": {k: "fail" if arm == low else "pass" for k in reach.get(task, [])}})
@@ -2201,6 +2231,45 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
     return {"verdict": verdict, "answer": answer, "margin": margin, "critical_floor": floor, "reserve_usd": reserve, "readings": readings,
             "missing_data": guard, "cost_ratio": ratio, "cost_ratio_ci95": ci, "cost_ratio_worst": ratio_worst, "cost_ratio_worst_ci95": ci_worst,
             "reach_frozen": frozen, "refused": len(every) - len(dispatched)}
+
+
+def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates, reach=None):
+    """`run --aa`: the arm against its copy, on the same tasks and plan. Discordance: whole-change acceptance differs within a
+    (task, replicate) pair, over pairs whose two cells are usable, with a Clopper-Pearson interval. A pair with an absent, refused,
+    invalid or unreadable cell is counted and its cells named, never as agreement; the worst case counts it discordant. The
+    same-change statistic is the verdict's own (reachable_diffs on valid cells, the t interval, proven_critical), A against A. It
+    rejects equality when its 95% interval, the verdict's level, excludes zero. Qualified needs A/A cells, at least
+    min_signal_tasks tasks in the interval, and no rejection."""
+    arm, label = aa["arm"], aa["label"]
+    by = {(r["task"], r["replicate"], r["arm"]): r for r in cells}
+    per_task, missing = {}, {}
+    for task in task_ids:
+        entry = per_task[task] = {"pairs": 0, "discordant": 0, "missing": 0}
+        for rep in range(1, replicates + 1):
+            a, b = by.get((task, rep, arm)), by.get((task, rep, label))
+            if _usable(a) and _usable(b):
+                entry["pairs"] += 1
+                entry["discordant"] += bool(a.get("accepted")) != bool(b.get("accepted"))
+                continue
+            entry["missing"] += 1
+            for side, r in ((arm, a), (label, b)):
+                if not _usable(r):
+                    missing.setdefault(_unusable(r), []).append(replay_eval.cell_id({"id": task}, side, rep))
+    n, k, m = (sum(e[key] for e in per_task.values()) for key in ("pairs", "discordant", "missing"))
+    valid = [r for r in cells if r.get("valid") is True]
+    diffs = reachable_diffs(valid, task_dir, arm, label, reach=reach)
+    interval = paired_interval(diffs)
+    critical = proven_critical(valid, task_dir, arm, label, seed, margin, reach=reach)
+    ci = interval["ci95"]
+    rejects = ci is not None and (ci[0] > 0 or ci[1] < 0)
+    status = ("absent" if not any(r["arm"] == label for r in cells) else "too-few-tasks" if ci is None or interval["tasks"] < GATES["min_signal_tasks"]
+              else "rejects-equality" if rejects else "qualified")
+    return {"arm": arm, "label": label, "status": status, "rejects_equality": rejects,
+            "discordance": {"pairs": n, "discordant": k, "rate": k / n if n else None, "ci95": list(_binomial_bounds(k, n)) if n else None,
+                            "missing_pairs": m, "worst_case_rate": (k + m) / (n + m) if n + m else None},
+            "missing_cells": {why: sorted(v) for why, v in sorted(missing.items())}, "per_task": per_task, "reachable_behaviour": interval,
+            "statistic": studentized(diffs, margin) if len(diffs) > 1 else None, "critical": critical,
+            "same_change_reachable": behaviour_verdict(interval, sensitive, margin, critical=math.inf if critical is None else critical)}
 
 
 def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None, planned_replicates=None):
@@ -2230,12 +2299,15 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     config = json.loads(config_path.read_text())
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     manifest = sealed_state(config, results)
+    aa = manifest["aa"]
     rows = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
-    accounting = arm_accounting(config, results, rows, receipts)
-    every = rows
+    accounting = arm_accounting({**config, "arms": {**config["arms"], aa["label"]: None}} if aa else config, results, rows, receipts)
     orphans = sorted(set(receipts) - {r["cell"] for r in rows})
+    twins = [r for r in rows if aa and r.get("arm") in (aa["arm"], aa["label"])]
+    rows = [r for r in rows if not aa or r.get("arm") != aa["label"]]  # the verdict reads the set's arms only, as without --aa
+    every = rows
     excluded = sorted(r["cell"] for r in rows if r["valid"] is not True)
     rows = [r for r in rows if r["valid"] is True]
     if not rows:
@@ -2310,7 +2382,11 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
         tier["thesis"] = "KILLED"
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
         tier["thesis"] = "UNPROVEN"
-    aa = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a, reach=frozen_reach)) for a in (low, ref)}
+    pseudo = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a, reach=frozen_reach)) for a in (low, ref)}
+    twin = aa_check(twins, task_dir, aa, margin, config["seed"], sensitive, [t["id"] for t in config["tasks"]], accounting["replicates"],
+                    frozen_reach) if aa else None
+    tier["aa_status"] = twin["status"] if twin else "absent"
+    tier["aa_qualified"] = tier["aa_status"] == "qualified"  # never without A/A cells
     guard = None
     if missing_data_guard_reserve is not None:
         if planned_replicates < accounting["replicates"]:
@@ -2322,7 +2398,7 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
         stage2["stage1_cells"] = len(rows)
     result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "next_run_manifest": stage2, "arm_accounting": accounting, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
-              "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": aa, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
+              "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": pseudo, "aa": twin, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES,
               "missing_data_guard": guard, "reach_frozen": frozen_reach is not None,
               "frozen_reach_sha256": hashlib.sha256(json.dumps(frozen_reach, sort_keys=True).encode()).hexdigest() if frozen_reach is not None else None}
@@ -2331,6 +2407,25 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     if single_look:
         (results / LOOK).write_text(json.dumps({"at": _now(), "report_sha256": _sha256(results / "report.json")}, indent=1) + "\n")
     return result
+
+
+def aa_line(aa, margin):
+    """The A/A line of report.md: the noise floor the verdict carries, or that it carries none."""
+    if not aa or aa["status"] == "absent":
+        return "- **A/A:** no A/A cells, so this verdict carries no measured noise floor and is not A/A-qualified (`run --aa ARM` adds them)."
+    pct = lambda x: f"{100 * x:.1f}%"
+    d, r = aa["discordance"], aa["reachable_behaviour"]
+    status = {"qualified": "A/A-qualified: the copy does not reject equality with its arm",
+              "rejects-equality": "**the A/A rejects equality at the verdict's 95% level: the instrument alone produces differences of this size; "
+                                  "the verdict is not A/A-qualified**",
+              "too-few-tasks": f"not A/A-qualified: fewer than {GATES['min_signal_tasks']} tasks reach new behaviour in both"}[aa["status"]]
+    discord = (f"acceptance differs in {d['discordant']} of {d['pairs']} pairs ({pct(d['rate'])}, 95% {pct(d['ci95'][0])} to {pct(d['ci95'][1])})"
+               if d["pairs"] else "no complete pair")
+    lost = (f"; {d['missing_pairs']} pairs have an absent or unusable cell, never counted as agreement (worst case {pct(d['worst_case_rate'])})"
+            if d["missing_pairs"] else "")
+    reach = (f"; reach difference {100 * r['mean']:+.1f} points (95% {100 * r['ci95'][0]:+.1f} to {100 * r['ci95'][1]:+.1f}, {r['tasks']} tasks), "
+             f"same change at margin {100 * margin:g} points {aa['same_change_reachable']}" if r.get("ci95") else "")
+    return f"- **A/A, `{aa['arm']}` twice:** {status}; {discord}{lost}{reach}."
 
 
 def summary(result, low, ref, attempts):
@@ -2377,6 +2472,7 @@ def summary(result, low, ref, attempts):
            f"{g['cost_ratio']:.3f} of `{ref}`'s (95% {g['cost_ratio_ci95'][0]:.3f} to {g['cost_ratio_ci95'][1]:.3f}; worst case "
            f"{g['cost_ratio_worst']:.3f}, {g['cost_ratio_worst_ci95'][0]:.3f} to {g['cost_ratio_worst_ci95'][1]:.3f}). The instrument checks are not part of it."]
           if (g := result.get("missing_data_guard")) else []),
+        aa_line(result.get("aa"), tier["margin"]),
         *([f"- **Dispatch ledger:** {accounting['history']}; the counts above may be incomplete."] if accounting and accounting["history"] != "complete" else []),
         *([f"- **Stage 2:** {result['next_run_manifest']['state']}; {result['next_run_manifest']['stage1_cells_chained']} of "
            f"{result['next_run_manifest']['stage1_cells']} valid stage-1 attempts have a valid stage-2 attempt; the others count as not durable."]
@@ -2413,6 +2509,7 @@ def main(argv=None):
             sub.add_argument("--cost-marker-at", type=int, help="after this many cells, project the cost once (needs --cost-marker-hold-usd)")
             sub.add_argument("--cost-marker-hold-usd", type=float, help="a projection above this holds the run for good (HOLD.json)")
             sub.add_argument("--rate-limit-wait-s", type=int, default=0, help="wait out rate-limit pauses inside the run, up to this long in all")
+            sub.add_argument("--aa", metavar="ARM", help="also run ARM's A/A copy (label ARM-aa) on every task and replicate; report reads it")
         if name == "sensitivity":
             sub.add_argument("--operator", choices=("v1", "v2"), default="v1", help="v2: one unit reverted in the reference tree (sensitivity-v2.json)")
             sub.add_argument("--floor", type=float, help="v2: the floor its three-state decision reads; without it the decision is floor-unset")
@@ -2482,7 +2579,8 @@ def main(argv=None):
             result = run(path, out, replicates=args.replicates, jobs=args.jobs, max_calls=args.max_calls, max_usd=args.max_usd, stop_usd=args.stop_usd,
                          max_invalid=args.max_invalid, requeue_refused=args.requeue_refused, over_limit=args.over_limit, chunk=args.chunk,
                          max_load=args.max_load, load_wait_s=args.load_wait_s, quota_gate=args.quota_gate, cost_marker_at=args.cost_marker_at,
-                         cost_marker_hold_usd=args.cost_marker_hold_usd, rate_limit_wait_s=args.rate_limit_wait_s, strict_jobs=args.strict_jobs)
+                         cost_marker_hold_usd=args.cost_marker_hold_usd, rate_limit_wait_s=args.rate_limit_wait_s, strict_jobs=args.strict_jobs,
+                         aa=args.aa)
         except ValueError as error:  # a refusal by the run (its options, set or artifacts) prints as a usage error, exit 2
             parser.error(str(error))
         print(json.dumps(result))

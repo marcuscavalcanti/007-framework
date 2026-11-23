@@ -48,6 +48,38 @@ not proof of an operating-system sandbox. Cells identify their boundary as `host
 untrusted candidates; no provider-specific mechanism is required by this policy. Existing frozen experiments keep their
 original configuration and embedded acceptance adapter.
 
+## The A/A check: `run --aa ARM`
+
+Without an A/A, a disagreement such as 3 pairs in 62 cannot be told apart from noise. `run --aa ARM` runs ARM twice on the same
+tasks and replicates: its copy is a third arm, `ARM-aa`, with ARM's model, effort and doctrine and the same agent command. Its cells
+are shuffled into each replicate with the others, dispatched, charged and stopped like ARM's: they take a `--stop-usd` reserve, count
+toward `--max-calls`, `--max-usd`, `--max-invalid`, refusals and the cost marker, and `arm_accounting` lists `ARM-aa` as an arm.
+The copy's workspace carries ARM's name, not the label, so the agent sees the same path; the runner's own receipt path does carry
+the label. `run-manifest.json` records `aa` (`{"arm", "label"}`, or `null`); a resume with A/A turned on or off, or on another arm,
+stops with `manifest-mismatch` (`aa`), so the copy is either planned from the first dispatch or not at all. `chain` does not chain
+the copies (`aa_not_chained`).
+
+`report` reads `aa` from the manifest; there is no report option. The verdict reads the set's two arms only, so its value and
+statistics are the ones the same cells give without the copy. Next to it, the report's `aa` block gives:
+
+- **Discordance:** pairs (task, replicate) whose whole-change acceptance differs, per task and overall, with a Clopper-Pearson 95%
+  interval, over pairs whose two cells are usable.
+- **Missing cells:** a pair with an absent, refused, invalid or unreadable cell is counted (`missing_pairs`) and its cells named
+  (`missing_cells`), never as agreement; `worst_case_rate` counts each such pair as discordant.
+- **The verdict's statistic, A against A:** `reachable_diffs` on the valid cells of ARM and its copy, the 95% t interval, the
+  studentized statistic, `proven_critical` and the same-change reading at the declared margin.
+- **The flag:** `rejects_equality` when that 95% interval, the verdict's own level, excludes zero.
+
+The printed verdict carries `aa_status` and `aa_qualified`. `aa_qualified` is true only for `qualified`: A/A cells exist, at least 8
+tasks (the verdict's own minimum) reach new behaviour in ARM and its copy, and the A/A does not reject equality. Otherwise the status
+is `absent` (no A/A cells: a run without `--aa`, or one whose copies never ran), `too-few-tasks` or `rejects-equality`, and
+`report.md` says the verdict is not A/A-qualified. A copy costs one more attempt per task and replicate: half again what the two arms
+cost alone.
+
+`pseudo_aa`, which splits one arm's replicate 1 against its later replicates, stays in the report; it is not this check. Study F's
+recorded A/A (3.55% of permutation splits whose interval excluded zero) was the standing check on the Codex top-up's `high` cells,
+not on F's cells or on Claude attempts (`TESE-SCORECARD` erratum of 2026-11-14).
+
 ## What the report can say
 
 | Claim | Gate |
