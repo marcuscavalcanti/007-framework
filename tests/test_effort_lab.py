@@ -1635,5 +1635,168 @@ class ReachableBehaviour(unittest.TestCase):
             self.assertEqual(out["dropped"], [("T0", 0.0)])
 
 
+# Recorded numbers only, under neutral labels: counts, rates and intervals of the D-2 gate (2026-11-14) and of the go-json
+# studies. No repository content. A tuple of reasons is the order the verdict lists them in.
+REPO_A = {"tasks": 7, "sensitivity": {"mutants": 42, "rejected": 17}, "load_sensitive": []}
+REPO_B = {"tasks": 52, "sensitivity": {"mutants": 310, "rejected": 92}, "load_sensitive": []}
+# repo-C: 24 mined tasks with their gate; reference acceptance, saving, SD and reach come from an earlier 24-task replay of the
+# same repository (accepted xhigh 3 of 70; median per-task saving 0.679; SD 0.198 over 21 reaching tasks, replicates 1 and 2).
+# The 9 accepted cells of both arms fell in 3 distinct tasks, so no arm had more than 3 of 24.
+REPO_C = {"tasks": 24, "sensitivity": {"mutants": 136, "rejected": 46}, "load_sensitive": [], "reference_acceptance": [3, 70],
+          "saving": 0.6793728227263807, "sd": 0.19758041884322772, "reach_share": 21 / 24, "accepted_task_share": {"medium": 3 / 24, "xhigh": 3 / 24}}
+# Study F as planned (PREREG-F): the 2026-11-07 Claude run on go-json's 41 reaching commits, 2 attempts per arm. SD from its
+# primary t interval [-0.118, +0.0073] around -0.0553; xhigh accepted 63/82, medium 55/81, so at least 32 and 28 distinct tasks
+# had an accepted cell; 36 commits had one in some attempt; median cost US$0.568 vs US$2.272. Oracle: go-json's mined set,
+# 255 of 321 planted defects rejected.
+GO_JSON_PLANNED = {"tasks": 41, "sensitivity": {"mutants": 321, "rejected": 255}, "load_sensitive": [], "reach_share": 1.0,
+                   "sd": (0.0073296801017865496 + 0.055326787034104104) * 41 ** .5 / lab.t975(40), "sufficient_share": 36 / 41,
+                   "reference_acceptance": [63, 82], "saving": 1 - 0.5682964 / 2.27185, "accepted_task_share": {"medium": 28 / 41, "xhigh": 32 / 41},
+                   "declared_margin": 0.2}
+# Study F's own cells (RESULT-F): interval [-0.030, +0.047] around +0.0085; xhigh 61/81, medium 56/82 accepted; mean cost per
+# cell US$0.70 vs US$2.90 (no median published).
+GO_JSON_F = {**GO_JSON_PLANNED, "sd": (0.047348909666070395 - 0.00848210644074907) * 41 ** .5 / lab.t975(40), "reference_acceptance": [61, 81],
+             "saving": 1 - 0.70 / 2.90, "accepted_task_share": {"medium": 28 / 41, "xhigh": 31 / 41}, "sufficient_share": 31 / 41}
+
+
+class Viability(unittest.TestCase):
+    """`007 lab viability`: whether a repository can give a decisive verdict, from recorded numbers, before any paid run."""
+
+    def reasons(self, result):
+        return tuple(r["reason"] for r in result["reasons"])
+
+    def test_the_three_d2_repositories_read_not_viable_for_their_recorded_reason(self):
+        a, b, c = map(lab.viability_verdict, (REPO_A, REPO_B, REPO_C))
+        self.assertEqual((a["verdict"], self.reasons(a)), ("NOT-VIABLE", ("too-few-tasks",)))  # its oracle passed (17/42)
+        self.assertEqual((b["verdict"], self.reasons(b)), ("NOT-VIABLE", ("oracle-blind",)))
+        low, high = b["derived"]["sensitivity"]["clopper_pearson95"]
+        self.assertLess(low, .30)  # the interval straddles the gate (Wilson 0.249-0.35 in the record): the point estimate decides,
+        self.assertGreater(high, .30)  # as report() does
+        self.assertAlmostEqual(b["derived"]["sensitivity"]["rate"], .2968, places=4)
+        self.assertEqual((c["verdict"], self.reasons(c)), ("NOT-VIABLE", ("reference-does-not-deliver", "pays-unreachable", "underpowered")))
+        self.assertAlmostEqual(c["derived"]["break_even_margin"], 0.029115978116844885)  # the recorded break-even margin
+        self.assertAlmostEqual(c["derived"]["power_proven_if_equal"], .0994, places=3)
+        pooled = lab.viability_verdict({**REPO_C, "reference_acceptance": [9, 141]})  # both arms pooled, as the record also quotes it
+        self.assertIn("reference-does-not-deliver", self.reasons(pooled))
+
+    def test_go_json_study_f_reads_viable_as_planned_and_on_its_own_cells(self):
+        for inputs in (GO_JSON_PLANNED, GO_JSON_F):
+            out = lab.viability_verdict(inputs)
+            self.assertEqual((out["verdict"], out["reasons"], out["missing"], out["notes"]), ("VIABLE", [], [], []))
+            self.assertEqual(out["derived"]["break_even_margin"], .20)  # PREREG-F's m = min(0.20, 0.768 x 0.75)
+            self.assertGreater(out["derived"]["power_proven_if_equal"], .99)
+
+    def test_each_reason_fires_alone(self):
+        cases = {"too-few-tasks": {"tasks": 7}, "load-sensitive-oracle": {"load_sensitive": ["T1"]},
+                 "oracle-blind": {"sensitivity": {"mutants": 100, "rejected": 29}},
+                 "oracle-blind-v2": {"sensitivity_v2": {"decision": "fails", "sensitivity": .1, "interval": [.05, .2]}},
+                 "too-few-reaching-tasks": {"reach_share": 7 / 41}, "prompt-insufficient": {"sufficient_share": 7 / 41},
+                 "reference-does-not-deliver": {"reference_acceptance": [20, 82], "saving": 1.0},
+                 "pays-unreachable": {"accepted_task_share": {"medium": 3 / 41, "xhigh": 32 / 41}},
+                 "underpowered": {"sd": .9}}
+        for reason, change in cases.items():
+            with self.subTest(reason):
+                out = lab.viability_verdict({**GO_JSON_PLANNED, **change})
+                self.assertEqual((out["verdict"], self.reasons(out)), ("NOT-VIABLE", (reason,)))
+        few_mutants = lab.viability_verdict({**GO_JSON_PLANNED, "sensitivity": {"mutants": 19, "rejected": 19}})
+        self.assertEqual(self.reasons(few_mutants), ("oracle-blind",))  # report's gate: 20 mutants at least
+        for decision in ("passes", "indeterminate", "no-information", "floor-unset"):  # v2 is not qualified: only `fails` decides
+            self.assertEqual(lab.viability_verdict({**GO_JSON_PLANNED, "sensitivity_v2": {"decision": decision}})["verdict"], "VIABLE")
+        nothing_saved = lab.viability_verdict({**GO_JSON_PLANNED, "saving": -.1})
+        self.assertEqual((self.reasons(nothing_saved), nothing_saved["derived"]["break_even_margin"]), (("underpowered",), 0.0))
+
+    def test_missing_data_reads_unknown_never_viable(self):
+        for key in lab.VIABILITY_INPUTS:
+            with self.subTest(key):
+                out = lab.viability_verdict({k: v for k, v in GO_JSON_PLANNED.items() if k != key})
+                self.assertEqual((out["verdict"], out["missing"]), ("UNKNOWN", [key]))
+        empty = lab.viability_verdict({})
+        self.assertEqual((empty["verdict"], empty["missing"]), ("UNKNOWN", list(lab.VIABILITY_INPUTS)))
+        # a known failure decides whatever is missing
+        self.assertEqual(lab.viability_verdict({"tasks": 3})["verdict"], "NOT-VIABLE")
+
+    def test_a_declared_margin_off_break_even_is_noted(self):
+        out = lab.viability_verdict({**GO_JSON_PLANNED, "declared_margin": .03})
+        self.assertEqual(out["verdict"], "VIABLE")
+        self.assertIn("break-even margin 0.2", out["notes"][0])
+
+    def test_unknown_or_malformed_inputs_are_refused(self):
+        for bad in ({"task": 41}, {"tasks": "41"}, {"tasks": True}, {"reach_share": 1.5}, {"sd": 0}, {"reference_acceptance": [5, 4]},
+                    {"reference_acceptance": [1, 0]}, {"sensitivity": {"mutants": 3, "rejected": 4}}, {"accepted_task_share": {}},
+                    {"saving": float("nan")}, {"sensitivity_v2": {"sensitivity": .1}}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                lab.viability_verdict(bad)
+
+    def write_set(self, root, n, sensitivity, v2=None):
+        for i in range(n):
+            (root / "tasks" / f"T{i}").mkdir(parents=True)
+            (root / "tasks" / f"T{i}" / "hidden.json").write_text(json.dumps(["__module__", "a", "b", "c", "d"]))
+            (root / "tasks" / f"T{i}" / "baseline.json").write_text(json.dumps(["a"]))
+        (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh", "margin": .2}, "tasks": [{"id": f"T{i}"} for i in range(n)]}))
+        (root / "sensitivity.json").write_text(json.dumps(sensitivity))
+        if v2 is not None:
+            (root / "sensitivity-v2.json").write_text(json.dumps(v2))
+
+    def test_inputs_are_read_from_the_set_and_a_pilot_of_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.write_set(root, 10, {"immediate": {"mutants": 40, "rejected": 30, "passed": True}, "load_sensitive": []})
+            rows = []
+            for i in range(10):
+                for rep in (1, 2):
+                    whole = i >= 5 or bool((i + rep) % 2)  # half the tasks lose d in one attempt: a spread to plan with
+                    rows.append({**cell(f"T{i}", "medium", rep, {"a", "b", "c", "d"} if whole else {"a", "b", "c"}), "cell": f"T{i}-r0{rep}-medium",
+                                 "accepted": whole, "cost_usd": 1.0})
+                    rows.append({**cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"}), "cell": f"T{i}-r0{rep}-xhigh", "accepted": True, "cost_usd": 4.0})
+            with mock.patch.object(lab, "load_cells", return_value=rows):
+                out = lab.viability(root / "set.json", root)
+            inputs = out["inputs"]
+            self.assertEqual((inputs["tasks"], inputs["reach_share"], inputs["sufficient_share"], inputs["reference_acceptance"]), (10, 1.0, 1.0, [20, 20]))
+            self.assertEqual((inputs["saving"], inputs["accepted_task_share"], inputs["declared_margin"]), (.75, {"medium": 1.0, "xhigh": 1.0}, .2))
+            self.assertEqual(inputs["sensitivity"], {"mutants": 40, "rejected": 30})
+            self.assertEqual(out["sources"]["sensitivity"], "sensitivity.json immediate")
+            self.assertEqual(out["verdict"], "VIABLE")
+            # stated numbers win over the pilot and say so
+            with mock.patch.object(lab, "load_cells", return_value=rows):
+                stated = lab.viability(root / "set.json", root, {"reference_acceptance": [2, 20]})
+            self.assertEqual((stated["verdict"], self.reasons(stated), stated["sources"]["reference_acceptance"]),
+                             ("NOT-VIABLE", ("reference-does-not-deliver",), "stated"))
+            with mock.patch.object(lab, "load_cells", return_value=rows + [{**rows[0], "task": "OTHER"}]), self.assertRaises(ValueError):
+                lab.viability(root / "set.json", root)
+            with self.assertRaises(ValueError):
+                lab.viability(None, root)
+
+    def test_a_sensitivity_without_counts_is_unknown_and_a_failing_v2_is_read(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            # a `passed` asserted on a basis, with no mutant counted (go-json's F set carries one): no measure
+            tasks = {f"T{i}": {"control": "ok"} for i in range(8)}
+            rows = [{"task": f"T{i}", "class": "valid", "outcome": "survived"} for i in range(8) for _ in range(5)]
+            self.write_set(root, 8, {"immediate": {"passed": True, "basis": "mined"}, "load_sensitive": []}, {"seed": 1, "rows": rows, "tasks": tasks})
+            out = lab.viability(root / "set.json")
+            self.assertNotIn("sensitivity", out["inputs"])
+            self.assertIn("sensitivity", out["missing"])
+            self.assertEqual(out["inputs"]["sensitivity_v2"]["decision"], "fails")
+            self.assertEqual((out["verdict"], self.reasons(out)), ("NOT-VIABLE", ("oracle-blind-v2",)))
+
+    def test_cli_prints_json_or_text_and_exits_by_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name, inputs, code in (("b", REPO_B, 1), ("f", GO_JSON_PLANNED, 0), ("u", {"tasks": 41}, 3)):
+                (root / f"{name}.json").write_text(json.dumps(inputs))
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    self.assertEqual(lab.main(["viability", "--inputs", str(root / f"{name}.json")]), code)
+                self.assertEqual(json.loads(stdout.getvalue())["verdict"], {0: "VIABLE", 1: "NOT-VIABLE", 3: "UNKNOWN"}[code])
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                lab.main(["viability", "--inputs", str(root / "b.json"), "--format", "text"])
+            self.assertTrue(stdout.getvalue().startswith("007 lab viability: NOT-VIABLE\n- oracle-blind: "))
+            (root / "bad.json").write_text(json.dumps({"tasks": "many"}))
+            for argv in (["viability"], ["viability", "--inputs", str(root / "bad.json")]):
+                with self.subTest(argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:
+                    lab.main(argv)
+                self.assertEqual(stop.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

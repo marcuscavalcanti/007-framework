@@ -5,6 +5,7 @@
 ```bash
 007 lab mine --config lab.json --out lab
 007 lab sensitivity --set lab/replay-set.json
+007 lab viability --set lab/replay-set.json --results pilot --format text
 007 lab feasibility --set lab/replay-set.json --sd 0.23
 007 lab run --set lab/replay-set.json --out results --replicates 3 --max-calls 144 --max-usd 150
 007 lab report --set lab/replay-set.json --results results
@@ -62,6 +63,55 @@ Gates are fixed in code. If the oracle cannot reject planted defects, the verdic
 The savings settle fast: reasoning tokens, agent time and estimated cost per attempt need a few dozen commits. The same change does not. With the attempts each run had (about two per arm for Codex, three for Claude), a 3-point verdict needs hundreds of commits that reach new behaviour: about 190–360 with the noise measured for Codex on go-json, about 700 for Claude. A repository rarely has that many; go-json-experiment/json gave 41 out of 145 candidates. At that size `KILL` is a guard against a large loss (a loss spread across commits is caught four times in five only from about 10–12 points on), and `NOT-PROVEN` is the expected answer, not a failure. When a loss comes as rare attempts that fail outright, the t interval calls a 3-point loss `PROVEN` about twice as often as it should, which is why `PROVEN` uses a critical value simulated from the run. With it, two attempts per arm almost never prove; on go-json's 41 commits about eight per arm would prove equal arms about three times in four, if commits do not differ in effect. One verdict per executor.
 
 Only some mined tasks reach new behaviour (41 of 62 on go-json). Given pilot results (`--results`), `feasibility` reports that share as `reach_share` and the tasks to mine as `tasks_to_mine_if_equal`; with `--sd` alone it assumes every task reaches.
+
+## Before spending: `viability`
+
+`007 lab viability` says, at no model cost, whether a repository can give a decisive verdict, and why not. It reads files
+only: the set (task count, declared margin), `sensitivity.json` and `sensitivity-v2.json` beside it, pilot cells of the
+same set (`--results`), and `--inputs`, a JSON object of recorded numbers that wins over both (for numbers from an earlier
+run of another set, or published ones). It prints JSON, or plain text with `--format text`, and exits 0 for `VIABLE`, 1
+for `NOT-VIABLE` and 3 for `UNKNOWN`.
+
+- `NOT-VIABLE` lists every reason it found. A known failure decides whatever is missing.
+- `UNKNOWN` names the inputs it lacks. Missing data never reads `VIABLE`. A `sensitivity.json` that asserts `passed`
+  without counting mutants is not a measure, so it counts as missing.
+- `VIABLE` needs all eight inputs and no reason. It means no known reason to fail, not a promised verdict: the power is a
+  normal approximation and ignores the calibrated critical value, which is stricter.
+
+Every threshold is a gate the lab already applies or a recorded rule. The reasons follow the D-2 measurability ladder
+(tasks, instrument, reference, power):
+
+| Reason | Fires when | Source |
+|---|---|---|
+| `too-few-tasks` | mined tasks < 8 | `GATES["min_signal_tasks"]`: `report` reads `NO-INFORMATION` under 8 tasks that reach new behaviour |
+| `load-sensitive-oracle` | `sensitivity.json` lists tasks of the set in `load_sensitive` | `run` refuses such a set |
+| `oracle-blind` | `immediate`: rejected / mutants < 0.30, or fewer than 20 mutants | `GATES["min_sensitivity"]`, `GATES["min_mutants"]`: the `sensitive` gate `report` reads. The point estimate decides, as in `report`; a Clopper-Pearson interval is shown |
+| `oracle-blind-v2` | `sensitivity-v2.json`, read at floor 0.30, decides `fails` | the same floor. v2 is not qualified as a gate, so only `fails` counts |
+| `too-few-reaching-tasks` | tasks × the pilot's reach share < 8 | `feasibility`'s `planned_reaching`, against the same 8 |
+| `prompt-insufficient` | tasks × the share of attempted tasks where one cell passed ≥ 0.8 of the new behaviour < 8 | `sufficiency`'s default threshold, against the same 8 |
+| `reference-does-not-deliver` | reference-arm acceptance < 0.25 | `GATES["floor"]`: acceptance under it is not informative |
+| `pays-unreachable` | for some arm, (1 − share of tasks with an accepted cell)^tasks > 0.025 | Study F reads the cost ratio R from a task bootstrap at its 97.5% point. A resample with no accepted change in an arm makes R infinite. When that happens more than 2.5% of the time, the upper bound is infinite and `PAYS` cannot be read |
+| `underpowered` | power of `PROVEN` at the break-even margin < 0.50, or the margin is 0 | margin `m = min(0.20, reference acceptance × saving)` (PREREG-F; [Choosing the margin](#choosing-the-margin)); power as `feasibility` computes it, over tasks × reach share; 0.50 from the power rule of the D-2 study on the maintainer's repositories (an amendment kept in the private record) |
+
+From pilot cells, the inputs are read as follows:
+
+- The reach share and SD are computed as `feasibility` computes them.
+- The sufficient share is computed as `sufficiency` computes it, over any valid cell.
+- The saving is 1 − (median cost per valid cell at the candidate ÷ median at the reference), as PREREG-F computed it.
+- The accepted-task shares are the distinct tasks with an accepted cell in each arm, over the tasks attempted.
+
+When the set's `compare.margin` differs from the break-even margin, a note says so. `report` tests the declared margin, so a
+`PAYS` reading needs the break-even margin declared before the first attempt. Cells of tasks outside the set are refused;
+put those numbers in `--inputs`.
+
+Checked against the record, from recorded numbers only:
+
+| Case | Inputs | Verdict |
+|---|---|---|
+| D-2 repository A | 7 tasks; 17 of 42 planted defects rejected | `NOT-VIABLE`: `too-few-tasks` (its oracle passed) |
+| D-2 repository B | 52 tasks; 92 of 310 rejected (0.2968, interval about 0.25–0.35) | `NOT-VIABLE`: `oracle-blind` |
+| D-2 repository C | 24 tasks, 46 of 136 rejected. An earlier replay of the same repository: reference accepted 3 of 70, saving 0.68, SD 0.198 over 21 reaching tasks, accepted cells in 3 of 24 tasks | `NOT-VIABLE`: `reference-does-not-deliver`, `pays-unreachable`, `underpowered` (m 0.029, power 0.10) |
+| Study F as planned, and on its own cells | 41 tasks, all reaching; 255 of 321 rejected; reference accepted 63 of 82 (61 of 81 in F); saving 0.75 | `VIABLE`, m 0.20, power > 0.99 |
 
 ## Choosing the margin
 

@@ -9,6 +9,8 @@ report      frozen gates. A verdict is only as strong as the instrument: an inse
             "Same change" is read on reachable behaviours, paired by task, with a symmetric interval rule and a pseudo A/A.
 feasibility before spending: how many tasks a verdict needs, from a pilot's noise or a stated SD. No model.
 sufficiency drop tasks whose prompt alone cannot reach their hidden tests (calibration cells from a cheap arm). No model.
+viability   before spending: VIABLE, NOT-VIABLE (why) or UNKNOWN (what is missing), from tasks, oracle sensitivity, a pilot's
+            reach, sufficiency, reference acceptance and power at the break-even margin. No model.
 
 Durable means the change survives the next change. Agents are an argv template (`agent_command`) and tests are an adapter in
 lab_accept.py; nothing here knows a vendor or a language.
@@ -1773,6 +1775,22 @@ def declared_margin(config):
     return margin
 
 
+def _pilot_reach(config_path, rows, low, ref):
+    """The pilot's paired reach interval and the share of tasks both arms attempted that reach new behaviour."""
+    observed = paired_interval(reachable_diffs(rows, config_path.parent / "tasks", low, ref))
+    both = {r["task"] for r in rows if r["arm"] == low} & {r["task"] for r in rows if r["arm"] == ref}
+    # only tasks that reach new behaviour enter the verdict (41 of 62 on go-json); ponytail: measured at the pilot's
+    # replicates, more attempts can reach more tasks
+    return observed, observed["tasks"] / len(both) if both else None
+
+
+def _power(sd, margin, counted):
+    """95 % half-width and normal-approximation power of PROVEN at `margin` when the arms are equal, over `counted` tasks."""
+    if not counted:
+        return None, 0.0
+    return 1.96 * sd / math.sqrt(counted), statistics.NormalDist().cdf(margin / (sd / math.sqrt(counted)) - 1.96)
+
+
 def feasibility(config_path, results, margin=None, sd=None):
     """Before spending: with the noise of a pilot (or a stated per-task SD), how many tasks does a verdict need, and what does the
     current number of tasks buy? A run that cannot reach a verdict should not be paid for."""
@@ -1782,23 +1800,30 @@ def feasibility(config_path, results, margin=None, sd=None):
     observed = reach = None
     if results is not None:
         rows = [r for r in load_cells(results) if r["valid"] is True]
-        observed = paired_interval(reachable_diffs(rows, config_path.parent / "tasks", low, ref))
-        both = {r["task"] for r in rows if r["arm"] == low} & {r["task"] for r in rows if r["arm"] == ref}
-        # only tasks that reach new behaviour enter the verdict (41 of 62 on go-json); ponytail: measured at the pilot's
-        # replicates, more attempts can reach more tasks
-        reach = observed["tasks"] / len(both) if both else None
+        observed, reach = _pilot_reach(config_path, rows, low, ref)
         sd = observed["sd"] if sd is None else sd
     if not sd:  # a pilot whose tasks all agree has no spread to plan with
         raise ValueError("feasibility needs a positive SD from pilot results or --sd")
     planned = len(config["tasks"])
     counted = planned * reach if reach is not None else planned  # without a pilot, every planned task is assumed to reach
-    half = 1.96 * sd / math.sqrt(counted) if counted else None
-    power = statistics.NormalDist().cdf(margin / (sd / math.sqrt(counted)) - 1.96) if counted else 0.0
+    half, power = _power(sd, margin, counted)
     needed = tasks_needed(sd, margin)
     return {"margin": margin, "sd": sd, "planned_tasks": planned, "reach_share": reach, "planned_reaching": counted,
             "planned_halfwidth": half, "power_proven_if_equal": power, "tasks_needed_if_equal": needed,
             "tasks_to_mine_if_equal": math.ceil(needed / reach) if reach and needed is not None else None, "pilot": observed,
             "tasks_needed_at_pilot_mean": tasks_needed(sd, margin, observed["mean"]) if observed and observed["mean"] is not None else None}
+
+
+def _sufficiency_shares(config, set_dir, rows):
+    """[(task, the largest share of the behaviour its commit introduced that one valid cell passes)], None without cell or new test."""
+    shares = []
+    for task in config["tasks"]:
+        directory = set_dir / "tasks" / task["id"]
+        baseline = set(json.loads((directory / "baseline.json").read_text()))
+        hidden = [k for k in json.loads((directory / "hidden.json").read_text()) if k != "__module__" and k not in baseline]
+        cells = [r for r in rows if r["task"] == task["id"]]
+        shares.append((task["id"], max((sum(c["acceptance_outcomes"].get(k) == "pass" for k in hidden) / len(hidden) for c in cells if hidden), default=None)))
+    return shares
 
 
 def sufficiency(config_path, results, threshold, out):
@@ -1809,13 +1834,8 @@ def sufficiency(config_path, results, threshold, out):
     config = json.loads(config_path.read_text())
     rows = [r for r in load_cells(results) if r["valid"] is True]
     kept, dropped = [], []
-    for task in config["tasks"]:
-        directory = config_path.parent / "tasks" / task["id"]
-        baseline = set(json.loads((directory / "baseline.json").read_text()))
-        hidden = [k for k in json.loads((directory / "hidden.json").read_text()) if k != "__module__" and k not in baseline]
-        cells = [r for r in rows if r["task"] == task["id"]]
-        share = max((sum(c["acceptance_outcomes"].get(k) == "pass" for k in hidden) / len(hidden) for c in cells if hidden), default=None)
-        (kept if share is not None and share >= threshold else dropped).append((task["id"], share))
+    for tid, share in _sufficiency_shares(config, config_path.parent, rows):
+        (kept if share is not None and share >= threshold else dropped).append((tid, share))
     keep = {t for t, _ in kept}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({**config, "tasks": [t for t in config["tasks"] if t["id"] in keep]}, indent=1, ensure_ascii=False))
@@ -1824,6 +1844,190 @@ def sufficiency(config_path, results, threshold, out):
             if not (out.parent / name).exists() and (config_path.parent / name).exists():
                 (out.parent / name).symlink_to(config_path.parent / name)
     return {"threshold": threshold, "kept": kept, "dropped": dropped}
+
+
+# ---- viability: before any paid run, can this repository give a decisive verdict, and if not, why? No model.
+
+# Every threshold is a gate the lab already applies or a recorded rule; none is tuned here.
+VIABILITY = {
+    "min_tasks": GATES["min_signal_tasks"],      # behaviour_verdict(): NO-INFORMATION under 8 tasks that reach new behaviour
+    "min_mutants": GATES["min_mutants"],          # sensitivity.json `immediate.passed`, the `sensitive` that report() reads
+    "min_sensitivity": GATES["min_sensitivity"],  # the same gate; also the floor the v2 decision is read at
+    "min_reference_acceptance": GATES["floor"],   # verdict(): acceptance under the floor is not informative
+    "sufficiency_threshold": .8,                  # `sufficiency`'s default
+    "max_margin": .20,                            # the break-even margin's cap: PREREG-F and declared_margin()
+    "min_power": .50,                             # the D-2 study's power rule (private record): P(PROVEN | equal arms) under 0.50 is ineligible
+    "max_bootstrap_miss": .025,                   # study F reads R's task bootstrap at its 97.5 % point
+}
+VIABILITY_INPUTS = ("tasks", "sensitivity", "reach_share", "sd", "sufficient_share", "reference_acceptance", "saving", "accepted_task_share")
+VIABILITY_OPTIONAL = ("load_sensitive", "sensitivity_v2", "declared_margin")
+VIABILITY_HELP = """\
+Verdict: VIABLE (every input known, no reason to fail), NOT-VIABLE (reasons below; any known failure decides, whatever is
+missing) or UNKNOWN (the inputs it lacks; missing data never reads VIABLE). Exit 0, 1 and 3 respectively.
+Reasons, in the order of the D-2 measurability ladder (tasks, instrument, reference, power):
+  too-few-tasks              mined tasks < 8 (GATES min_signal_tasks: report reads NO-INFORMATION under 8 reaching tasks)
+  load-sensitive-oracle      sensitivity.json lists tasks of the set in load_sensitive (run refuses such a set)
+  oracle-blind               sensitivity.json immediate: rejected / mutants < 0.30, or mutants < 20 (GATES min_sensitivity and
+                             min_mutants, the `sensitive` gate report reads; the point estimate decides, the interval is shown)
+  oracle-blind-v2            sensitivity-v2.json, read at floor 0.30, decides `fails`
+  too-few-reaching-tasks     tasks x the pilot's reach share < 8 (feasibility's planned_reaching)
+  prompt-insufficient        tasks x the share of attempted tasks where one cell passes >= 0.8 of the new behaviour < 8
+                             (sufficiency's default threshold)
+  reference-does-not-deliver reference arm acceptance < 0.25 (GATES floor: acceptance under it is not informative)
+  pays-unreachable           an arm accepted a change in so few tasks that a task resample misses them all > 2.5 % of the time:
+                             the cost ratio's 97.5 % bootstrap point (study F) is then infinite and PAYS cannot be read
+  underpowered               normal power of PROVEN at the break-even margin m = min(0.20, reference acceptance x saving)
+                             (PREREG-F) < 0.50 (the D-2 study's power rule); also when m is 0
+Inputs come from the set's directory (tasks, sensitivity.json, sensitivity-v2.json), from pilot cells of this set
+(--results: reach share and SD as in feasibility, sufficiency, reference acceptance, median cost saving, tasks with an
+accepted cell per arm) and from --inputs, a JSON object of recorded numbers that wins over both: tasks, sensitivity
+{mutants, rejected}, reach_share, sd, sufficient_share, reference_acceptance [accepted, cells], saving, accepted_task_share
+{arm: share}, and optionally load_sensitive, sensitivity_v2 {decision, sensitivity, interval}, declared_margin.
+VIABLE is no known reason to fail, not a promised verdict: the power ignores the calibrated critical value."""
+
+
+def _viability_check(inputs):
+    """Refuse unknown or malformed inputs: a typo must not turn into a missing input, nor a string into a number."""
+    number = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    count = lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0
+    share = lambda v: number(v) and 0 <= v <= 1
+    checks = {"tasks": count, "reach_share": share, "sufficient_share": share, "sd": lambda v: number(v) and v > 0,
+              "saving": lambda v: number(v) and v <= 1, "declared_margin": lambda v: number(v) and 0 < v <= VIABILITY["max_margin"],
+              "reference_acceptance": lambda v: isinstance(v, list) and len(v) == 2 and all(map(count, v)) and 0 < v[1] and v[0] <= v[1],
+              "sensitivity": lambda v: isinstance(v, dict) and count(v.get("mutants")) and count(v.get("rejected")) and v["rejected"] <= v["mutants"],
+              "accepted_task_share": lambda v: isinstance(v, dict) and bool(v) and all(map(share, v.values())),
+              "load_sensitive": lambda v: isinstance(v, list), "sensitivity_v2": lambda v: isinstance(v, dict) and isinstance(v.get("decision"), str)}
+    for key, value in inputs.items():
+        if key not in checks:
+            raise ValueError(f"unknown viability input: {key}")
+        if value is not None and not checks[key](value):
+            raise ValueError(f"malformed viability input: {key}")
+
+
+def viability_verdict(inputs):
+    """VIABLE, NOT-VIABLE with reasons, or UNKNOWN naming the missing inputs. A known failure reads NOT-VIABLE whatever is
+    missing; VIABLE needs every input in VIABILITY_INPUTS. Recorded numbers only: no file, no model."""
+    _viability_check(inputs)
+    g, get, reasons, derived, notes = VIABILITY, inputs.get, [], {}, []
+    fail = lambda code, detail: reasons.append({"reason": code, "detail": detail})
+    tasks = get("tasks")
+    few = tasks is not None and tasks < g["min_tasks"]
+    if few:
+        fail("too-few-tasks", f"{tasks} mined tasks; a verdict needs {g['min_tasks']} that reach new behaviour")
+    if get("load_sensitive"):
+        fail("load-sensitive-oracle", f"{len(get('load_sensitive'))} task(s) graded differently when their control ran alone; run refuses the set")
+    sense = get("sensitivity")
+    if sense is not None:
+        k, n = sense["rejected"], sense["mutants"]
+        derived["sensitivity"] = {"rate": k / n if n else None, "clopper_pearson95": list(_binomial_bounds(k, n)) if n else None}
+        if n < g["min_mutants"] or k / n < g["min_sensitivity"]:
+            fail("oracle-blind", f"the hidden tests rejected {k} of {n} planted defects; report needs at least {g['min_mutants']} at a rate of "
+                                 f"{g['min_sensitivity']:g} or more, otherwise every verdict reads NO-INFORMATION")
+    v2 = get("sensitivity_v2")
+    if v2 is not None and v2["decision"] == "fails":
+        fail("oracle-blind-v2", f"sensitivity v2 at floor {g['min_sensitivity']:g} fails: sensitivity {v2.get('sensitivity')}, interval {v2.get('interval')}")
+    reach, sufficient = get("reach_share"), get("sufficient_share")
+    reaching = tasks * reach if tasks is not None and reach is not None else None
+    derived["reaching_tasks"] = reaching
+    if reaching is not None and reaching < g["min_tasks"] and not few:
+        fail("too-few-reaching-tasks", f"{tasks} tasks x reach share {reach:.3g} = {reaching:.1f} that reach new behaviour, under {g['min_tasks']}")
+    if tasks is not None and sufficient is not None and tasks * sufficient < g["min_tasks"] and not few:
+        fail("prompt-insufficient", f"{tasks} tasks x {sufficient:.3g} whose prompt alone let one cell pass {g['sufficiency_threshold']:g} of the new "
+                                    f"behaviour = {tasks * sufficient:.1f}, under {g['min_tasks']}")
+    acceptance, rate = get("reference_acceptance"), None
+    if acceptance is not None:
+        rate = derived["reference_acceptance_rate"] = acceptance[0] / acceptance[1]
+        if rate < g["min_reference_acceptance"]:
+            fail("reference-does-not-deliver", f"the reference arm was accepted in {acceptance[0]} of {acceptance[1]} cells ({rate:.1%}), "
+                                               f"under {g['min_reference_acceptance']:.0%}")
+    shares = get("accepted_task_share")
+    if shares is not None and tasks:
+        # R = cost per accepted change, candidate over reference, bootstrapped over tasks: a resample without one accepted
+        # change in an arm makes R infinite, and once more than 2.5 % do, the upper bound PAYS reads is infinite
+        miss = derived["bootstrap_miss"] = {arm: (1 - s) ** tasks for arm, s in shares.items()}
+        arm = max(miss, key=miss.get)
+        if miss[arm] > g["max_bootstrap_miss"]:
+            fail("pays-unreachable", f"`{arm}` had an accepted change in {shares[arm]:.1%} of tasks: a resample of {tasks} tasks misses every one "
+                                     f"{miss[arm]:.1%} of the time, above {g['max_bootstrap_miss']:.1%}, so the cost ratio's upper bound is infinite")
+    saving, sd = get("saving"), get("sd")
+    if rate is not None and saving is not None:
+        margin = derived["break_even_margin"] = min(g["max_margin"], max(0.0, rate * saving))
+        declared = get("declared_margin")
+        if declared is not None and abs(declared - margin) > 1e-9:
+            notes.append(f"the set declares compare.margin {declared:g}; this reading uses the break-even margin {margin:.4g} (study F's rule). "
+                         "report tests the declared one: declare the break-even margin before the first attempt for a PAYS reading")
+        if sd is not None and reaching is not None:
+            _, power = _power(sd, margin, reaching)
+            needed = tasks_needed(sd, margin) if margin > 0 else None
+            derived.update(power_proven_if_equal=power, tasks_needed_if_equal=needed,
+                           tasks_to_mine_if_equal=math.ceil(needed / reach) if needed is not None and reach else None)
+            if power < g["min_power"]:
+                fail("underpowered", f"power of PROVEN at the break-even margin {margin:.4g} with {reaching:.1f} reaching tasks is {power:.2f}, "
+                                     f"under {g['min_power']:g}" + (f"; about {needed} reaching tasks needed" if needed else "; nothing saved, nothing to prove"))
+    missing = [key for key in VIABILITY_INPUTS if get(key) is None]
+    return {"verdict": "NOT-VIABLE" if reasons else "UNKNOWN" if missing else "VIABLE", "reasons": reasons, "missing": missing,
+            "derived": derived, "notes": notes, "thresholds": dict(VIABILITY)}
+
+
+def viability(config_path=None, results=None, stated=None):
+    """Collect the inputs from the set's directory (task count, sensitivity.json, sensitivity-v2.json), pilot cells of this
+    set (`results`) and recorded numbers (`stated`, which win), then judge them. Reads files only: no model, no test run."""
+    found, sources = {}, {}
+    _viability_check(stated or {})
+
+    def put(key, value, source):
+        if value is not None:
+            found[key], sources[key] = value, source
+    if config_path is not None:
+        config = json.loads(config_path.read_text())
+        set_dir, ids = config_path.parent, {t["id"] for t in config["tasks"]}
+        put("tasks", len(ids), "set")
+        put("declared_margin", declared_margin(config), "set")
+        if (set_dir / "sensitivity.json").is_file():
+            sense = json.loads((set_dir / "sensitivity.json").read_text())
+            immediate = sense.get("immediate") or {}
+            if all(type(immediate.get(k)) is int for k in ("mutants", "rejected")):  # a `passed` asserted without counts is no measure
+                put("sensitivity", {"mutants": immediate["mutants"], "rejected": immediate["rejected"]}, "sensitivity.json immediate")
+            put("load_sensitive", sorted(set(sense.get("load_sensitive") or []) & ids), "sensitivity.json")
+        if (set_dir / "sensitivity-v2.json").is_file():
+            v2 = json.loads((set_dir / "sensitivity-v2.json").read_text())
+            summary = sensitivity_v2_summary(v2["rows"], v2["tasks"], VIABILITY["min_sensitivity"], v2.get("seed", 1))
+            put("sensitivity_v2", {k: summary[k] for k in ("decision", "sensitivity", "interval")}, f"sensitivity-v2.json at floor {VIABILITY['min_sensitivity']:g}")
+        if results is not None:
+            low, ref = config["compare"]["candidate"], config["compare"]["reference"]
+            rows = [r for r in load_cells(results) if r["valid"] is True]
+            if {r["task"] for r in rows} - ids:
+                raise ValueError("--results holds cells of tasks outside this set; give numbers from other runs in --inputs")
+            attempted = {r["task"] for r in rows}
+            if attempted:
+                observed, reach = _pilot_reach(config_path, rows, low, ref)
+                put("reach_share", reach, "results (as feasibility)")
+                put("sd", observed["sd"] or None, "results (as feasibility)")  # a pilot whose tasks all agree has no spread to plan with
+                put("sufficient_share", sum(t in attempted and s is not None and s >= VIABILITY["sufficiency_threshold"]
+                                            for t, s in _sufficiency_shares(config, set_dir, rows)) / len(attempted), "results (as sufficiency)")
+                refs = [r for r in rows if r["arm"] == ref]
+                put("reference_acceptance", [sum(bool(r.get("accepted")) for r in refs), len(refs)] if refs else None, "results")
+                costs = {arm: [c for r in rows if r["arm"] == arm for c in (cost_of(results, r["cell"], r),) if c is not None] for arm in (low, ref)}
+                if costs[low] and costs[ref] and statistics.median(costs[ref]) > 0:
+                    put("saving", 1 - statistics.median(costs[low]) / statistics.median(costs[ref]), "results (median cost per valid cell, as PREREG-F)")
+                put("accepted_task_share", {arm: len({r["task"] for r in rows if r["arm"] == arm and r.get("accepted")}) / len(attempted)
+                                            for arm in (low, ref)}, "results")
+    elif results is not None:
+        raise ValueError("--results needs --set: the cells are read against the set's tasks")
+    for key, value in (stated or {}).items():
+        put(key, value, "stated")
+    return {**viability_verdict(found), "inputs": found, "sources": sources}
+
+
+def viability_text(result):
+    lines = [f"007 lab viability: {result['verdict']}"]
+    lines += [f"- {r['reason']}: {r['detail']}" for r in result["reasons"]]
+    if result["missing"]:
+        lines.append("Missing, so the verdict cannot be VIABLE: " + ", ".join(result["missing"]))
+    lines += ["Inputs:"] + [f"  {key} = {json.dumps(value)} ({result['sources'][key]})" for key, value in result["inputs"].items()]
+    lines += ["Derived:"] + [f"  {key} = {json.dumps(value)}" for key, value in result["derived"].items()]
+    lines += [f"Note: {note}" for note in result["notes"]]
+    return "\n".join(lines)
 
 
 def verdict(c, ci, *, valid, tasks, split_tasks, sensitive, accepted_share, next_share):
@@ -2231,7 +2435,26 @@ def main(argv=None):
     floor.add_argument("--results", type=Path, required=True)
     floor.add_argument("--threshold", type=float, default=.8)
     floor.add_argument("--out", type=Path, required=True)
+    viable = commands.add_parser("viability", help="before spending: can this repository give a decisive verdict, and if not, why",
+                                 epilog=VIABILITY_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    viable.add_argument("--set", type=Path, dest="path", help="the mined set (replay-set.json), with sensitivity.json beside it")
+    viable.add_argument("--results", type=Path, help="pilot cells of this set")
+    viable.add_argument("--inputs", type=Path, help="JSON object of recorded numbers; they win over the set and the results")
+    viable.add_argument("--format", choices=("json", "text"), default="json")
     args = parser.parse_args(argv)
+    if args.command == "viability":
+        if args.path is None and args.inputs is None:
+            parser.error("viability needs --set, --inputs or both")
+        try:
+            stated = json.loads(args.inputs.expanduser().read_text()) if args.inputs else None
+            if stated is not None and not isinstance(stated, dict):
+                raise ValueError("--inputs must hold a JSON object")
+            result = viability(args.path.expanduser().resolve() if args.path else None,
+                               args.results.expanduser().resolve() if args.results else None, stated)
+        except ValueError as error:
+            parser.error(str(error))
+        print(viability_text(result) if args.format == "text" else json.dumps(result))
+        return {"VIABLE": 0, "NOT-VIABLE": 1}.get(result["verdict"], 3)
     if args.command == "feasibility":
         results = args.results.expanduser().resolve() if args.results else None
         print(json.dumps(feasibility(args.path.expanduser().resolve(), results, args.margin, args.sd)))

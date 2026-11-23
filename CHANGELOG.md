@@ -6,6 +6,27 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+### Added
+
+- `007 lab viability` runs before any paid run and costs nothing. It answers `VIABLE`, `NOT-VIABLE` with reasons, or
+  `UNKNOWN` naming the missing inputs. Missing data never reads `VIABLE`, and any known failure decides. It combines eight
+  inputs:
+  - the mined task count;
+  - the oracle's sensitivity (`sensitivity.json` `immediate`, plus `sensitivity-v2.json` read at floor 0.30);
+  - a pilot's reach share and SD, as in `feasibility`;
+  - the prompt-sufficient share, as in `sufficiency`;
+  - the reference arm's acceptance;
+  - the cost saving;
+  - each arm's share of tasks with an accepted change;
+  - the power of `PROVEN` at the break-even margin of PREREG-F.
+
+  Each threshold is an existing gate or a recorded rule, documented with its source in the help text and in
+  [the lab guide](docs/lab.md#before-spending-viability). From recorded numbers alone, it reproduces the three D-2
+  outcomes: too few tasks, an oracle that rejects 0.2968 of planted defects (under 0.30), and a reference accepted in
+  4.3% of cells, which also makes `PAYS` unreachable and leaves the study underpowered. Study F's go-json numbers read
+  `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
+  computation with it, and their output is unchanged.
+
 ## [1.10.1] - 2026-11-22
 
 A patch release for `007 lab`'s grader. A replay cell now tells a grader failure from a rejection of the candidate, without
