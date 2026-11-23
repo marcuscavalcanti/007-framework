@@ -101,8 +101,11 @@ schemas, and the dashboard snapshot.
   `whole_loss_draws(..., clustered=True)`) now also simulates the clustered loss, with the same expected loss, and keeps the
   larger value. `proven_critical(..., loss=("independent",))` returns the earlier value draw for draw.
 
-  The main verdict, the A/A statistic and `report --missing-data-guard` all use the new value. A new
-  `guard_decision` returns the guard's verdict without the cost ratio. On the control's replicates, with the floor rebuilt the
+  The main verdict, the A/A statistic and `report --missing-data-guard` all use the new value. A run made before 1.11.0
+  and read again by 1.11.0 can therefore move from `PROVEN` to `NOT-PROVEN` in any of the three, never the other way.
+  `proven_critical(..., loss=("independent",))` and `guard_decision(..., loss=("independent",))` reproduce the earlier
+  critical value and guard verdict; `report` has no switch for it. A new `guard_decision` returns the guard's verdict
+  without the cost ratio. On the control's replicates, with the floor rebuilt the
   way Study F built it (2.4768 instead of 2.2315), `PROVEN` at the margin is 2.33% clustered and 1.43% independent, and power
   at a true loss of 10 points falls from 56.5% to 49.0%. With Study F's floor kept, the rates are 2.75% (2.29–3.30%) and 1.88%
   and power is 55.8%. A `compare.critical_floor` computed before 1.11.0 covers independent loss only: rebuild it. Study F's

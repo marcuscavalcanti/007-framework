@@ -271,6 +271,28 @@ lose `PROVEN` and none gain it. With Study F's floor kept, power hardly moves, b
 Monte Carlo error of 2.5%, yet above it. Neither version reaches 80% power at 41 tasks: the answer to low power is more tasks,
 not a lower floor.
 
+### Rebuilding a floor
+
+A study that sets `compare.critical_floor` builds it before its first paid attempt, with 1.11.0 or later, from earlier
+attempts that are not part of the study. Study F's recipe (`build_f.py`):
+
+```python
+import effort_lab as lab
+
+lab.GATES["draws"] = 100_000                       # the study's analysis draws
+values = [lab.proven_critical(rows, task_dir, low, ref, seed, margin=margin, reach=reach, attempts=attempts)
+          for rows, ref in pools]                  # each earlier pool: valid cells and its reference arm
+floor = max(v for v in values if v is not None)    # compare.critical_floor
+```
+
+- `attempts` is the study's planned attempts per arm, `seed` and `margin` are the study's own, and `reach` is the frozen reach
+  the study reads.
+- The default `loss` takes the larger of the independent and clustered simulations. To record both values, call it once with
+  `loss=("independent",)` and once with `loss=("clustered",)`; the floor is the largest value of all.
+- Write the floor, each pool's values and the hashes of the pools into the pre-registration. Rebuilding Study F's floor this
+  way gives 2.4768209601363016 (Codex pool: independent 2.2315, clustered 2.4768; Claude run: 2.2269 and 2.4636). That is the
+  floor any reuse of Study F's rule uses. The product does not hard-code a floor.
+
 Study F's analysis is frozen and unchanged, and its rule needs a new calibrated control before it is reused. Not covered:
 - a partly clustered loss sits between the two models, and is covered only if the error moves monotonically between them,
   which was not tested;
