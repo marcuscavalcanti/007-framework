@@ -633,6 +633,72 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual((chained["tasks"], chained["aa_not_chained"]), (4 * tasks, 2 * tasks))
         self.assertNotIn("aa_not_chained", lab.chain(path, plain, self.root / "stage2-plain"))
 
+    def test_oracle_health_is_blind_in_status_never_moves_the_verdict_and_holds_until_acknowledged(self):
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        lab.sensitivity(path, 2)
+        seen, real = [], lab.replay_eval.execute_cell
+
+        def watched(*args, **kwargs):  # status between cells, while the run is in flight
+            row = real(*args, **kwargs)
+            seen.append(json.dumps(lab.status(path, results)))
+            return row
+        lab.run(path, results, replicates=2, jobs=1, max_calls=99, max_usd=99, stop_usd=1, execute=watched)
+        tasks = len(json.loads(path.read_text())["tasks"])
+        self.assertEqual(len(seen), 4 * tasks)
+        for text in seen:  # pooled only: no arm, task, cell or per-arm count
+            self.assertNotIn("medium", text)
+            self.assertNotIn("high", text)
+            self.assertNotIn("per_arm", text)
+            self.assertNotIn(json.loads(path.read_text())["tasks"][0]["id"], text)
+        healthy = lab.report(path, results, None)
+        health = healthy["oracle_health"]
+        self.assertEqual((health["status"], health["alarms"], health["cells"]), ("no-alarm", [], 4 * tasks))
+        self.assertEqual(set(health["per_arm"]), {"medium", "high"})  # per arm only in the report
+        self.assertEqual((healthy["verdict"]["oracle_status"], healthy["verdict"]["oracle_suspect"]), ("no-alarm", False))
+        self.assertIn("- **Oracle health:** no alarm;", (results / "report.md").read_text())
+        files = [p for p in results.glob("*.json") if lab.replay_eval.is_cell_id(p.stem) and not p.name.endswith(".runner.json")]
+        original = {p: p.read_text() for p in files}
+        verdict = lambda r: {k: v for k, v in r["verdict"].items() if not k.startswith("oracle_")}
+
+        def rewrite(change):
+            for p, text in original.items():
+                row = json.loads(text)
+                change(row)
+                p.write_text(json.dumps(row))
+        rewrite(lambda row: row.pop("acceptance"))  # cells from before any health data: the verdict and report read as before
+        old = lab.report(path, results, None)
+        self.assertEqual((verdict(old), old["oracle_health"]["status"], old["verdict"]["oracle_suspect"]), (verdict(healthy), "unmeasured", False))
+        self.assertNotIn("Oracle-suspect", (results / "report.md").read_text())
+
+        def broken(row):  # every grade an internal error that a pre-1.10.1 set reads as a rejection: same verdict inputs
+            row["acceptance"][0]["exit"] = 2
+        rewrite(broken)
+        suspect = lab.report(path, results, None)
+        self.assertEqual(verdict(suspect), verdict(healthy))  # an alarm never changes a verdict
+        self.assertIn("oracle-errors", suspect["oracle_health"]["alarms"])
+        self.assertEqual((suspect["verdict"]["oracle_status"], suspect["verdict"]["oracle_suspect"]), ("oracle-suspect", True))
+        self.assertIn("**Oracle-suspect:** an oracle alarm is open", (results / "report.md").read_text())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(lab.main(["status", "--set", str(path), "--results", str(results)]), 1)
+        with self.assertRaisesRegex(ValueError, "needs a reason"):
+            lab.status(path, results, " ")
+        self.assertEqual(lab.status(path, results, "the grader was fixed and the run is discarded")["oracle_health"]["status"], "acknowledged")
+        acked = lab.report(path, results, None)
+        self.assertEqual((verdict(acked), acked["verdict"]["oracle_status"], acked["verdict"]["oracle_suspect"]), (verdict(healthy), "acknowledged", False))
+        self.assertIn("alarm acknowledged by a person", (results / "report.md").read_text())
+        with self.assertRaisesRegex(ValueError, "no open oracle alarm"):
+            lab.status(path, results, "again")
+        first = files[0]
+        row = json.loads(first.read_text())
+        row["acceptance"][0]["exit"] = 137  # any change to the counts voids the acknowledgement
+        first.write_text(json.dumps(row))
+        self.assertEqual(lab.report(path, results, None)["verdict"]["oracle_status"], "oracle-suspect")
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertEqual(lab.main(["status", "--set", str(path), "--results", str(results)]), 1)
+        self.assertEqual(json.loads(printed.getvalue())["oracle_health"]["status"], "oracle-suspect")
+
     def test_the_report_reads_the_declared_margin_and_says_it_in_plain_words(self):
         out = self.root / "lab"
         lab.mine(self.config, out, 2)
@@ -1960,6 +2026,88 @@ class AA(unittest.TestCase):
             self.assertIn("5 pairs have an absent or unusable cell, never counted as agreement (worst case 25.0%)", line)
             self.assertIn("not A/A-qualified", lab.aa_line(None, .03))
             self.assertIn("not A/A-qualified", lab.aa_line(self.check(root, arm), .03))
+
+
+def graded(task, arm, rep, exit_code, *, valid=True, report=True, failure="none"):
+    """A synthetic replay cell as the grader leaves it: one lab_accept exit, its report (or none) and the cell's reading."""
+    accepted = valid and exit_code == 0
+    return {"task": task, "arm": arm, "replicate": rep, "valid": valid, "accepted": accepted, "failure_class": failure,
+            "acceptance": [{"exit": exit_code}], "acceptance_outcomes": {"a": "pass" if accepted else "fail"} if report else "unavailable"}
+
+
+class OracleHealth(unittest.TestCase):
+    """Backlog 0.4: a broken grader rings while the run is in flight, never per arm, and never moves a verdict."""
+
+    def mixed(self, accepted, rejected, arms=("medium", "xhigh")):
+        rows = [graded(f"T{i}", arms[i % 2], 1, 0) for i in range(accepted)]
+        return rows + [graded(f"U{i}", arms[i % 2], 1, 1) for i in range(rejected)]
+
+    def test_thresholds_follow_the_verdicts_acceptance_gates(self):
+        t = lab.ORACLE_THRESHOLDS
+        self.assertEqual((t["zero_accepted_after"], t["all_accepted_after"], t["min_count"]), (17, 44, 3))
+        self.assertLess((1 - lab.GATES["floor"]) ** t["zero_accepted_after"], .01)
+        self.assertGreater((1 - lab.GATES["floor"]) ** (t["zero_accepted_after"] - 1), .01)
+        self.assertLess(lab.GATES["ceiling"] ** t["all_accepted_after"], .01)
+        self.assertGreater(lab.GATES["ceiling"] ** (t["all_accepted_after"] - 1), .01)
+
+    def test_a_0_of_124_replay_rings(self):
+        rejected = [graded(f"T{i % 62}", ("medium", "xhigh")[i // 62], 1, 1) for i in range(124)]
+        health = lab.oracle_health(rejected, .03)
+        self.assertEqual((health["alarms"], health["status"], health["graded"]), (["rejects-everything"], "oracle-suspect", 124))
+        # the 2026-11-15 grader: a KeyError exited 1 before writing its report, so each rejection had no grade behind it
+        crashed = [{**r, "acceptance_outcomes": "unavailable"} for r in rejected]
+        health = lab.oracle_health(crashed, .03)
+        self.assertEqual((health["alarms"], health["classes"]["oracle-error"], health["exit_codes"]), (["oracle-errors"], 124, {"1": 124}))
+        self.assertEqual(lab.oracle_health(rejected[:16], .03)["alarms"], [])  # 16: an honest oracle at the floor gives this over 1% of the time
+
+    def test_an_all_accept_run_rings(self):
+        self.assertEqual(lab.oracle_health(self.mixed(44, 0), .03)["alarms"], ["accepts-everything"])
+        self.assertEqual(lab.oracle_health(self.mixed(43, 0), .03)["alarms"], [])
+
+    def test_an_internal_error_or_timeout_flood_rings(self):
+        legacy = [graded(f"E{i}", "xhigh", 1, 2) for i in range(4)]  # 1.10.0 reading: a valid rejection
+        contract = [graded(f"E{i}", "xhigh", 1, 2, valid=False, failure="acceptance-harness-error") for i in range(4)]
+        for errors in (legacy, contract):
+            health = lab.oracle_health(self.mixed(30, 30) + errors, .03)
+            self.assertEqual((health["alarms"], health["classes"]["oracle-error"]), (["oracle-errors"], 4))
+        hung = [graded(f"H{i}", "xhigh", 1, 3, report=False) for i in range(4)]
+        self.assertEqual(lab.oracle_health(self.mixed(30, 30) + hung, .03)["alarms"], ["oracle-timeouts"])
+        self.assertEqual(lab.oracle_health(self.mixed(30, 30) + hung, .1)["alarms"], [])  # 4 of 64 is under a 10-point margin
+        killed = graded("K", "xhigh", 1, -9)
+        self.assertEqual(lab.oracle_health(self.mixed(30, 30) + [killed], .03)["alarms"], ["exit-contract"])
+
+    def test_a_healthy_mixed_run_stays_silent(self):
+        rows = self.mixed(30, 26) + [graded("H", "xhigh", 1, 3, report=False), graded("E", "medium", 1, 2, valid=False, failure="acceptance-harness-error"),
+                                     graded("A", "medium", 1, 1, valid=False, failure="agent-exit"),
+                                     {"task": "R", "arm": "xhigh", "replicate": 1, "valid": False, "failure_class": "provider-rate-limit", "acceptance": []}]
+        health = lab.oracle_health(rows, .03)
+        self.assertEqual((health["alarms"], health["status"]), ([], "no-alarm"))
+        self.assertEqual(health["classes"], {"accepted": 30, "rejected": 26, "oracle-error": 1, "timeout": 1, "invalid": 2, "unrecorded": 0})
+        self.assertEqual(health["exit_codes"], {"0": 30, "1": 27, "2": 1, "3": 1})
+
+    def test_cells_without_grades_are_unmeasured_never_healthy(self):
+        rows = [cell("T0", "medium", 1, {"a"}), cell("T0", "xhigh", 1, {"a"})]
+        health = lab.oracle_health(rows, .03)
+        self.assertEqual((health["status"], health["alarms"], health["classes"]["unrecorded"]), ("unmeasured", [], 2))
+        self.assertEqual(lab.oracle_health([], .03)["status"], "unmeasured")
+
+    def test_status_mid_run_is_pooled_and_shows_no_arm(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh"}}))
+            results = root / "results"
+            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "unmeasured")  # nothing written yet
+            results.mkdir()
+            rows = [graded(f"T{i}", "medium", 1, 0) for i in range(5)] + [graded(f"T{i}", "xhigh", 1, 1) for i in range(3)]
+            for row in rows:  # each arm's numbers differ, so a per-arm count would show
+                (results / f"{row['task']}-r01-{row['arm']}.json").write_text(json.dumps({**row, "runner_receipt_sha256": "unmeasured"}))
+            out = lab.status(root / "set.json", results)
+            text = json.dumps(out)
+            for leak in ("medium", "xhigh", "T0", "per_arm", "r01"):
+                self.assertNotIn(leak, text)
+            self.assertEqual((out["oracle_health"]["classes"]["accepted"], out["oracle_health"]["classes"]["rejected"]), (5, 3))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(lab.main(["status", "--set", str(root / "set.json"), "--results", str(results)]), 0)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,20 @@ schemas, and the dashboard snapshot.
   The printed verdict gains `aa_status` and `aa_qualified`. `aa_qualified` is false whenever there are no A/A cells, and
   `report.md` then says the verdict carries no measured noise floor. Reports of runs without `--aa` keep every earlier field and
   value. See [the lab guide](docs/lab.md#the-aa-check-run---aa-arm).
+- `007 lab status --set S --results R` shows the grader's health while a run is in flight. A 2026-11-15 study went 0/124 with no
+  alarm because its grader crashed with exit 1 before writing a report. `status` takes no lock and reveals no verdict. It pools
+  every cell, A/A copies included, and never shows an arm, task or cell. It gives:
+  - the distribution of grader exit codes;
+  - each cell's class: accepted, rejected, oracle error, timeout, invalid or unrecorded;
+  - alarms: no acceptance after 17 graded cells, every cell accepted after 44, grader errors or timeouts (at least 3, and above
+    the declared margin's share), and any exit outside `lab_accept`'s contract.
+
+  The 17 and 44 thresholds are where an honest oracle at the verdict's own acceptance gates (25% and 90%) gives one outcome less
+  than 1% of the time. `status` exits 1 while an alarm is open. `report` adds the same block, `oracle_health`, with a per-arm
+  breakdown. An alarm never changes a verdict: it marks the run `oracle-suspect`. The printed verdict gains `oracle_status` and
+  `oracle_suspect`, and `report.md` opens with a notice until a person runs `status --ack-oracle REASON`. That command writes
+  `ORACLE-ACK.json`, bound to the counts it saw, so any new cell reopens the alarm. Runs whose cells record no grader exit read
+  `unmeasured` and keep every verdict value. See [the lab guide](docs/lab.md#oracle-health-status-and-the-report).
 
 ## [1.10.1] - 2026-11-22
 

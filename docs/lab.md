@@ -8,6 +8,7 @@
 007 lab viability --set lab/replay-set.json --results pilot --format text
 007 lab feasibility --set lab/replay-set.json --sd 0.23
 007 lab run --set lab/replay-set.json --out results --replicates 3 --max-calls 144 --max-usd 150
+007 lab status --set lab/replay-set.json --results results
 007 lab report --set lab/replay-set.json --results results
 ```
 
@@ -79,6 +80,61 @@ cost alone.
 `pseudo_aa`, which splits one arm's replicate 1 against its later replicates, stays in the report; it is not this check. Study F's
 recorded A/A (3.55% of permutation splits whose interval excluded zero) was the standing check on the Codex top-up's `high` cells,
 not on F's cells or on Claude attempts (`TESE-SCORECARD` erratum of 2026-11-14).
+
+## Oracle health: `status` and the report
+
+A broken grader rejects every candidate and looks like a result: a 2026-11-15 study went 0/124 with no alarm, because the grader
+exited 1 before writing its report. `status` shows the grader's health while a run is in flight, and `report` shows it after:
+
+```bash
+007 lab status --set lab/replay-set.json --results results
+007 lab status --set lab/replay-set.json --results results --ack-oracle "REASON"
+```
+
+`status` reads the cells written so far, A/A copies included, takes no lock and checks no receipt. It prints health pooled over
+every cell and never an arm, task, cell or verdict, so it can be read during a run without peeking at the comparison. Its exit code
+is 1 while an alarm is open and 0 otherwise, so a driver can stop on it. `report` adds the same block (`oracle_health`) with a
+per-arm breakdown (`per_arm`). The report already shows each arm's acceptance, so it reveals nothing new.
+
+Each cell falls in one class. Classes are read from the grader's exits and never change the cell's verdict:
+
+| Class | Cell |
+|---|---|
+| `oracle-error` | the grader failed: `acceptance-harness-error`, a `hidden-acceptance-*` failure, any exit other than 0, 1 or 3, or a single exit 1 with no readable report. `lab_accept` writes its report before every exit 1, so that last case is a grader that crashed. A set mined before 1.10.1 reads exit 2 as a rejection; it still counts here |
+| `timeout` | exit 3 (a suite that did not finish, a rejection) or `acceptance-timeout` |
+| `invalid` | invalid for a reason outside the grader (the agent's exit or timeout, a refusal, identity, cleanup) |
+| `accepted`, `rejected` | a valid cell graded 0, or 1 with its report |
+| `unrecorded` | a valid cell that records no grader exit (cells from before the field) |
+
+It also gives `exit_codes`, the distribution of every grader exit, and `contract_violations`: cells with an exit `lab_accept` never
+gives (outside 0 to 3, such as a signal), or whose acceptance disagrees with their exits. `graded` counts accepted, rejected and
+timeout cells. `reference_controls_passed` counts the set's tasks whose reference control passed in `sensitivity.json`
+(`conformant`), or is null without one.
+
+| Alarm | Rings when | Why this threshold |
+|---|---|---|
+| `rejects-everything` | no acceptance after 17 graded cells | The verdict reads acceptance as informative from `GATES["floor"]`, 25%. An honest oracle at 25% gives 17 rejections in a row less than 1% of the time (0.75^17 = 0.75%; 16 would be 1.002%). It rings whether or not reference controls are known to pass, since the 0/124 study had none; `reference_controls_passed` says which case applies |
+| `accepts-everything` | every graded cell accepted, after 44 | The same rule at `GATES["ceiling"]`, 90%: 0.90^44 = 0.97% |
+| `oracle-errors` | at least 3 `oracle-error` cells, and more than the declared margin's share of graded and error cells | 3 is `--max-invalid`'s default. Above the margin's share, errors counted as rejections on one arm could move it by more than the margin alone |
+| `oracle-timeouts` | at least 3 `timeout` cells, and more than the margin's share of graded cells | The same rule. A timeout is a legitimate rejection, but one caused by load falls on whichever arm runs slower |
+| `exit-contract` | any contract violation | `lab_accept` exits 0, 1, 2 or 3 only |
+
+The 1% thresholds are fixed by this release, not taken from an earlier rule. A status read many times during a run can ring by
+chance more often than once in a hundred runs. The alarm is a request to look, not a verdict.
+
+**An alarm never changes a verdict.** It marks the run `oracle-suspect`. Every verdict value stays as the same cells give it
+without the alarm. The printed verdict carries `oracle_status`, which is one of:
+
+- `no-alarm`;
+- `unmeasured`: no cell records a grade, as for runs from before this field;
+- `oracle-suspect`;
+- `acknowledged`.
+
+The printed verdict also carries `oracle_suspect`. While it is true, `report.md` opens with an oracle-suspect notice and the verdict
+is not a clean one. A person clears it with `status --ack-oracle REASON`, which is refused when no alarm is open. That command
+writes `ORACLE-ACK.json` (time, reason, alarms and the SHA-256 of the pooled counts). `report` then reads `acknowledged`, still
+naming the alarms and the reason. The acknowledgement holds only for the counts it was given: any new or changed cell reopens the
+alarm. `run` does not read health and does not stop on it.
 
 ## What the report can say
 

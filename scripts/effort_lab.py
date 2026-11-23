@@ -2272,6 +2272,119 @@ def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates,
             "same_change_reachable": behaviour_verdict(interval, sensitive, margin, critical=math.inf if critical is None else critical)}
 
 
+ORACLE_CLASSES = ("accepted", "rejected", "oracle-error", "timeout", "invalid", "unrecorded")
+ORACLE_ACK = "ORACLE-ACK.json"  # a person's acknowledgement of an oracle alarm, bound to the pooled health it was given for
+ORACLE_ALPHA = .01
+
+
+def _one_outcome_after(share):
+    """Graded cells after which an oracle accepting `share` of them gives a single outcome with chance under ORACLE_ALPHA."""
+    return math.ceil(math.log(ORACLE_ALPHA) / math.log(share))
+
+
+# the verdict reads acceptance as informative between GATES floor and ceiling: an honest oracle at either edge rings under 1%
+ORACLE_THRESHOLDS = {"zero_accepted_after": _one_outcome_after(1 - GATES["floor"]), "all_accepted_after": _one_outcome_after(GATES["ceiling"]),
+                     "min_count": 3, "alpha": ORACLE_ALPHA}  # min_count: the run's own --max-invalid default
+
+
+def _exits(row):
+    checks = row.get("acceptance")
+    return [c.get("exit") for c in checks if isinstance(c, dict)] if isinstance(checks, list) else []
+
+
+def oracle_class(row):
+    """One cell as the grader's health reads it, never a verdict. A grader failure comes first, even on a cell the run counted
+    valid: a set mined before 1.10.1 reads exit 2 as a rejection, and lab_accept writes its report before every exit 1, so a
+    single exit 1 with no readable report is a grader that crashed (the 0/124 failure). Exit 3 is a rejection by timeout."""
+    failure, exits = str(row.get("failure_class") or ""), _exits(row)
+    unreported = row.get("outcomes_unreadable") or not isinstance(row.get("acceptance_outcomes"), dict)
+    if (failure == "acceptance-harness-error" or failure.startswith("hidden-acceptance-") or any(e not in (0, 1, 3) for e in exits)
+            or (exits == [1] and unreported)):
+        return "oracle-error"
+    if failure == "acceptance-timeout" or 3 in exits:
+        return "timeout"
+    if row.get("valid") is not True:
+        return "invalid"
+    if not exits:
+        return "unrecorded" if row.get("acceptance") is None else "invalid"
+    return "accepted" if all(e == 0 for e in exits) else "rejected"
+
+
+def _off_contract(row):
+    """An exit lab_accept never gives (a signal, a missing interpreter), or a cell whose acceptance disagrees with its exits."""
+    exits = _exits(row)
+    return any(e not in (0, 1, 2, 3) for e in exits) or bool(
+        exits and row.get("valid") is True and bool(row.get("accepted")) != all(e == 0 for e in exits))
+
+
+def _oracle_counts(rows):
+    classes, exits = dict.fromkeys(ORACLE_CLASSES, 0), {}
+    for row in rows:
+        classes[oracle_class(row)] += 1
+        for code in _exits(row):
+            exits[str(code)] = exits.get(str(code), 0) + 1
+    return {"cells": len(rows), "classes": classes, "exit_codes": dict(sorted(exits.items())),
+            "contract_violations": sum(_off_contract(r) for r in rows)}
+
+
+def oracle_health(rows, margin, controls=None):
+    """The grader's health pooled over `rows`: counts only, no arm, task or cell. Alarms (ORACLE_THRESHOLDS): no acceptance
+    after `zero_accepted_after` graded cells, every graded cell accepted after `all_accepted_after`, grader errors or timeouts at
+    `min_count` or more and above the declared margin's share (alone they could move one arm by more than the margin), and any
+    exit outside the contract. An alarm never changes a verdict. `controls`: the set's tasks whose reference control passed."""
+    counts = _oracle_counts(rows)
+    c, t = counts["classes"], ORACLE_THRESHOLDS
+    graded = c["accepted"] + c["rejected"] + c["timeout"]
+    alarms = [name for name, ringing in (
+        ("rejects-everything", graded >= t["zero_accepted_after"] and not c["accepted"]),
+        ("accepts-everything", graded >= t["all_accepted_after"] and c["accepted"] == graded),
+        ("oracle-errors", c["oracle-error"] >= t["min_count"] and c["oracle-error"] > margin * (graded + c["oracle-error"])),
+        ("oracle-timeouts", c["timeout"] >= t["min_count"] and c["timeout"] > margin * graded),
+        ("exit-contract", counts["contract_violations"] > 0)) if ringing]
+    status = "oracle-suspect" if alarms else "no-alarm" if graded + c["oracle-error"] else "unmeasured"
+    return {**counts, "graded": graded, "reference_controls_passed": controls, "margin": margin, "thresholds": t, "alarms": alarms,
+            "status": status, "sha256": hashlib.sha256(json.dumps(counts, sort_keys=True).encode()).hexdigest()}
+
+
+def _oracle_state(config_path, results, rows, margin):
+    """oracle_health with the set's reference controls and a person's acknowledgement, valid only for the counts it saw."""
+    try:
+        conformant = json.loads((config_path.parent / "sensitivity.json").read_text()).get("conformant")
+        controls = len(conformant) if isinstance(conformant, list) else None
+    except (OSError, ValueError, AttributeError):
+        controls = None
+    health = oracle_health(rows, margin, controls)
+    try:
+        ack = json.loads((results / ORACLE_ACK).read_text())
+    except (OSError, ValueError):
+        ack = None
+    if health["alarms"] and isinstance(ack, dict) and ack.get("health_sha256") == health["sha256"]:
+        health.update(status="acknowledged", acknowledgement={k: ack.get(k) for k in ("at", "reason")})
+    return health
+
+
+def status(config_path, results, acknowledge=None):
+    """Blinded while a run is in flight: the grader's health pooled over every cell written so far, A/A copies included, with no
+    arm, task, cell or verdict. Takes no lock and checks no receipt. `acknowledge` (a reason) records that a person looked at the
+    open alarm: `report` then labels the verdict acknowledged instead of oracle-suspect, until any count changes."""
+    config = json.loads(config_path.read_text())
+    try:
+        rows = list(replay_eval.read_cell_artifacts(results)[0].values())
+    except FileNotFoundError:
+        rows = []
+    health = _oracle_state(config_path, results, rows, declared_margin(config))
+    if acknowledge is not None:
+        if health["status"] != "oracle-suspect":
+            raise ValueError(f"no open oracle alarm to acknowledge (status {health['status']})")
+        if not acknowledge.strip():
+            raise ValueError("an acknowledgement needs a reason")
+        at = _now()
+        (results / ORACLE_ACK).write_text(json.dumps({"at": at, "reason": acknowledge, "alarms": health["alarms"],
+                                                      "health_sha256": health["sha256"]}, indent=1) + "\n")
+        health.update(status="acknowledged", acknowledgement={"at": at, "reason": acknowledge})
+    return {"schema": "007-lab/status/v1", "oracle_health": health}
+
+
 def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None, planned_replicates=None):
     """`single_look`: the report may be read once, with no run active on the results; it writes LOOK.json, after which neither
     `report` nor `run` works on them. `missing_data_guard_reserve` (US$ for a cell with no measured cost, normally the run's
@@ -2300,7 +2413,7 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     low, ref = config["compare"]["candidate"], config["compare"]["reference"]
     manifest = sealed_state(config, results)
     aa = manifest["aa"]
-    rows = load_cells(results)
+    rows = cells = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
     accounting = arm_accounting({**config, "arms": {**config["arms"], aa["label"]: None}} if aa else config, results, rows, receipts)
@@ -2387,6 +2500,11 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
                     frozen_reach) if aa else None
     tier["aa_status"] = twin["status"] if twin else "absent"
     tier["aa_qualified"] = tier["aa_status"] == "qualified"  # never without A/A cells
+    # pooled over every cell, copies included; per arm only here, where the report already shows each arm's acceptance
+    oracle = _oracle_state(config_path, results, cells, margin)
+    oracle["per_arm"] = {arm: _oracle_counts([r for r in cells if r.get("arm") == arm]) for arm in sorted({r.get("arm") for r in cells})}
+    tier["oracle_status"] = oracle["status"]
+    tier["oracle_suspect"] = oracle["status"] == "oracle-suspect"  # the verdict's values stand; its label is not clean
     guard = None
     if missing_data_guard_reserve is not None:
         if planned_replicates < accounting["replicates"]:
@@ -2398,7 +2516,7 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
         stage2["stage1_cells"] = len(rows)
     result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "next_run_manifest": stage2, "arm_accounting": accounting, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
-              "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": pseudo, "aa": twin, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
+              "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": pseudo, "aa": twin, "oracle_health": oracle, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES,
               "missing_data_guard": guard, "reach_frozen": frozen_reach is not None,
               "frozen_reach_sha256": hashlib.sha256(json.dumps(frozen_reach, sort_keys=True).encode()).hexdigest() if frozen_reach is not None else None}
@@ -2426,6 +2544,24 @@ def aa_line(aa, margin):
     reach = (f"; reach difference {100 * r['mean']:+.1f} points (95% {100 * r['ci95'][0]:+.1f} to {100 * r['ci95'][1]:+.1f}, {r['tasks']} tasks), "
              f"same change at margin {100 * margin:g} points {aa['same_change_reachable']}" if r.get("ci95") else "")
     return f"- **A/A, `{aa['arm']}` twice:** {status}; {discord}{lost}{reach}."
+
+
+ORACLE_ALARM_TEXT = {"rejects-everything": "no graded cell accepted", "accepts-everything": "every graded cell accepted",
+                     "oracle-errors": "grader errors above the margin's share", "oracle-timeouts": "grader timeouts above the margin's share",
+                     "exit-contract": "grader exits outside its contract"}
+
+
+def oracle_line(health):
+    """The oracle-health line of report.md: pooled counts, the alarms and whether a person acknowledged them."""
+    if not health:
+        return None
+    alarms = "; ".join(ORACLE_ALARM_TEXT[a] for a in health["alarms"])
+    state = {"no-alarm": "no alarm", "unmeasured": "unmeasured: no cell records a grade",
+             "oracle-suspect": f"**oracle-suspect** ({alarms})",
+             "acknowledged": f"alarm acknowledged by a person ({alarms}; reason: {(health.get('acknowledgement') or {}).get('reason')})"}[health["status"]]
+    classes = ", ".join(f"{k} {v}" for k, v in health["classes"].items() if v) or "none"
+    exits = ", ".join(f"{k}: {v}" for k, v in health["exit_codes"].items()) or "none"
+    return f"- **Oracle health:** {state}; {health['cells']} cells ({classes}); grader exits {exits}."
 
 
 def summary(result, low, ref, attempts):
@@ -2457,6 +2593,9 @@ def summary(result, low, ref, attempts):
     return "\n".join([
         f"# `{low}` vs `{ref}`: {attempts} valid attempts",
         "",
+        *(["**Oracle-suspect:** an oracle alarm is open. The verdict below is computed as usual but is not a clean verdict until a person "
+           "acknowledges the alarm (`007 lab status --ack-oracle REASON`).", ""]
+          if result.get("verdict", {}).get("oracle_suspect") else []),
         f"- **Waiting:** {saving} ({tier['time']}); median reasoning tokens {reasoning[low]:.0f} vs {reasoning[ref]:.0f}.",
         f"- **The same change, margin {margin:g} points:** {tier['same_change_reachable']}. {meaning}{interval}",
         f"- **Durable:** {tier['durability']}.",
@@ -2473,6 +2612,7 @@ def summary(result, low, ref, attempts):
            f"{g['cost_ratio_worst']:.3f}, {g['cost_ratio_worst_ci95'][0]:.3f} to {g['cost_ratio_worst_ci95'][1]:.3f}). The instrument checks are not part of it."]
           if (g := result.get("missing_data_guard")) else []),
         aa_line(result.get("aa"), tier["margin"]),
+        *([line] if (line := oracle_line(result.get("oracle_health"))) else []),
         *([f"- **Dispatch ledger:** {accounting['history']}; the counts above may be incomplete."] if accounting and accounting["history"] != "complete" else []),
         *([f"- **Stage 2:** {result['next_run_manifest']['state']}; {result['next_run_manifest']['stage1_cells_chained']} of "
            f"{result['next_run_manifest']['stage1_cells']} valid stage-1 attempts have a valid stage-2 attempt; the others count as not durable."]
@@ -2486,7 +2626,7 @@ def summary(result, low, ref, attempts):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="007 lab", description="Headless effort replay for any repository and any agent")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name, target in (("mine", "--config"), ("sensitivity", "--set"), ("run", "--set"), ("chain", "--set"), ("report", "--set")):
+    for name, target in (("mine", "--config"), ("sensitivity", "--set"), ("run", "--set"), ("chain", "--set"), ("report", "--set"), ("status", "--set")):
         sub = commands.add_parser(name)
         sub.add_argument(target, type=Path, required=True, dest="path")
         sub.add_argument("--out", type=Path, required=name in ("mine", "run", "chain"))
@@ -2513,8 +2653,10 @@ def main(argv=None):
         if name == "sensitivity":
             sub.add_argument("--operator", choices=("v1", "v2"), default="v1", help="v2: one unit reverted in the reference tree (sensitivity-v2.json)")
             sub.add_argument("--floor", type=float, help="v2: the floor its three-state decision reads; without it the decision is floor-unset")
-        if name in ("chain", "report"):
+        if name in ("chain", "report", "status"):
             sub.add_argument("--results", type=Path, required=True)
+        if name == "status":
+            sub.add_argument("--ack-oracle", metavar="REASON", help="record that a person looked at the open oracle alarm, and why the run stands")
         if name == "report":
             sub.add_argument("--next-results", type=Path)
             sub.add_argument("--single-look", action="store_true", help="write LOOK.json: these results are never read or run again")
@@ -2587,6 +2729,13 @@ def main(argv=None):
         return 2 if result.get("stop") else 0
     elif args.command == "chain":
         print(json.dumps(chain(path, args.results.expanduser().resolve(), out)))
+    elif args.command == "status":
+        try:
+            result = status(path, args.results.expanduser().resolve(), args.ack_oracle)
+        except ValueError as error:
+            parser.error(str(error))
+        print(json.dumps(result))
+        return 1 if result["oracle_health"]["status"] == "oracle-suspect" else 0
     else:
         if args.replicates is not None and not args.missing_data_guard:
             parser.error("--replicates on report only fixes the plan of --missing-data-guard")
