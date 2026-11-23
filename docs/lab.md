@@ -91,8 +91,11 @@ stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `
 (`<task>-r01-<arm>.runner.json`). Results, `dispatch.jsonl`, `status`, `report` and `chain` therefore keep the real arm names, and
 each cell records its `blind_token`. The receipt is kept byte for byte, so its `stream_copy` field names
 `<token>.stream.jsonl`. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`
-under its token, where `report` does not count it as an orphan receipt; the dispatch ledger still marks the attempt, so a resume
-stops with `uncertain-attempts` as before, and `blind_token(salt, cell)` names the file. The A/A copy gets a token like any other cell. So does a stage-2 cell, whose task id names
+under its token. `report` lists every file there in `orphan_blind_files`, each named by its cell when the sealed salt and the
+ledger or the plan identify it, counts that cell as attempted without a result, and adds it to `orphan_receipts`; `report.md`
+says how many such files there are and how many it could not trace. `status` lists the file names, which are tokens, beside a
+count of labelled orphan receipts. A resume stops with `uncertain-attempts` for any file in `.blind/`, even one whose dispatch
+the ledger lost, as well as for the ledger's own unfinished dispatches. The A/A copy gets a token like any other cell. So does a stage-2 cell, whose task id names
 its stage-1 cell and arm. The salt is not part of the set, so it never moves `set_sha256`. A resume reads it from the manifest, so a
 cell's token is the same on every resume. A salt that is not 32 hex digits stops a resume with `manifest-mismatch` (`blind_salt`).
 
@@ -111,7 +114,62 @@ directory, carried the arm name (`007-<task>-<arm>-r01-<random>`). The runner re
 carried it too (`<task>-r01-<arm>.runner.json`). A stage-2 workspace also carried the stage-1 arm, through its task id. This was a
 visible difference between the arms of the main comparison, and its effect on any verdict was not measured. A run sealed before
 1.11.0 has no salt. Resumed with 1.11.0, it keeps its labelled paths, so one run never mixes the two procedures; its report and
-verdict are unchanged. `replay_eval`'s own experiment runner, outside `007 lab`, still names workspaces and receipts by arm.
+verdict are unchanged.
+
+`replay_eval run`, the experiment runner outside `007 lab`, uses the same tokens since 1.11.0. It seals its salt as
+`blind_salt` in its own `summary.json`, which it now writes before the first cell, so a run that dies keeps it. A summary
+without `blind_salt` was run with labelled paths, and its cells load as before.
+
+## Read isolation and contamination
+
+A cell's agent must not read the run or the answer. Since 1.11.0 each cell has a list of protected paths, and it uses the list
+twice: to ask the CLI to deny those reads, and to look for them in the agent's retained stream. The list holds the paths below
+that exist:
+
+- `--out`, which holds the manifest and its salt, the ledger, every other cell and `.blind/`;
+- the set's directory, which holds every task's hidden tests (`replay_eval run` protects the set file);
+- every source repository in the set, which holds the commit a task asks for;
+- hidden-test sources and the vault, when the set uses them;
+- installed plugin and skill copies under HOME (`.claude/plugins`, `.claude/skills`, `.codex/plugins`, `.codex/skills`,
+  `.agents/skills`), where an earlier study's agents found an answer;
+- other sessions' logs under HOME (`.claude/projects`, `.codex/sessions`).
+
+A protected path that is HOME, one of its parents or the filesystem root is refused, and so is a cell whose workspace lies
+inside a protected path (move `TMPDIR`): denying either would deny the agent its own tools or workspace.
+
+**Prevention depends on what each CLI enforces, and the set opts in.** The agent command names the rules with placeholders:
+
+- Claude Code: `--settings {read_isolation_claude_settings}` in the Claude argv and `--settings-sha256
+  {read_isolation_claude_settings_sha256}` in `native_runner`'s. The settings carry only `permissions` and `sandbox`, as
+  `native_runner` admits: `Read` and `Edit` deny rules for each path (which the file tools, Grep and Glob included, apply), and
+  the sandbox's `filesystem.denyRead` for Bash, with `sandbox.enabled`, `failIfUnavailable` and `allowUnsandboxedCommands: false`.
+  The sandbox also limits what Bash may reach on the network, the same in every arm; a set that needs network access in Bash
+  must allow it. These settings replace any static `--settings` the set carried before.
+- Codex: `-c {read_isolation_codex_profile} -c default_permissions="lab_read_isolation"`. The profile extends `:workspace` and
+  denies each path; Codex enforces it in its own sandbox.
+
+Each cell records `read_isolation`: `claude-settings`, `codex-profile`, or `unenforced` when its command carries no placeholder.
+`unenforced` means nothing stopped a read. The mode says what was asked of the CLI, from the placeholders; it was not checked
+against a running CLI: the Claude keys come from the settings schema text in the Claude Code 2.1.322 binary, and the Codex
+profile form from the Codex 0.165 binary's strings and the `-c` keys `native_runner` already admits. No CLI was run to check
+them.
+
+**Detection sees only logged tool calls.** When the set keeps the stream (`native_runner --stream-copy {stream_copy}`), each
+cell's stream is scanned once its agent exits. Every string a tool call carries is matched against each protected path: Claude
+`tool_use` inputs (Read, Grep, Glob, Bash commands, written content) and Codex command, file-change and MCP items, without their
+output. Matching ignores case, resolves `~` and `..` against the workspace, and accepts a path's resolved and `/private`-less
+spellings. A hit marks the cell `contaminated`: `valid` false, `failure_class: "contaminated"`, counted against `--max-invalid`
+like any invalid cell. Each cell records `contamination` with its status (`clean`, `contaminated` or `unscanned` when no stream
+was kept), its tool-call count, its unparsed stream lines and, for a hit, the protected path's kind and the tools, never the
+command. `report` adds `read_isolation`, with the modes, the scan statuses and the contaminated cells; per arm they appear among
+the invalid cells. `status` pools the same counts and names no cell. Cells written before 1.11.0 read `unrecorded`; nothing
+rescans them, so their verdicts are unchanged.
+
+The scan cannot see a path built at run time (a variable, an encoded, globbed or concatenated name, a script that computes
+it), a read made by a program the agent started, or a call the CLI does not log. It is conservative the other way too: a call
+that only names a protected path, such as `ls` or a written file mentioning it, counts as a hit. Neither layer isolates the
+agent. Full isolation needs an OS sandbox around the whole agent process (a container or a separate user with no access to
+these paths), which 007 does not provide.
 
 ## Oracle health: `status` and the report
 
@@ -287,7 +345,8 @@ reading, until they are mined again.
 A snapshot is not read isolation. A mined public repository may also sit on the host as an installed copy (a plugin cache, a
 module cache, a vendored checkout) that already holds the commit a task asks for, and an agent that searches outside its
 workspace can find the answer there. Before a study, deny the agent read access to such copies or mine a repository the host
-does not carry; a cell that read one is contaminated, not a result.
+does not carry; a cell that read one is contaminated, not a result. [Read isolation](#read-isolation-and-contamination) covers
+the plugin and skill copies 007 knows of; a module cache, a vendored checkout or a clone elsewhere on the host is not on its list.
 
 Durability is harder than it looks. In the repository where this was built, five instruments failed their own sensitivity gates, so durability was not testable there. Proving a binary outcome non-inferior at -5 points needs 235 to 1039 changes per arm, depending on the base rate. Treat `durable` as unproven unless `report` says otherwise.
 

@@ -13,6 +13,7 @@ import json
 import os
 import random
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -544,12 +545,15 @@ def experiment_schedule(config, arms, replicates):
 
 
 def write_summary(output_dir, replay_set, config, replicates, rows):
+    """The run's record. Since 1.11.0 it also seals `blind_salt` (written before the first cell, so a run that dies keeps it); a
+    summary without one was run with labelled paths."""
     (output_dir / "summary.json").write_text(
         json.dumps({
             "experiment_id": config.get("experiment_id"),
             "replay_set_sha256": hashlib.sha256(replay_set.read_bytes()).hexdigest(),
             "seed": experiment_seed(config),
             "replicates_per_arm_task": replicates,
+            **({"blind_salt": config["blind_salt"]} if config.get("blind_salt") else {}),
             "cells": rows,
         }, indent=2)
     )
@@ -682,6 +686,156 @@ def blind_token(salt, cell):
     return f"{int(hashlib.sha256(f'{salt}:{cell}'.encode()).hexdigest(), 16) % 10**16:016d}"
 
 
+def blind_files(directory):
+    """Names an agent left under its token in `.blind/`: its controller died while it ran, or it is still running. [] if none."""
+    try:
+        return sorted(path.name for path in (Path(directory) / BLIND_DIR).iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+
+
+def blind_cell(salt, name, cells):
+    """The cell among `cells` whose token names `.blind/` file `name`, None when no salt or no candidate matches."""
+    if not isinstance(salt, str):
+        return None
+    token = name.split(".", 1)[0]
+    found = [cell for cell in cells if blind_token(salt, cell) == token]
+    return found[0] if len(found) == 1 else None
+
+
+# ---- read isolation (1.11.0): what a cell's agent must not read, asked of the CLI where it can enforce it, and looked for in
+# its retained stream. The CLI's own rules are the only prevention here; full isolation needs an OS sandbox around the agent.
+
+# installed copies a public repository's answer can sit in (an earlier study's agents read one inside a plugin copy), and other
+# sessions' logs, which can hold another arm's work
+HOME_PROTECTED = (("plugin-copy", (".claude", "plugins")), ("plugin-copy", (".claude", "skills")), ("plugin-copy", (".codex", "plugins")),
+                  ("plugin-copy", (".codex", "skills")), ("plugin-copy", (".agents", "skills")),
+                  ("session-log", (".claude", "projects")), ("session-log", (".codex", "sessions")))
+READ_ISOLATION_MARKERS = {"{read_isolation_claude_settings}": "claude-settings", "{read_isolation_codex_profile}": "codex-profile"}
+CODEX_READ_PROFILE = "lab_read_isolation"
+
+
+def protected_paths(config, task, output_dir, vault_root=None):
+    """(label, absolute path) the agent of this cell must not read, existing ones only: the output directory (the run's manifest,
+    ledger, other cells and `.blind/`), what the caller adds in `config["read_protect"]` (the set), every source repository (it
+    holds the commit asked for), hidden tests, the vault, installed plugin and skill copies, and session logs under HOME. A path
+    that is the filesystem root, or HOME or one of its parents, is refused: denying it would deny the agent its own tools."""
+    found = [("run-directory", output_dir), *((label, value) for label, value in config.get("read_protect", []))]
+    found += [("source-repository", value) for value in (config.get("repos") or {}).values()]
+    found += [("hidden-test", entry["source"]) for entry in task.get("hidden_acceptance", []) if isinstance(entry, dict) and "source" in entry]
+    found += [("vault", vault_root)] if vault_root is not None else []
+    home = Path.home().absolute()
+    found += [(label, home.joinpath(*parts)) for label, parts in HOME_PROTECTED]
+    out, seen = [], set()
+    for label, value in found:
+        path = Path(value).expanduser().absolute()
+        if not path.exists() or str(path) in seen:
+            continue
+        if path == Path(path.anchor) or path == home or path in home.parents or path.resolve() in (home.resolve(), *home.resolve().parents):
+            raise ValueError(f"read isolation would deny HOME or the filesystem root ({label})")
+        seen.add(str(path))
+        out.append((label, str(path)))
+    return out
+
+
+def read_isolation_mode(command):
+    """What the set asks the CLI to enforce, from the placeholders its agent command carries: never verified against the CLI."""
+    text = "\0".join(command)
+    modes = sorted(mode for marker, mode in READ_ISOLATION_MARKERS.items() if marker in text)
+    return "+".join(modes) if modes else "unenforced"
+
+
+def claude_read_settings(paths):
+    """Claude Code settings JSON (only `permissions` and `sandbox`, as native_runner admits) and its sha256: Read and Edit deny
+    rules for the file tools (`//` marks an absolute path), and the sandbox's denyRead for its Bash commands, required to start."""
+    rules = [f"{tool}(/{path}{tail})" for path in paths for tool in ("Read", "Edit") for tail in ("", "/**")]
+    value = {"permissions": {"deny": rules},
+             "sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "filesystem": {"denyRead": list(paths)}}}
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return text, hashlib.sha256(text.encode()).hexdigest()
+
+
+def codex_read_profile(paths):
+    """A Codex `-c` value: a permission profile that extends `:workspace` and denies each path (`default_permissions` selects it)."""
+    entries = ", ".join(f'{json.dumps(path)}="deny"' for path in paths)
+    return f'permissions.{CODEX_READ_PROFILE}={{extends=":workspace", filesystem={{{entries}}}}}'
+
+
+def _path_variants(path):
+    """Spellings of one protected path a command may use: as given, resolved, and without macOS's /private prefix."""
+    variants = {path, os.path.realpath(path)}
+    variants |= {v[len("/private"):] for v in variants if v.startswith("/private/")}
+    return {v.rstrip("/").casefold() for v in variants if v.rstrip("/")}
+
+
+PATH_TOKEN = re.compile(r"[^\s'\"`=;|&<>(),{}\[\]]+")
+CODEX_TOOL_ITEMS = ("command_execution", "file_change", "mcp_tool_call")
+CODEX_OUTPUT_KEYS = ("aggregated_output", "output", "result", "error", "exit_code", "status", "id", "type")
+
+
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+def _tool_calls(row):
+    """(tool, call id or None, arguments) of the tool calls one stream line records: Claude `tool_use` blocks of an assistant
+    message, Codex command, file-change and MCP items without their output. Anything else (text, reasoning, results) is not a call."""
+    if not isinstance(row, dict):
+        return []
+    message = row.get("message")
+    if row.get("type") == "assistant" and isinstance(message, dict) and isinstance(message.get("content"), list):
+        return [(str(block.get("name")), block.get("id"), block.get("input")) for block in message["content"]
+                if isinstance(block, dict) and block.get("type") in ("tool_use", "server_tool_use")]
+    item = row.get("item")
+    if str(row.get("type", "")).startswith("item.") and isinstance(item, dict) and item.get("type") in CODEX_TOOL_ITEMS:
+        return [(item["type"], item.get("id"), {k: v for k, v in item.items() if k not in CODEX_OUTPUT_KEYS})]
+    return []
+
+
+def scan_stream(stream, protected, workspace):
+    """Contamination check of one retained stream: every string a tool call carries (a path, a pattern, a shell command, written
+    content) is matched against each protected path, as text and, for each path-like token, resolved against the workspace (`..`,
+    `~`). Case is ignored. It sees only what the stream logs: a path built at run time (a variable, an encoded or globbed name, a
+    script that computes it) or a read by a program the agent started is invisible to it."""
+    if stream is None or not Path(stream).is_file():
+        return {"status": "unscanned", "reason": "no-retained-stream"}
+    # as text: not inside a longer path (`/a/x/out` is not `/x/out`), and ending at a separator, `/` or the end
+    roots = [(label, variant, re.compile(r"(?<![\w.~-])" + re.escape(variant) + r"(?![^/\s'\"`=;|&<>(),{}\[\]])"))
+             for label, path in protected for variant in sorted(_path_variants(path))]
+    home = str(Path.home())
+    calls, hits, unparsed = set(), {}, 0
+    with open(stream, "rb") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                unparsed += 1
+                continue
+            for tool, call_id, arguments in _tool_calls(row):
+                calls.add(call_id if call_id is not None else (tool, json.dumps(arguments, sort_keys=True, default=str)))
+                for text in _strings(arguments):
+                    folded = text.casefold()
+                    names = {folded}
+                    for token in PATH_TOKEN.findall(text):
+                        if "/" in token or token.startswith("~"):
+                            token = home + token[1:] if token.startswith("~") else token
+                            names.add(os.path.normpath(os.path.join(workspace, token)).casefold())
+                    for label, root, pattern in roots:
+                        if any(name == root or name.startswith(root + "/") for name in names) or pattern.search(folded):
+                            hits.setdefault(label, set()).add(tool)
+    return {"status": "contaminated" if hits else "clean", "tool_calls": len(calls), "unparsed_lines": unparsed,
+            "hits": [{"protected": label, "tools": sorted(tools)} for label, tools in sorted(hits.items())]}
+
+
 def execute_reserved_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_root, budget, upper_usd, bound_source_sha256):
     _diagnostic_retention(config, output_dir)
     if "replay_ref" in task or vault_root is not None:
@@ -784,11 +938,22 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             if path.exists() or path.is_symlink():
                 raise RuntimeError(f"runner receipt already exists: {path}")
         seen = {final: path for path, final in staged.items()}
+        protected = protected_paths(config, task, output_dir, vault_root)
+        inside = [label for label, path in protected if Path(path) in (workspace, *workspace.parents)
+                  or Path(path).resolve() in (workspace, *workspace.parents)]
+        if inside:  # denying it would deny the agent its own workspace
+            raise RuntimeError(f"cell workspace lies inside a protected path ({inside[0]}): set TMPDIR elsewhere")
+        isolation = read_isolation_mode(config["agent_command"])
+        denied = [path for _, path in protected]
+        settings, settings_sha256 = claude_read_settings(denied)
         replacements = {
             "{cwd}": str(workspace), "{prompt_file}": str(prompt),
             "{model}": policy["model"], "{effort}": policy["effort"],
             "{runner_receipt}": str(seen[runner_receipt]),
             "{stream_copy}": str(seen[stream_copy]),  # native_runner --stream-copy, opt-in
+            # read isolation, opt-in by the set (1.11.0): the run's protected paths, as each CLI takes deny rules
+            "{read_isolation_claude_settings_sha256}": settings_sha256, "{read_isolation_claude_settings}": settings,
+            "{read_isolation_codex_profile}": codex_read_profile(denied),
         }
         argv = []
         for part in config["agent_command"]:
@@ -814,6 +979,10 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
                     os.rename(path, final)
         agent_wall_s = round(time.monotonic() - started, 2)  # r46: the agent alone; wall_s also spans grading
         prompt.unlink(missing_ok=True)
+        try:  # a cell whose agent touched a protected path is invalid, whatever it produced
+            contamination = scan_stream(stream_copy if stream_copy.is_file() else None, protected, str(workspace))
+        except OSError:
+            contamination = {"status": "unscanned", "reason": "stream-unreadable"}
         # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
         hidden_failure, checks, checks_passed, outcomes = cleanup_failure, [], False, "unavailable"
         if cleanup_failure is None:
@@ -856,9 +1025,10 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             d0 = diagnostics(task, workspace, source_repo, base)
         d0_failure = None if d0["d0_complete"] else "d0-incomplete"
         agent_valid, _ = grade_cell(exit_code, checks_passed)
-        valid = agent_valid and identity_failure is None and hidden_failure is None and d0["d0_complete"]
+        contaminated = contamination["status"] == "contaminated"
+        valid = agent_valid and identity_failure is None and hidden_failure is None and d0["d0_complete"] and not contaminated
         accepted = valid and checks_passed
-        failure_class = cleanup_failure or (
+        failure_class = cleanup_failure or ("contaminated" if contaminated else None) or (
             "timeout" if exit_code == -9 else "agent-exit" if exit_code != 0
             else hidden_failure or identity_failure or d0_failure or "none"
         )
@@ -903,6 +1073,8 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             "agent_output": agent_output,
             "diagnostic_text_retained": retain_text,
             **({"blind_token": token} if token else {}),
+            "read_isolation": isolation,  # what the set asked the CLI to enforce; `unenforced` when it asked nothing
+            "contamination": contamination,
         }
         if retained_ref is not None:
             record.update(task_id=attempt_id, project_id=project, source_replay_ref=task["replay_ref"], replay_ref=retained_ref,
@@ -1372,7 +1544,10 @@ def main():
     output_dir = Path(args.out).expanduser().resolve()
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     validate_cell_artifacts(tasks, arms, replicates, directory=output_dir)
+    # 1.11.0: each agent sees a salted token, never its arm (blind_token), and must not read the set file (protected_paths)
+    config = {**config, "blind_salt": secrets.token_hex(16), "read_protect": [("set-file", str(replay_set))]}
     rows = []
+    write_summary(output_dir, replay_set, config, replicates, rows)
     for task in tasks:
         for replicate in range(1, replicates + 1):
             for arm in schedule[(task["id"], replicate)]:

@@ -1351,6 +1351,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         flagged = set()
     if flagged & {t["id"] for t in config["tasks"]}:  # its grade moved with the load: drop it from the set before any attempt
         return {"stop": "load-sensitive-oracle", "tasks": sorted(flagged & {t["id"] for t in config["tasks"]}), "calls": 0}
+    cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
     results, receipts = replay_eval.read_cell_artifacts(out)
     done = set(results)
     orphans = set(receipts) - done
@@ -1366,6 +1367,13 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                 orphans.add(row["cell"])
     except (OSError, ValueError):
         return {"stop": "unreadable-dispatch-history", "calls": 0}
+    try:  # an agent's receipt left under its token: its controller died while it ran (the ledger, if intact, says so too)
+        salt_seen = (_read_manifest(out / RUN_MANIFEST) or {}).get("blind_salt")
+    except ValueError:
+        salt_seen = None
+    named = {cell_name(c) for c in cells} | {row["cell"] for row in history}
+    for name in replay_eval.blind_files(out):
+        orphans.add(replay_eval.blind_cell(salt_seen, name, named) or f"{replay_eval.BLIND_DIR}/{name}")
     if orphans or (out / "STOP.json").exists():
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     refusals = [row for row in history if "finished_at" in row and row.get("refused") is True]
@@ -1424,7 +1432,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     sealed_digest = _sha256(manifest)
     if salt:  # the executor names the agent's workspace and receipt from it; the set as written, and its seal, never hold it
         config = {**config, "blind_salt": salt}
-    cell_name = lambda cell: replay_eval.cell_id(cell[0], cell[2], cell[1])
+    # the set's directory holds every task's hidden tests: no agent may read it (replay_eval.protected_paths adds the rest)
+    config = {**config, "read_protect": [("set-directory", str(config_path.parent.resolve()))]}
     arm_of = {cell_name(c): c[2] for c in cells}
     spent, invalid, stop, lock = 0.0, 0, None, threading.Lock()
     refused_per_arm = {arm: 0 for arm in config["arms"]}
@@ -2371,16 +2380,56 @@ def _oracle_state(config_path, results, rows, margin):
     return health
 
 
+def blind_orphans(config, results, rows):
+    """Files left in `.blind/` (an agent whose controller died, or one still running), each named by its cell when the sealed
+    salt and the ledger or the plan identify it, else None. Counted beside orphan receipts, never dropped."""
+    names = replay_eval.blind_files(results)
+    if not names:
+        return []
+    try:
+        manifest = _read_manifest(results / RUN_MANIFEST) or {}
+    except ValueError:
+        manifest = {}
+    salt, aa, arms = manifest.get("blind_salt"), manifest.get("aa"), config.get("arms", {})
+    if isinstance(aa, dict) and aa.get("label") not in arms:
+        arms = {**arms, aa.get("label"): None}
+    # the cells a token can belong to: those with a result or a dispatch, and every planned one up to one replicate past the last
+    reps = max([r["replicate"] for r in rows if type(r.get("replicate")) is int] + [1]) + 1
+    candidates = {r["cell"] for r in rows} | {row["cell"] for row in (_ledger(results) or [])}
+    candidates |= {replay_eval.cell_id(t, a, k) for t in config.get("tasks", []) for a in arms for k in range(1, reps + 1)}
+    return [{"file": name, "cell": replay_eval.blind_cell(salt, name, candidates)} for name in names]
+
+
+def read_isolation(rows):
+    """What each cell asked its CLI to enforce and what its stream showed. `unrecorded`: cells written before 1.11.0."""
+    modes, found = {}, {"clean": 0, "contaminated": 0, "unscanned": 0, "unrecorded": 0}
+    for row in rows:
+        mode = row.get("read_isolation") if isinstance(row.get("read_isolation"), str) else "unrecorded"
+        modes[mode] = modes.get(mode, 0) + 1
+        scan = row.get("contamination")
+        state = scan.get("status") if isinstance(scan, dict) and scan.get("status") in found else "unrecorded"
+        found[state] += 1
+    return {"cells": len(rows), "modes": dict(sorted(modes.items())), "contamination": found,
+            "contaminated_cells": sorted(str(r.get("cell")) for r in rows if isinstance(r.get("contamination"), dict)
+                                         and r["contamination"].get("status") == "contaminated")}
+
+
 def status(config_path, results, acknowledge=None):
     """Blinded while a run is in flight: the grader's health pooled over every cell written so far, A/A copies included, with no
     arm, task, cell or verdict. Takes no lock and checks no receipt. `acknowledge` (a reason) records that a person looked at the
     open alarm: `report` then labels the verdict acknowledged instead of oracle-suspect, until any count changes."""
     config = json.loads(config_path.read_text())
     try:
-        rows = list(replay_eval.read_cell_artifacts(results)[0].values())
+        found, receipts = replay_eval.read_cell_artifacts(results)
     except FileNotFoundError:
-        rows = []
+        found, receipts = {}, {}
+    rows = list(found.values())
     health = _oracle_state(config_path, results, rows, declared_margin(config))
+    # a count for labelled receipts (their names carry the arm); `.blind/` files by name, since a token names no arm
+    orphans = {"receipts": len(set(receipts) - set(found)), "blind_files": replay_eval.blind_files(results),
+               "note": "in flight while a run is active, else orphaned"}
+    isolation = read_isolation(rows)
+    del isolation["contaminated_cells"]  # pooled: names no cell
     if acknowledge is not None:
         if health["status"] != "oracle-suspect":
             raise ValueError(f"no open oracle alarm to acknowledge (status {health['status']})")
@@ -2390,7 +2439,7 @@ def status(config_path, results, acknowledge=None):
         (results / ORACLE_ACK).write_text(json.dumps({"at": at, "reason": acknowledge, "alarms": health["alarms"],
                                                       "health_sha256": health["sha256"]}, indent=1) + "\n")
         health.update(status="acknowledged", acknowledgement={"at": at, "reason": acknowledge})
-    return {"schema": "007-lab/status/v1", "oracle_health": health}
+    return {"schema": "007-lab/status/v1", "oracle_health": health, "orphans": orphans, "read_isolation": isolation}
 
 
 def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None, planned_replicates=None):
@@ -2424,6 +2473,8 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     rows = cells = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
+    blind = blind_orphans(config, results, rows)
+    receipts = {**receipts, **{entry["cell"]: {} for entry in blind if entry["cell"] and entry["cell"] not in receipts}}
     accounting = arm_accounting({**config, "arms": {**config["arms"], aa["label"]: None}} if aa else config, results, rows, receipts)
     orphans = sorted(set(receipts) - {r["cell"] for r in rows})
     twins = [r for r in rows if aa and r.get("arm") in (aa["arm"], aa["label"])]
@@ -2432,7 +2483,8 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     excluded = sorted(r["cell"] for r in rows if r["valid"] is not True)
     rows = [r for r in rows if r["valid"] is True]
     if not rows:
-        raise ValueError(f"no valid cells to report ({len(excluded)} invalid, {len(orphans)} orphan receipts)")
+        raise ValueError(f"no valid cells to report ({len(excluded)} invalid, {len(orphans)} orphan receipts, "
+                         f"{sum(e['cell'] is None for e in blind)} unnamed files in {replay_eval.BLIND_DIR}/)")
     stage2 = None
     if next_results:  # stage 2 must be chained from this sealed run, at the reference arm, and bound to its own seal
         upstream = _read_manifest(next_results / RUN_MANIFEST)
@@ -2523,6 +2575,7 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
         stage2["stage1_cells_chained"] = sum(r["cell"] in next_rows for r in rows)
         stage2["stage1_cells"] = len(rows)
     result = {"schema": "007-lab/report/v6", "at": _now(), "run_manifest": manifest, "next_run_manifest": stage2, "arm_accounting": accounting, "verdict": tier, "excluded_invalid": excluded, "orphan_receipts": orphans,
+              "orphan_blind_files": blind, "read_isolation": read_isolation(cells),
               "unreadable_outcomes": sorted(r["cell"] for r in rows if r.get("outcomes_unreadable")), "unseen_behaviour": behaviour,
               "reachable_behaviour": reachable, "proven_critical": proof, "pseudo_aa": pseudo, "aa": twin, "oracle_health": oracle, "contrast": c, "bootstrap": ci, "split_tasks": split, "per_task": per_task,
               "sensitivity": sense, "median_reasoning_tokens": reasoning, "tasks_faster": [faster, len(tasks)], "gates": GATES,
@@ -2570,6 +2623,18 @@ def oracle_line(health):
     classes = ", ".join(f"{k} {v}" for k, v in health["classes"].items() if v) or "none"
     exits = ", ".join(f"{k}: {v}" for k, v in health["exit_codes"].items()) or "none"
     return f"- **Oracle health:** {state}; {health['cells']} cells ({classes}); grader exits {exits}."
+
+
+def isolation_line(isolation):
+    """The read-isolation line of report.md: what the cells asked their CLI to enforce, and what the streams showed."""
+    if not isolation or not isolation["cells"]:
+        return None
+    modes = ", ".join(f"{mode} {n}" for mode, n in isolation["modes"].items())
+    found = ", ".join(f"{k} {v}" for k, v in isolation["contamination"].items() if v)
+    bad = isolation["contamination"]["contaminated"]
+    return (f"- **Read isolation:** asked of the CLI: {modes}; streams: {found}"
+            + (f"; **{bad} contaminated cells read a protected path and are invalid**" if bad else "")
+            + ". The check sees only tool calls the stream logs; `unenforced` means nothing stopped a read, and only an OS sandbox isolates fully.")
 
 
 def summary(result, low, ref, attempts):
@@ -2626,7 +2691,10 @@ def summary(result, low, ref, attempts):
            f"{result['next_run_manifest']['stage1_cells']} valid stage-1 attempts have a valid stage-2 attempt; the others count as not durable."]
           if result.get("next_run_manifest") else []),
         "- **Not shown by this report:** served effort (the CLIs do not report it), invoiced cost (costs are estimates), commits, models or specification forms other than these.",
-        f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried.",
+        *([line] if (line := isolation_line(result.get("read_isolation"))) else []),
+        f"- **Excluded:** {len(result['excluded_invalid'])} invalid attempts and {len(result.get('orphan_receipts', []))} orphan receipts, never retried"
+        + (f"; {len(blind)} files an agent left under its token in `.blind/` ({sum(e['cell'] is None for e in blind)} not traced to a cell)"
+           if (blind := result.get("orphan_blind_files")) else "") + ".",
         "",
     ])
 

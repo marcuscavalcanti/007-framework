@@ -54,6 +54,18 @@ schemas, and the dashboard snapshot.
   `oracle_suspect`, and `report.md` opens with a notice until a person runs `status --ack-oracle REASON`. That command writes
   `ORACLE-ACK.json`, bound to the counts it saw, so any new cell reopens the alarm. Runs whose cells record no grader exit read
   `unmeasured` and keep every verdict value. See [the lab guide](docs/lab.md#oracle-health-status-and-the-report).
+- Read isolation and contamination detection for replay cells (`007 lab run` and `replay_eval run`). Each cell has a list of
+  protected paths: `--out`, the set's directory (the set file for `replay_eval`), source repositories, hidden-test sources,
+  the vault, installed plugin and skill copies under HOME, and other sessions' logs. A set opts in to prevention with
+  placeholders in its agent command: `{read_isolation_claude_settings}` and `{read_isolation_claude_settings_sha256}` give
+  Claude Code `permissions` deny rules and a required sandbox `filesystem.denyRead`, which `native_runner` admits;
+  `{read_isolation_codex_profile}` gives Codex a permission profile that denies each path. Each cell records
+  `read_isolation`, which is `unenforced` when the command asks nothing. Detection reads the retained stream
+  (`--stream-copy {stream_copy}`): a tool call that names a protected path marks the cell `contaminated` and invalid, and it
+  counts against `--max-invalid`. `report` and `status` (pooled) show the modes and the scan results; cells from before 1.11.0
+  read `unrecorded` and are never rescanned. Prevention is only what each CLI enforces, detection sees only logged tool calls,
+  and full isolation needs an OS sandbox, which 007 does not provide. See
+  [the lab guide](docs/lab.md#read-isolation-and-contamination).
 
 ### Fixed
 
@@ -71,6 +83,13 @@ schemas, and the dashboard snapshot.
   `manifest-mismatch`. A run sealed before 1.11.0 resumes with its labelled paths, and its report and verdict are unchanged. The
   model and effort flags, and any doctrine that differs between arms, still reach the agent: they are the treatment. See
   [the lab guide](docs/lab.md#blind-arms-what-the-agent-sees).
+- An agent receipt left in `--out/.blind/` by a controller that died is now counted. `report` lists it in
+  `orphan_blind_files`, named by its cell when the salt and the ledger or plan trace it, and counts that cell as attempted
+  without a result; `status` lists the file names, which are tokens. A resume stops with `uncertain-attempts` for such a file
+  even when the ledger lost its dispatch.
+- `replay_eval run`, outside `007 lab`, named each agent's workspace and receipt by its arm. It now uses the same salted tokens
+  and seals the salt as `blind_salt` in its `summary.json`, written before the first cell. Outputs without a salt load as
+  before.
 
 ## [1.10.1] - 2026-11-22
 
