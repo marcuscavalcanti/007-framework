@@ -9,8 +9,11 @@ things:
   it cost and how long it took. Missing evidence stays visible as a gap, never a zero.
 - **A pre-registered causal verdict with a declared error rate.** `007 lab` replays your repository's own commits under two
   configurations and tests a quality margin you fix before spending. Its decision rule is checked by a calibrated
-  control: on the one study shape validated so far, a true loss of the margin read `PROVEN` in 1.25–2.27% of simulated
-  replicates, compatible with the 2.5% it promises.
+  control: on the one study shape validated so far, a true loss of the margin read `PROVEN` between 1.25% and 2.27% of the
+  time across five loss scenarios (Wilson 95% upper bound up to 2.78% under clustered loss), compatible with the 2.5% it
+  promises. It does not yet detect a 10-point loss reliably: 57% of the time, against the 80% required. The control
+  validated the decision functions of 1.11.0's `scripts/effort_lab.py`, which are unchanged from the tested code; the file
+  as a whole is not ([version binding](docs/evidence.md#version-binding-of-the-validated-error-control)).
 
 007 measures; something else routes. In standalone use, you or your agent host read the receipts and the verdict on one
 machine. In gateway use, a gateway that assigns configurations to tasks feeds the same receipts to the same 007 code,
@@ -50,8 +53,8 @@ configurations on Git history. 007 is not an agent, a sandbox, a model gateway o
 
 The lab's decision rule as corrected in 1.11.0 passed a calibrated control (CALIBRATED-UNDERPOWERED) for one shape: go-json,
 41 tasks, two attempts per arm, a 20-point margin, whole-attempt loss, floor 2.4768. There, a true loss of the margin read
-`PROVEN` in 1.25–2.27% of replicates; under a clustered loss the rate (2.27%, upper bound 2.78%) is compatible with 2.5%, not
-shown to be below it. A true loss of 10 points was detected 57% of the time, against the 80% a detection claim needs. Any
+`PROVEN` between 1.25% and 2.27% of the time across five loss scenarios; under a clustered loss the rate (2.27%, Wilson 95%
+upper bound 2.78%) is compatible with 2.5%, not shown to be below it. A true loss of 10 points was detected 57% of the time, against the 80% a detection claim needs. Any
 other shape needs its own floor and control. [Errata and controls](docs/evidence.md#errata-and-limits-published-for-1110)
 
 ## Install
