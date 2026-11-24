@@ -92,10 +92,28 @@ The second control validated the decision code of the `scripts/` tree `4fae7b3f8
 then changed `effort_lab.py` again (how a Claude usage limit is refused and requeued, and how `report` reads an arm with no
 valid cell), so the released file is not byte-identical to the validated one and the binding by identity does not hold. The
 functions the control exercised (`proven_critical`, `whole_loss_draws`, `guard_decision`, `missing_data_guard`, `_reading`,
-`_paired`, `studentized`, `false_proven`, `aa_check`) are unchanged, and no module constant changed. What changed is upstream
-of the decision (which refused cells are set aside and requeued in a live run) and a report override that applies only when
-an arm has no valid cell, a case the control never produced. The validated claim is therefore bound to that tree's decision
-functions, not to the whole 1.11.0 `effort_lab.py`.
+`_paired`, `studentized`, `false_proven`, `aa_check`) are unchanged, and no module constant changed.
+
+The binding was therefore measured, not argued. The frozen control, changed only in the line that picks the scripts
+directory, was rerun with the `scripts/` tree of this release (`2f83d292cdaf145017140eab87b661fbfdc24b09`) on the same inputs
+and seeds, and compared with the validated run's stored result, value for value and bit for bit in floats:
+
+| Part | Compared | Result |
+|---|---|---|
+| Rebuilt floor | all of it | identical (2.4768209601363016) |
+| Coverage grid | 37 points × 2,000 replicates | identical |
+| A/A check | 2 arms × 100,000 draws, twice | identical |
+| Prescreen of the ten rule runs | all 29,200 replicates | identical; the same 979 reach the decision rule |
+| Decision rule (critical values under both loss models, verdict, missing-data guard) | all 979 replicates | 979 of 979 identical |
+| Re-read of Study F under both rules | all of it | identical |
+| End-to-end gate on four realizations of Study F's results directory | all of it | identical |
+
+A negative control, the same scripts with the clustered loss model removed, was caught in 10 of 10 replicates checked. Not
+rerun: the control's sensitivity analysis (597 replicates of the same rule on inputs with one cell replaced).
+
+What 1.11.0 changed sits upstream of the decision (which refused cells are set aside and requeued in a live run) and in a
+report override that applies only when an arm has no valid cell, a case the control never produced; the control does not
+exercise those paths. The comparison holds for that `scripts/` tree only: a release whose `scripts/` differs needs it again.
 
 ### Incremental value
 

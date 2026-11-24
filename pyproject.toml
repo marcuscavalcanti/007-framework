@@ -9,6 +9,7 @@ description = "Evidence-bounded agent orchestration and local replay instrumenta
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+classifiers = ["Development Status :: 4 - Beta"]
 dependencies = []
 
 [project.scripts]

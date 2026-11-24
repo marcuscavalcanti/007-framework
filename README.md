@@ -12,8 +12,8 @@ things:
   control: on the one study shape validated so far, a true loss of the margin read `PROVEN` between 1.25% and 2.27% of the
   time across five loss scenarios (Wilson 95% upper bound up to 2.78% under clustered loss), compatible with the 2.5% it
   promises. It does not yet detect a 10-point loss reliably: 57% of the time, against the 80% required. The control
-  validated the decision functions of 1.11.0's `scripts/effort_lab.py`, which are unchanged from the tested code; the file
-  as a whole is not ([version binding](docs/evidence.md#version-binding-of-the-validated-error-control)).
+  ran on an earlier `scripts/` tree; rerun with this release's scripts it reproduces every output of the validated run
+  ([version binding](docs/evidence.md#version-binding-of-the-validated-error-control)).
 
 007 measures; something else routes. In standalone use, you or your agent host read the receipts and the verdict on one
 machine. In gateway use, a gateway that assigns configurations to tasks feeds the same receipts to the same 007 code,
@@ -362,7 +362,8 @@ Contribution rules cover proof, privacy, minimal changes and release authority. 
 ## Versioning and changelog
 
 Versions follow Semantic Versioning. The public interface is the `007` CLI, the receipt and report schemas, and the dashboard
-snapshot; a breaking change to any of them needs a major version. Releases are tagged and listed in
+snapshot; a breaking change to any of them needs a major version. The 1.x number indicates interface stability, not
+demonstrated value: maturity differs by component ([status](#why-for-whom-status)). Releases are tagged and listed in
 [CHANGELOG.md](CHANGELOG.md), with each release's qualification record under `evidence/`. Only the latest tag receives
 security fixes. A replay set mined before 1.10.1 keeps its embedded grader until it is mined again. A verdict re-read with
 1.11.0 uses the corrected critical value and can move from `PROVEN` to `NOT-PROVEN`, never the reverse.

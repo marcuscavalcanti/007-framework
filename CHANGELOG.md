@@ -84,6 +84,8 @@ schemas, and the dashboard snapshot.
   isolation, `--jobs`); the routing selector's gates and its fallback-or-block behaviour are spelled out; new sections on
   privacy and security, versioning and citation. Paths that belong to the 007 checkout and those that belong to your project
   are now told apart.
+- Maturity is stated per component, not by the version number: the README says that 1.x indicates interface stability, not
+  demonstrated value, and the package metadata carries `Development Status :: 4 - Beta`.
 
 ### Fixed
 
@@ -179,10 +181,12 @@ schemas, and the dashboard snapshot.
     and `PAYS` under both rules (statistic 10.841).
   - Study F's published 95% interval covers the truth about 92% of the time in its own regime (1,838/2,000 and 1,832/2,000 in
     the two controls).
-  - Version binding: the validated error control is bound to the decision functions of `scripts/` tree `4fae7b3f…`. 1.11.0's
-    `effort_lab.py` is not byte-identical to that tree's (the usage-limit and empty-arm fixes above changed `refused`,
-    `_run`, `quota_check`, `_report` and `summary`); `proven_critical`, `guard_decision`, `missing_data_guard`, `_reading`,
-    `aa_check` and the functions they call are unchanged.
+  - Version binding: the second control ran on `scripts/` tree `4fae7b3f…`. 1.11.0's `effort_lab.py` is not byte-identical to
+    that tree's (the usage-limit and empty-arm fixes above changed `refused`, `_run`, `quota_check`, `_report` and `summary`).
+    The frozen control was rerun with this release's `scripts/` tree (`2f83d292…`) on the same inputs and seeds: the rebuilt
+    floor, the coverage grid, the A/A check, the prescreen of all 29,200 replicates, the decision rule on all 979 replicates
+    that reach it, the re-read of Study F and the end-to-end gate equal the validated run's output exactly. The control's
+    sensitivity analysis was not rerun. A release with a different `scripts/` tree needs the comparison again.
 
 ## [1.10.1] - 2026-11-22
 
