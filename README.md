@@ -2,31 +2,38 @@
 
 **A measurement layer for routing decisions between coding-agent configurations.**
 
-When you choose between models, efforts or agent CLIs for coding work, 007 measures what that choice does. It produces two
-things:
+When you choose between configurations for coding work, 007 measures what that choice does. One choice has been exercised
+so far: a lower reasoning effort of the same model. 007 produces two things:
 
-- **Outcome receipts.** A local, schema-checked record of each task: what ran, whether its acceptance checks passed, what
-  it cost and how long it took. Missing evidence stays visible as a gap, never a zero.
+- **Outcome receipts.** A local, schema-checked declaration for each task started with `007 begin`: what ran, what its checks
+  reported (observed by 007 itself only under `007 run --acceptance-file`), what it cost and how long it took. Receipts are
+  unauthenticated local files. Missing evidence stays visible as a gap, never a zero.
 - **A pre-registered causal verdict with a declared error rate.** `007 lab` replays your repository's own commits under two
-  configurations and tests a quality margin you fix before spending. Its decision rule is checked by a calibrated
-  control: on the one study shape validated so far, a true loss of the margin read `PROVEN` between 1.25% and 2.27% of the
-  time across five loss scenarios (Wilson 95% upper bound up to 2.78% under clustered loss), compatible with the 2.5% it
-  promises. It does not yet detect a 10-point loss reliably: 57% of the time, against the 80% required. The control
-  ran on an earlier `scripts/` tree; rerun with this release's scripts it reproduces every output of the validated run
+  configurations and tests a quality margin you fix before spending. Its rule is built to call a true loss of the margin
+  `PROVEN` about 2.5% of the time. A calibrated control checked that for one study shape, one repository and one floor
+  (go-json, 41 tasks, two attempts per arm, a 20-point margin, `report --missing-data-guard` with `compare.critical_floor`
+  2.4768): 1.25% to 2.27% across five loss scenarios (Wilson 95% upper bound 2.78% under clustered loss), compatible with
+  2.5%, not shown to be below it. A plain `report`, a run without a floor, or any other shape is outside that control, and
+  the CLI has no command that runs the control. Its power gate failed: when the true loss is 10 points, inside the 20-point
+  margin, the rule reads `PROVEN` between 49% and 57% of the time in two runs of 400 replicates (53% pooled, Wilson 95%
+  49.5–56.4), against the 80% required. The control ran on an earlier `scripts/` tree; rerun with this release's `scripts/`
+  tree it reproduces the stored result exactly, except the sensitivity analysis, which was not rerun
   ([version binding](docs/evidence.md#version-binding-of-the-validated-error-control)).
 
 007 measures; something else routes. In standalone use, you or your agent host read the receipts and the verdict on one
-machine. In gateway use, a gateway that assigns configurations to tasks feeds the same receipts to the same 007 code,
-which labels and judges them; 007 never chooses a model or moves traffic. Standalone is the building block and the only
-mode exercised so far.
+machine; it is the only mode that exists. Gateway use is a design, not built: a gateway that assigns configurations to tasks
+would feed the same receipts to the same 007 code. 007 never moves traffic: its experimental `007 route` recommends one of the
+CLIs you configured at task start, and your host decides whether to launch it.
 
-What the evidence shows today, all on one public Go repository (go-json-experiment/json), one model per executor, efforts as
-requested from the CLI:
+What the evidence shows today. The effort replays all ran on one public Go repository (go-json-experiment/json), one model per
+executor, with models and efforts as requested from the CLI; what the provider served is not verified. The skill study used
+31 tasks from three other public repositories.
 
 - At 3- and 10-point margins the quality verdicts are **NOT-PROVEN**. One Claude study (Study F) reads **PAYS** at a 20-point
-  margin, with whole-change acceptance 56/82 against 61/81.
-- A paired study found no detectable effect of invoking the 007 skill on acceptance.
-- Runs before 1.11.0, Study F included, were not blind: the agent could read its arm's label in its workspace path.
+  margin chosen after an exploratory reading, with whole-change acceptance 56/82 against 61/81.
+- A paired study found no detectable effect of invoking the 007 skill on acceptance (one run per arm and task, no A/A).
+- Runs before 1.11.0, Study F included, were not blind: the agent could read its arm's label in its workspace path. No blind
+  replication has been run.
 - **007's incremental value over a well-informed user of the same native CLI is not demonstrated.**
 
 [Evidence and its limits](#evidence-and-current-thesis)
@@ -34,8 +41,8 @@ requested from the CLI:
 ## Why, for whom, status
 
 **Why.** Cheaper settings save money per attempt; the open question is whether they lose accepted work. Answering that
-needs a margin fixed in advance, the same tasks on both arms, hidden tests the agent never sees, and a rule whose error rate
-was measured rather than assumed. 007 packages that procedure, and records outcomes so the question can be asked again on
+needs a margin fixed in advance, the same tasks on both arms, hidden tests kept outside the agent's workspace, and a rule whose
+error rate was measured rather than assumed. 007 packages that procedure, and records outcomes so the question can be asked again on
 real work.
 
 **For whom.** Developers and teams who already run Codex or Claude Code from a terminal, on Linux or macOS, and want local
@@ -47,15 +54,19 @@ configurations on Git history. 007 is not an agent, a sandbox, a model gateway o
 | Part | Status |
 |---|---|
 | Receipts, `007 begin`/`record`/`run`, dashboard | Stable interface (see [versioning](#versioning-and-changelog)) |
-| `007 lab` | Beta. Error control validated for one shape only (below); detection power not reached |
-| Gateway mode | Not built or validated: 007 ships no gateway, no multi-user service and no authentication |
+| `007 lab` | Beta. Error rate measured for one shape of `report --missing-data-guard` with a floor (below); power gate failed |
+| Gateway mode | A design, not built or validated: 007 ships no gateway, no multi-user service and no authentication |
 | `007 route` and the host skill | Experimental. No demonstrated benefit over the native CLI used directly |
 
-The lab's decision rule as corrected in 1.11.0 passed a calibrated control (CALIBRATED-UNDERPOWERED) for one shape: go-json,
-41 tasks, two attempts per arm, a 20-point margin, whole-attempt loss, floor 2.4768. There, a true loss of the margin read
-`PROVEN` between 1.25% and 2.27% of the time across five loss scenarios; under a clustered loss the rate (2.27%, Wilson 95%
-upper bound 2.78%) is compatible with 2.5%, not shown to be below it. A true loss of 10 points was detected 57% of the time, against the 80% a detection claim needs. Any
-other shape needs its own floor and control. [Errata and controls](docs/evidence.md#errata-and-limits-published-for-1110)
+The lab's `PROVEN` rule as corrected in 1.11.0 met the error-rate gates of a calibrated control and failed its power gate
+(CALIBRATED-UNDERPOWERED), for one shape: go-json, 41 tasks, two attempts per arm, a 20-point margin, whole-attempt loss,
+read by `report --missing-data-guard` with `compare.critical_floor` 2.4768. There, a true loss of the margin read `PROVEN`
+between 1.25% and 2.27% of the time across five loss scenarios; under a clustered loss the rate (2.27%, Wilson 95% upper
+bound 2.78%) is compatible with 2.5%, not shown to be below it. At a true loss of 10 points, inside the margin, it read
+`PROVEN` between 49% and 57% of the time in two runs of 400 replicates (53% pooled, Wilson 95% 49.5–56.4), against the 80%
+required. Not covered: a plain `report` (it ignores the floor), a run without a floor, a loss of partial credit, missing
+cells that cluster, and any other shape, which needs its own floor and control. The CLI has no command that runs the
+control. [Errata and controls](docs/evidence.md#errata-and-limits-published-for-1110)
 
 ## Install
 
@@ -149,20 +160,36 @@ counters, not message bodies. [Privacy](PRIVACY.md)
 
 ### Evaluate a lower effort
 
+With a `lab.json` written from `examples/lab.example.json`:
+
 ```bash
-007 lab --help
+007 lab mine --config lab.json --out lab
+007 lab sensitivity --set lab/replay-set.json
+007 lab viability --set lab/replay-set.json --results pilot --format text
+007 lab feasibility --set lab/replay-set.json --sd 0.23
+007 lab run --set lab/replay-set.json --out results --replicates 3 --max-calls 144 --max-usd 150
+007 lab status --set lab/replay-set.json --results results
+007 lab report --set lab/replay-set.json --results results
 ```
 
 The flow is `mine → sensitivity → viability → feasibility → run → status → report`. Only `run` calls a model.
 
-- `mine` builds tasks from your commits, with hidden tests the agent never sees; `sensitivity` checks that those tests
-  reject planted defects.
-- `viability` (since 1.11.0) says at no model cost whether the repository can give a decisive verdict, and why not;
-  `feasibility` estimates how many tasks a verdict needs. Both run before spending.
+- `mine` builds tasks from your commits, with hidden tests kept outside the agent's workspace and applied after it exits
+  (readable on the host unless you configure read isolation); `sensitivity` checks that those tests reject planted defects.
+- `viability` (since 1.11.0) reads files only. Before a pilot it can answer `NOT-VIABLE` or `UNKNOWN`; `VIABLE` needs pilot
+  cells (`--results`) or recorded numbers (`--inputs`), and means no known reason to fail, not a promised verdict.
+  `feasibility` estimates how many tasks a verdict needs, as a normal approximation: read it as a lower bound. Both run
+  before spending.
 - `run` launches the configured agent commands within your spend limits. Add `--aa ARM` (since 1.11.0) to run one arm
-  twice, so the verdict carries its own noise floor.
-- `status` (since 1.11.0) shows the grader's health while a run is in flight, without revealing a verdict.
-- `report` gives the verdict at the declared margin.
+  twice, at one more paid attempt per task and replicate. The two-arm verdict is unchanged; beside it the report gives the
+  copies' discordance and an A/A equality check, and calls the verdict A/A-qualified only with at least eight reaching
+  tasks and no rejection of equality.
+- `status` (since 1.11.0) shows the grader's health, pooled over every cell, while a run is in flight, without revealing a
+  verdict. An alarm marks the report oracle-suspect until a person runs `status --ack-oracle REASON`; `run` does not stop
+  on it, so a driver that should stop must check `status`'s exit code.
+- `report` gives the verdict at the declared margin. `report --missing-data-guard` adds the missing-data guard and the cost
+  per accepted change, and is the only path that reads `compare.critical_floor`; only that path, at one shape, has a
+  calibrated control (above). For a confirmatory run, freeze and hash the set, margin and reach before the first attempt.
 - `sufficiency` (drop tasks whose prompt alone cannot reach their tests) and `chain` (a next-change stage for durability)
   are optional steps.
 
@@ -173,11 +200,18 @@ triggers a stop. Costs retain their accounting source.
 
 What to expect:
 
-- At a 3-point margin expect NOT-PROVEN: a verdict needs hundreds of commits that reach new behaviour, more than most
-  repositories have. A break-even margin needs about 20 such commits per executor at go-json's Codex noise, about 40 for
-  Claude.
-- A snapshot is not read isolation. If the host holds another copy of the mined repository (a plugin or module cache, a
-  vendored checkout), deny the agent access to it or the cell is contaminated.
+- At a 3-point margin expect NOT-PROVEN. With the attempts the published runs had (about two per arm for Codex, three for
+  Claude), a verdict needs about 190–360 commits that reach new behaviour at go-json's Codex noise and about 700 for Claude;
+  eight attempts per arm bring Codex to about 55–145. That is more than most repositories have. A break-even margin needs
+  about 20 such commits per executor at go-json's Codex noise (two attempts per arm, about US$25), about 40 for Claude.
+  These sizes ignore the calibrated critical value, which is stricter: read them as lower bounds.
+- Of three private repositories screened with these rules, none could be measured: too few tasks, an oracle that rejected
+  0.2968 of planted defects, and a reference accepted in 3 of 70 cells ([viability](docs/lab.md#before-spending-viability)).
+- A snapshot is not read isolation. Read isolation (since 1.11.0) is opt-in: without the `{read_isolation_…}` placeholders
+  in its agent command a cell records `unenforced`. The generated Claude and Codex rules were not checked against a running
+  CLI. Detection needs a retained stream and sees only logged tool calls; a call that only names a protected path counts as
+  a hit. If the host holds another copy of the mined repository (a plugin or module cache, a vendored checkout), deny the
+  agent access to it.
 - Keep `--jobs` at its default; machine load changes grades.
 
 ### Record task outcomes
@@ -186,18 +220,19 @@ Register each Git project once with `007 init`. Registration is idempotent, adds
 exclude file and updates the local user registry. Remove a stale entry with `007 unregister --project /old/path`.
 
 For a manual record, start the task before implementation, do the work, write its observed outcome to a receipt with the
-same task ID, then record it:
+same task ID, then record it. Run these from your project (`cd /path/to/your/project`), not from the 007 checkout:
 
 ```bash
 007 begin --repo . --task-id pagination-regression
-# ... implement, run the checks, write task.receipt.json from the example ...
+# ... implement, run the checks, write task.receipt.json from the example with "task_id": "pagination-regression" ...
 007 record --repo . --file task.receipt.json
 ```
 
 `007 record` validates identity, accounting, finite values and uniqueness. It rejects a receipt without a numeric
 `cost_usd`, a cost source and a status. If the route cannot be priced, such as a flat subscription, set
 `cost_unavailable_opt_in: true` in `.007/project.json` and record `cost_usd: null`, `cost_status: "unavailable"`, a
-`custom:<name>` source and a reason. Never enter zero. [Receipt example](examples/task.receipt.example.json) ·
+`custom:<name>` source and a reason. Never enter zero for an unknown cost: a zero needs a measurement or an explicit
+allocation. [Receipt example](examples/task.receipt.example.json) ·
 [Receipt schema](references/receipt-schema.md)
 
 To let the controller observe the lifecycle, wrap the agent command instead, with a fresh task ID:
@@ -223,8 +258,9 @@ process with the same filesystem account. Technical containment belongs to the h
 
 After installing the [host skill](#host-skill), ask your host to use `007-framework` for a task. Its order of priority is
 correctness and no regression, low rework, the smallest sufficient diff, then cost and latency. It declares the task class,
-proof level and diff budget before editing, keeps one writer, and leaves a failing-then-passing check for a bug fix. After a
-second failure it escalates one tier in a fresh session and never makes a third equivalent attempt.
+proof level, diff budget and escalation path before editing, keeps one writer, runs the repository's own gates, and leaves a
+failing-then-passing check for a bug fix. It retries only when the hypothesis, input, capability or evidence changed; after a second failure it escalates one tier
+in a fresh session and never makes a third equivalent attempt.
 
 ```text
 Use 007-framework to fix the pagination regression. Preserve unrelated work,
@@ -239,13 +275,14 @@ Configure the CLIs you own to obtain a route recommendation:
 
 ```bash
 mkdir -p ~/.007-framework
-cp /path/to/007-framework/examples/routes.example.json ~/.007-framework/routes.json
+cp -n /path/to/007-framework/examples/routes.example.json ~/.007-framework/routes.json
 007 route --repo /path/to/your/project --task-class implement --format json
 ```
 
 The selector is experimental and observational. A route is measured-eligible only after five mature outcomes of its task
 class (reliable first-pass rate at least 70%, escape rate at most 5%, mean repair rounds at most 0.5), with complete cost and
-wall time, linked seven-day observations and all six declared cost components. Until then it returns your configured
+wall time, linked seven-day observations and all six declared cost components. Among eligible routes it picks the lowest
+all-attempt cost per reliable outcome, then wall time, then route ID. Until a route is eligible it returns your configured
 fallback; with no available fallback, it blocks. Its inputs are unauthenticated local declarations, and its evidence scope is
 the current repository; a selection is not evidence that the route is better. Executor selection and serving remain
 explicit host actions. [Routing details](references/routing.md)
@@ -285,11 +322,14 @@ directories request owner-only permissions. Existing host permissions govern exi
 - Logs never leave the machine through 007, and prompt text is not stored by default. Agent commands send the context you
   authorize to their model providers. Optional Headroom/LiteLLM pricing receives model names and token counts and controls
   its own network use.
-- The dashboard reads local agent session logs, has no authentication, and binds to loopback unless you change `--host`.
-- Replays can retain prompts, source snapshots and patches when you request it. Nothing expires: `007 unregister` removes
+- The dashboard reads local agent session logs, has no authentication, and binds to loopback unless you change `--host`;
+  on another address, anyone who reaches it reads the same metadata.
+- Replays can retain prompts, source snapshots and patches when you request it, and a lab set that keeps agent streams
+  (`--stream-copy`) stores each agent's whole session, prompts included. Nothing expires: `007 unregister` removes
   only the registry entry. Run manifests and results directories hold absolute paths; check them before publishing.
-- Read isolation in the lab (since 1.11.0) is only what each CLI enforces, plus detection of logged tool calls. Full
-  isolation needs an OS sandbox, which 007 does not provide.
+- Read isolation in the lab (since 1.11.0) is opt-in: without the `{read_isolation_…}` placeholders in its agent command a
+  cell records `unenforced`. The generated Claude and Codex rules were not checked against a running CLI. Detection needs a
+  retained stream and sees only logged tool calls. Full isolation needs an OS sandbox, which 007 does not provide.
 
 Details: [PRIVACY.md](PRIVACY.md). Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
@@ -302,22 +342,25 @@ against a margin declared before spending. Each verdict names its executor, repo
 |---|---|---|
 | Public go-json, Codex gpt-6.1-sol, requested medium vs high, 41 tasks, 8 attempts per arm (standalone) | About 30% lower median agent time and 31.5% lower median estimated cost, per attempt | **NOT-PROVEN** at 3 pp. Difference −0.9 pp, 95% interval −3.4 to +1.6. [Result](evidence/go-json-topup-20261106/RESULT-TOPUP.md) |
 | Public go-json, Claude Opus 5.5, requested medium vs xhigh, 41 tasks, 2 attempts per arm (standalone) | 67% lower median agent time and 75% lower median estimated cost, per attempt | **NOT-PROVEN** at 10 pp. Difference −5.5 pp, 95% interval −11.8 to +0.7. [Result](evidence/go-json-claude-20261107/RESULT-CLAUDE.md) |
-| Study F: public go-json, Claude Opus 5.5, requested medium vs xhigh, 41 tasks, 2 attempts per arm (standalone) | Estimated cost per accepted change 0.26 of xhigh's (0.22–0.31; worst case 0.27). Whole-change acceptance 56/82 vs 61/81 | **PAYS** at 20 pp. Difference +0.8 pp, 95% interval −3.0 to +4.7 (covers about 92%, see errata). Margin chosen after an exploratory reading. [Result](evidence/go-json-claude-f-20261112/RESULT-F.md) |
-| Skill invoked vs disabled, 31 tasks from three public repositories, Claude Opus 5.5 medium and Codex gpt-6-astra high (standalone) | Exploratory: Claude US$26.66 with the skill vs US$23.42 without, 19 accepted each | **No detectable effect.** After audit, Claude 19/29 vs 19/29, Codex 20/29 vs 18/29 accepted. Only a difference of about 19 points or more was detectable. [Evidence](docs/evidence.md#paired-study-of-the-skill) |
+| Study F: public go-json, Claude Opus 5.5, requested medium vs xhigh, 41 tasks, 2 attempts per arm (standalone) | Estimated cost per accepted change 0.26 of xhigh's (0.22–0.31; worst case 0.27). Whole-change acceptance 56/82 vs 61/81 | **PAYS** at 20 pp. Difference +0.85 pp, 95% interval −3.0 to +4.7 (covers about 92%, see errata). Margin chosen after an exploratory reading. [Result](evidence/go-json-claude-f-20261112/RESULT-F.md) |
+| Skill invoked vs disabled, 31 tasks from three public repositories, Claude Opus 5.5 medium and Codex gpt-6-astra high (standalone) | Exploratory: Claude US$26.66 with the skill vs US$23.42 without, 19 accepted each | **No detectable effect.** After audit, Claude 19/29 vs 19/29, Codex 20/29 vs 18/29 accepted. Only a difference of about 19 points or more was detectable. One run per arm and task, no A/A, oracle sensitivity unmeasured; the pre-registration was hashed locally and not committed before the run. [Evidence](docs/evidence.md#paired-study-of-the-skill) |
 | Durability and subscription quota | Unmeasured for these causal comparisons | Separate measurements are required |
 
 Savings in the first two rows are per attempt, not per accepted change. Differences are in the pass rate on reachable hidden
-tests, not in whole-change acceptance; Study F shows the two can diverge. NOT-PROVEN means the interval did not exclude a loss
-of the margin; it is not a measured loss. Arms differ by requested effort only: the supported native CLIs do not report the
-served effort. Costs are API-equivalent estimates. The reports preserve their original margins and decision rules, and their
-acceptance measures come from commit-derived tests.
+tests, not in whole-change acceptance; Study F shows the two can diverge. NOT-PROVEN means the study failed its declared
+non-inferiority rule; it is not a measured loss. Requested effort was the intended difference between the arms; the supported
+native CLIs do not report the served model or effort, and before 1.11.0 the workspace path also showed the arm (below). Costs
+are API-equivalent estimates. The reports preserve their original margins and decision rules, and their acceptance measures
+come from commit-derived tests. Filters that keep well-specified tasks pull a verdict toward "equal".
 
 **Errata and known limits** ([details](docs/evidence.md#errata-and-limits-published-for-1110)): every replay above ran
 before 1.11.0, when the agent's workspace path showed its arm label, so the arms were not blind and the effect is unmeasured.
 The first calibrated control of Study F's rule read NOT-CALIBRATED (a false `PROVEN` 3.50% of the time under a clustered
 loss), because the critical value and the floor were simulated for independent loss only. The rule corrected in 1.11.0
-passed a second control for Study F's shape alone, without the power to support a detection claim, and Study F's `PROVEN`
-holds under both rules. Study F's 95% interval covers about 92% in practice.
+met the error-rate gates of a second control and failed its power gate, for Study F's shape and `report --missing-data-guard`
+with a floor only; Study F's `PROVEN` holds under both rules. In simulations of Study F's regime with no planted loss, its 95%
+interval covered the truth about 92% of the time. No blind replication has been run. The controls' records are private; one
+maintainer ran them, and models of one family wrote and reviewed them. Their SHA-256 digests are published in the errata.
 
 The laboratory uses reference/oracle controls, sensitivity checks, paired task readings and a calibrated quality decision.
 These experiments leave broader quality, durability, general-productivity and incremental-value claims open: nothing here

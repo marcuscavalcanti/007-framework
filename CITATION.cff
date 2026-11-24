@@ -8,4 +8,4 @@ authors:
 repository-code: "https://github.com/marcuscavalcanti/007-framework"
 url: "https://github.com/marcuscavalcanti/007-framework"
 license: MIT
-abstract: "A measurement layer for routing decisions between coding-agent configurations: local outcome receipts and pre-registered replay verdicts with a declared error rate."
+abstract: "A measurement layer for routing decisions between coding-agent configurations: local outcome receipts and pre-registered replay verdicts with a declared error rate, measured so far for one study shape and one report path."

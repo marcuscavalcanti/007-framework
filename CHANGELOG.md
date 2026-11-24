@@ -26,7 +26,8 @@ schemas, and the dashboard snapshot.
   4.3% of cells, which also makes `PAYS` unreachable and leaves the study underpowered. Study F's go-json numbers read
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
   computation with it, and their output is unchanged.
-- `007 lab run --aa ARM` runs ARM twice on the same tasks, so a verdict carries its own noise floor. The copy is a third arm,
+- `007 lab run --aa ARM` runs ARM twice on the same tasks, at one more paid attempt per task and replicate, so the report can
+  show the copies' discordance and an A/A equality check beside the verdict. The copy is a third arm,
   `ARM-aa`, with ARM's model, effort and doctrine. Its cells are dispatched, charged and stopped like ARM's, and
   they count toward every budget and stop rule. `run-manifest.json` records the copy, and a resume that turns it on, off or onto
   another arm stops with `manifest-mismatch`. `chain` skips the copies. `report` reads the copy from the manifest and keeps the
@@ -70,9 +71,13 @@ schemas, and the dashboard snapshot.
 ### Changed
 
 - The README now presents 007 as a measurement layer for routing decisions: outcome receipts plus a pre-registered causal
-  verdict with a declared error rate. 007 measures; a host or a gateway routes. Standalone use is the building block; the
-  gateway mode reuses the same receipts and verdict code and is not built or validated yet. `007 route` and the host skill
-  move out of the headline and are labelled experimental. A "Why, for whom, status" section states that 007's incremental
+  verdict with a declared error rate. That error rate is measured for one path and one shape only: `report
+  --missing-data-guard` with `compare.critical_floor`, on Study F's shape (go-json, 41 tasks, two attempts per arm, a 20-point
+  margin); a plain `report`, a run without a floor and any other shape are outside it, and the CLI has no command that runs
+  the control. 007 measures; a host or a gateway routes. Standalone use is the only mode that exists; the gateway mode is a
+  design that would reuse the same receipts and verdict code, and is not built. `007 route` and the host skill move out of
+  the headline and are labelled experimental. The README, `docs/product.md`, `docs/architecture.md`, `CITATION.cff` and the
+  package description carry the same wording. A "Why, for whom, status" section states that 007's incremental
   value over a well-informed user of the same native CLI is not demonstrated.
 - README evidence table: adds Study F (`PAYS` at 20 points, whole-change acceptance 56/82 against 61/81, margin chosen after an
   exploratory reading) and the paired study of the skill (no detectable effect; after audit Claude 19/29 against 19/29, Codex
@@ -98,8 +103,8 @@ schemas, and the dashboard snapshot.
   - the receipt and stream copy are written under `--out/.blind/` and renamed to the cell's own names once the agent exits;
   - the grading directory is `007-acceptance-<token>-<random>`.
 
-  The A/A copy and stage-2 cells get tokens like any other cell. Results, `status`, `report` and `chain` keep the real arm
-  names, and each cell records its `blind_token`. The token is stable across resume, and a malformed salt stops a resume with
+  The A/A copy and stage-2 cells get tokens like any other cell. Results, `report` and `chain` keep the real arm names
+  (`status` pools every cell and names no arm), and each cell records its `blind_token`. The token is stable across resume, and a malformed salt stops a resume with
   `manifest-mismatch`. A run sealed before 1.11.0 resumes with its labelled paths, and its report and verdict are unchanged. The
   model and effort flags, and any doctrine that differs between arms, still reach the agent: they are the treatment. See
   [the lab guide](docs/lab.md#blind-arms-what-the-agent-sees).
@@ -163,6 +168,11 @@ schemas, and the dashboard snapshot.
     `unchanged_prefix`); usage is marked partial only when a session's own counters are incomplete.
   - The README put `feasibility` after `report` (it runs before spending), named a `replay-set.json` that does not ship (the
     example is `examples/replay-set.example.json`), and used the CLI before installing it.
+  - The README's manual receipt flow began `pagination-regression` but pointed at an example receipt whose `task_id` is
+    `pagination-fix-001`, which `007 record` would not match; it now says which ID to write and to run from the project.
+  - The README said hidden tests are ones "the agent never sees" and called receipts records of each task. Hidden tests are
+    kept outside the agent's workspace and stay readable on the host unless read isolation is configured; receipts are
+    unauthenticated declarations for tasks started with `007 begin`.
 - **Public errata for the published results, in [docs/evidence.md](docs/evidence.md#errata-and-limits-published-for-1110).**
   No frozen report is edited.
   - Blinding: every replay comparison run with 1.10.1 or earlier, Study F included, let the agent read its arm's label in its
@@ -174,15 +184,21 @@ schemas, and the dashboard snapshot.
   - A second pre-registered control of the corrected rule (floor 2.4768, `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`)
     read CALIBRATED-UNDERPOWERED. `PROVEN` at the margin, of 4,000 each: C1 independent 56 (1.40%), C1b clustered 91 (2.27%,
     1.86–2.78%), C1p partly clustered 78 (1.95%), H1 held-out independent 50 (1.25%), H1b held-out clustered 91 (2.27%), and
-    `KILL` at the margin C4 78 (1.95%). Power PW1 at a true −10 points 228/400 (57.0%) against 80%: no detection claim. It
-    licenses error control only at Study F's shape (go-json, 41 tasks, two attempts per arm, 20-point margin, whole-attempt
-    loss, floor 2.4768); under clustered loss the guarantee is "compatible with 2.5%", not "at most 2.5%". Not covered: the
-    default without a floor, partial-credit loss, clustered missing cells, any other study size. Study F still reads `PROVEN`
+    `KILL` at the margin C4 78 (1.95%). The power gate PW1 failed: at a true loss of 10 points, inside the margin, the rule
+    read `PROVEN` in 228/400 (57.0%); the first control's seeds gave 196/400 (49.0%) for the same rule and floor, so the power
+    is between 49% and 57% (53% pooled, Wilson 95% 49.5–56.4%) against the 80% required. Detecting a loss beyond the margin is
+    `KILL`'s gate: 94.42% at −40 points (passed). Equal counts across gates are coincidences of distinct seeds. It licenses
+    error control only in `report --missing-data-guard` with `compare.critical_floor`, at Study F's shape (go-json, 41 tasks,
+    two attempts per arm, 20-point margin, whole-attempt loss, floor 2.4768); under clustered loss the guarantee is
+    "compatible with 2.5%", not "at most 2.5%". The held-out world is fresh attempts on the same tasks and arms as the floor's
+    Codex pool: the favourable case, not a transfer. Not covered: a plain `report` and any run without a floor, partial-credit
+    loss, clustered missing cells, any other study size. The controls' records stay private (one maintainer; models of one
+    family wrote and reviewed them); their SHA-256 digests are published. Study F still reads `PROVEN`
     and `PAYS` under both rules (statistic 10.841).
   - Study F's published 95% interval covers the truth about 92% of the time in its own regime (1,838/2,000 and 1,832/2,000 in
     the two controls).
-  - Version binding: the second control ran on `scripts/` tree `4fae7b3f…`. 1.11.0's `effort_lab.py` is not byte-identical to
-    that tree's (the usage-limit and empty-arm fixes above changed `refused`, `_run`, `quota_check`, `_report` and `summary`).
+  - Version binding: the second control ran on `scripts/` tree `4fae7b3f…`. Three files differ from this release's tree
+    (`effort_lab.py`, `cli_telemetry.py`, `native_runner.py`); 1.11.0's `effort_lab.py` is not byte-identical to that tree's (the usage-limit and empty-arm fixes above changed `refused`, `_run`, `quota_check`, `_report` and `summary`).
     The frozen control was rerun with this release's `scripts/` tree (`2f83d292…`) on the same inputs and seeds: the rebuilt
     floor, the coverage grid, the A/A check, the prescreen of all 29,200 replicates, the decision rule on all 979 replicates
     that reach it, the re-read of Study F and the end-to-end gate equal the validated run's output exactly. The control's

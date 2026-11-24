@@ -2,16 +2,21 @@
 
 ## Positioning (since 1.11.0)
 
-007 is a measurement layer for routing decisions between coding-agent configurations (models, efforts, CLIs). It produces
-outcome receipts and a pre-registered causal verdict with a declared error rate. It measures; a host or a gateway routes, and
-007 never chooses a model or moves traffic.
+007 is a measurement layer for routing decisions between coding-agent configurations (models, efforts, CLIs); the one choice
+exercised so far is a lower reasoning effort of the same model. It produces outcome receipts and a pre-registered causal
+verdict with a declared error rate. That error rate has been measured for one path and one shape only: `007 lab report
+--missing-data-guard` with `compare.critical_floor`, on 41 go-json tasks, two attempts per arm and a 20-point margin; a
+plain `report`, a run without a floor and any other shape are outside it, and the CLI has no command that runs the control.
+007 measures; a host or a gateway routes. 007 never moves traffic: the experimental `007 route` recommends one of the CLIs
+the user configured, and the host decides whether to launch it.
 
-- **Standalone:** 007 on a developer's machine, as described below. This is the building block and the only mode exercised.
-- **Gateway:** a gateway that assigns configurations to tasks feeds the same receipts to the same 007 code, which labels and
-  judges them. Not built or validated: 007 has no multi-user service, authentication or traffic-level calibration yet. A
-  result in one mode does not transfer to the other, and every public claim names its mode.
+- **Standalone:** 007 on a developer's machine, as described below. This is the building block and the only mode that
+  exists.
+- **Gateway:** a design, not built. A gateway that assigns configurations to tasks would feed the same receipts to the same
+  007 code. 007 has no multi-user service, authentication or traffic-level calibration. A result in one mode does not
+  transfer to the other, and every public claim names its mode.
 
-A verdict counts only after a calibrated control of the rule that produced it. The skill and `007 route` remain in the
+A verdict counts only after a calibrated control of the rule and path that produced it. The skill and `007 route` remain in the
 product as experimental doctrine and tooling; neither has a demonstrated benefit over a well-informed user of the same native
 CLI ([evidence](evidence.md#errata-and-limits-published-for-1110)).
 

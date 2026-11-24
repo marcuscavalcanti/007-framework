@@ -35,7 +35,7 @@ Study F ran Claude Opus 5.5 through `007 lab` 1.8.1 wrapped in scripts. Since 1.
 | `report --missing-data-guard --reserve-usd X --replicates N` | adds `missing_data_guard`; N is the run's `--replicates`, which fixes the plan (the run does not record it; fewer than the cells reached is refused): readings P (valid cells) and B (pairs with both arms), the worse deciding; L2 imputes every planned cell without a usable result as the worst case for the candidate arm (it fails every reachable test, the reference passes every one), and PROVEN needs L0 and L2 both PROVEN in P and B (otherwise NOT-PROVEN, "not decisive by missing data"); the cost per accepted change at the candidate over the reference, with a task-bootstrap interval and a worst case (no cost at X for the candidate and 0 for the reference, an invalid reference cell counted accepted); answer PAYS, PROVEN-NOT-ECONOMIC, DOES-NOT-PAY or the verdict. `compare.critical_floor` in the set sets a floor for the guard's critical value only (the main verdict ignores it, so the two can differ). Since 1.11.0 the simulated critical value covers a clustered loss too ([PROVEN under a clustered loss](#proven-under-a-clustered-loss)); a floor built with `proven_critical(..., attempts=)` before 1.11.0 covers independent loss only and should be rebuilt; `guard_decision` gives the guard's verdict without the cost ratio. Without `--frozen-reach`, a task with no valid cell has no reach, so L2 imputes nothing for it. The serial re-grade and A/A are not part of it |
 | `report --frozen-reach FILE` | `{task: [tests]}` fixed before the attempts replaces the reach the run's own cells give. The report records the digest of its canonical JSON (`frozen_reach_sha256`, sorted keys: not the file's own hash); it is not sealed |
 
-Validated on published results: on the 2026-11-07 Claude go-json run the guard reproduces L0 4.666643 (critical values 2.2315 and 2.2367), L2 4.0385 and R 0.300 (0.267 to 0.344); its own simulated L2 critical value, 2.2014, equals the one study F's hashed analysis script gives. On study F it reproduces every statistic, critical value and cost ratio of `f-result.json`.
+Validated on published results before 1.11.0, with the critical value simulated for independent loss only: on the 2026-11-07 Claude go-json run the guard reproduces L0 4.666643 (critical values 2.2315 and 2.2367), L2 4.0385 and R 0.300 (0.267 to 0.344); its own simulated L2 critical value, 2.2014, equals the one study F's hashed analysis script gives. On study F it reproduced every statistic, critical value and cost ratio of `f-result.json`. Since 1.11.0 the default critical value also covers a clustered loss, so a re-read can give larger critical values and move a verdict from `PROVEN` to `NOT-PROVEN`, never the reverse (Study F still reads `PROVEN`: [re-read](evidence.md#second-calibrated-control-of-the-corrected-rule-calibrated-underpowered)); `guard_decision(..., loss=("independent",))` reproduces the earlier ones.
 
 A rate-limit cooldown applies only while planned cells remain. A driver that re-runs `run` in a loop should still cap its own retries: a refused cell is never lost, but each pass costs a probe or a call. The printed verdict carries `refused_unequal`. A controller error's message is kept only when the set retains diagnostic text (the default for replay cells). `sensitivity.json` is not sealed: a later `sensitivity` that flags a task blocks a resume. The toolchain's `--version` call runs outside the acceptance sandbox, and a set directory without `tasks/` (a chain's) records only the interpreter.
 
@@ -88,8 +88,8 @@ salt, `blind_salt` (32 hex digits), in `run-manifest.json`. A cell's token is si
 id (`replay_eval.blind_token`). The agent works in `007-<token>-<random>` under the temporary directory. Its runner receipt and
 stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `--out/.blind/`, and the grader runs in
 `007-acceptance-<token>-<random>`. When the agent exits, the controller renames both files to the cell's own names
-(`<task>-r01-<arm>.runner.json`). Results, `dispatch.jsonl`, `status`, `report` and `chain` therefore keep the real arm names, and
-each cell records its `blind_token`. The receipt is kept byte for byte, so its `stream_copy` field names
+(`<task>-r01-<arm>.runner.json`). Results, `dispatch.jsonl`, `report` and `chain` therefore keep the real arm names (`status`
+pools every cell and names no arm), and each cell records its `blind_token`. The receipt is kept byte for byte, so its `stream_copy` field names
 `<token>.stream.jsonl`. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`
 under its token. `report` lists every file there in `orphan_blind_files`, each named by its cell when the sealed salt and the
 ledger or the plan identify it, counts that cell as attempted without a result, and adds it to `orphan_receipts`; `report.md`
@@ -272,8 +272,10 @@ counted per 4,000 at the margin and per 400 at a true loss of 10 points:
 | new critical value, Study F's floor | 75 = 1.88% (1.50–2.34) | 110 = 2.75% (2.29–3.30) | 223 = 55.8% (50.9–60.5) | 170 = 42.5% (37.8–47.4) |
 | new critical value, rebuilt floor | 57 = 1.43% (1.10–1.84) | 93 = 2.33% (1.90–2.84) | 196 = 49.0% (44.1–53.9) | 164 = 41.0% (36.3–45.9) |
 
-With the rebuilt floor, both loss models stay under 2.5%. Power at −10 points falls from 56.5% to 49.0%: 30 of the 400 replicates
-lose `PROVEN` and none gain it. With Study F's floor kept, power hardly moves, but the clustered rate is 2.75%. That is within
+With the rebuilt floor, both point estimates fall below 2.5%; the clustered upper bound is 2.84%. Power at −10 points falls from
+56.5% to 49.0%: 30 of the 400 replicates lose `PROVEN` and none gain it. The second control's seeds gave 57.0% for the same
+rule and floor; the two runs together give 53.0% (Wilson 95% 49.5–56.4%)
+([seeds](evidence.md#second-calibrated-control-of-the-corrected-rule-calibrated-underpowered)). With Study F's floor kept, power hardly moves, but the clustered rate is 2.75%. That is within
 Monte Carlo error of 2.5%, yet above it. Neither version reaches 80% power at 41 tasks: the answer to low power is more tasks,
 not a lower floor.
 
@@ -306,14 +308,17 @@ floor = max(v for v in values if v is not None)    # compare.critical_floor
 
 Study F's analysis is frozen and unchanged. A second pre-registered control (2026-11-24) tested the corrected rule with the
 rebuilt floor on Study F's shape and on a held-out world from the Codex top-up, and read CALIBRATED-UNDERPOWERED: `PROVEN` at
-the margin 1.25–2.27% across six gates, clustered loss 2.27% (1.86–2.78%, compatible with 2.5%), and power at a true loss of 10
-points 57.0% against 80%. The rule may be reused for error control at Study F's shape only, with no detection claim; Study F
-still reads `PROVEN` under both rules. Counts and scope are in
-[the evidence errata](evidence.md#second-calibrated-control-of-the-corrected-rule-calibrated-underpowered). Not covered:
-- a partly clustered loss sits between the two models, and is covered only if the error moves monotonically between them,
-  which was not tested;
+the margin between 1.25% and 2.27% across five `PROVEN` gates (a sixth counted `KILL` at the margin, 1.95%), clustered loss
+2.27% (1.86–2.78%, compatible with 2.5%), and power to read `PROVEN` at a true loss of 10 points, inside the margin, between
+49% and 57% in two runs of 400 replicates (53% pooled, Wilson 95% 49.5–56.4%) against the 80% required. The control read the
+rule as `report --missing-data-guard` does with `compare.critical_floor` set. The rule may be reused for error control in that
+path at Study F's shape only, without the required power; Study F still reads `PROVEN` under both rules. Counts and scope are
+in [the evidence errata](evidence.md#second-calibrated-control-of-the-corrected-rule-calibrated-underpowered). Not covered:
+- a plain `report`, which ignores the floor, and any run without a floor;
+- a partly clustered loss was tested at ρ = 0.5 only;
 - a loss spread over a task's tests, rather than over whole attempts, is outside both models;
-- these numbers hold for one set of 41 tasks.
+- these numbers hold for one set of 41 tasks. The held-out world H used fresh attempts on the same tasks and arms as the
+  Codex pool the floor came from: the favourable case, not a transfer.
 
 ## What one repository can answer
 

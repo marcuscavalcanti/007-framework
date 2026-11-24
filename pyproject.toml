@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "007-framework"
 dynamic = ["version"]
-description = "Evidence-bounded agent orchestration and local replay instrumentation"
+description = "Measurement layer for routing decisions between coding-agent configurations: outcome receipts and pre-registered replay verdicts"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

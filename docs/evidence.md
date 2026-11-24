@@ -4,7 +4,21 @@
 
 Appended on 2026-11-24. No published result file is edited: each frozen report keeps its text and verdict, and these notes
 say what changed and why. The controls below ran at zero model cost. Their records stay in the maintainer's files because
-they hold host paths; the figures here are copied from them and were checked against their result files.
+they hold host paths; the figures here are copied from them and were checked against their result files. They are the
+records of one maintainer, and models of one family wrote and reviewed them; the digests below commit to their content
+without making it checkable here.
+
+| Record | SHA-256 |
+|---|---|
+| First control, `PREREG-CC.md` | `67cf3840cd197667e4ef8cf4992cdeac174850ed35fdc932837b873ab98daf5d` |
+| First control, pre-registration ledger | `477504afc99d0399d6742d62b11155a12a8425291c78de1f848c4e6aba5c2cff` |
+| First control, `RESULT-CC.md` | `06f356116e22dfa23abc46707770dfde9a7d62ba9f81f1e5e91e074b62c5afef` |
+| First control, `cc-result.json` | `91124ab4b10adb073c4fdec18c5029f9965b97debc2cab24f56eaf44a0946167` |
+| Second control, `PREREG-CC2.md` | `fdd81ed4cd05dbc1ba7e32593a79ee248f668cb6518d306af600f11feb36f445` |
+| Second control, pre-registration ledger | `55e5e9ae94c71a144593191e261aca8bf5ed0d38c84f414780e376d5477a3ebf` |
+| Second control, `RESULT-CC2.md` | `5ed2146313f68b313d6d34d3f8f4898aad256f6d4201d72e1ef3272a0da368be` |
+| Second control, `cc2-result.json` | `bfa5b938eee70ae1fb60bd5415429bafb482a63ab777134fa2b2e95ce3383105` |
+| Version-binding rerun, `equiv.json` | `479b24d762fa2f6e0ce6bcb06e54fedc0efe8fc19e2ce192a321db411fb9f0ad` |
 
 ### The arms were not blind through 1.10.1
 
@@ -60,18 +74,42 @@ the pools the floor came from. It added a partly clustered loss (ρ = 0.5). Gate
 | H1b | H, clustered loss | 91 = 2.27% | 1.86–2.78% | compatible with 2.5% |
 | C4 | `KILL` at the margin, F | 78 = 1.95% | 1.57–2.43% | at or below the nominal 2.5% |
 
+The control read the rule the way `report --missing-data-guard` reads it with `compare.critical_floor` set
+(`guard_decision` with the floor); a plain `report` ignores the floor and was not tested. The CLI has no command that runs
+the control.
+
 Interval coverage over the band from −30 to −10 points passed (mean 94.84%, every point at least 94.00%), as did the code
 checks (no `PROVEN` at −30 points in 4,000; A/A equality rejection 1.37% and 1.81%) and PW2 (`KILL` at −40 points in 3,777 of
-4,000, 94.42%). **PW1 failed:** a true loss of 10 points read `PROVEN` in 228 of 400 replicates, 57.0% (52.1–61.8%), against
-the 80% required. A sensitivity reading that takes Study F's archived grade for the one known flaky cell gave the same label.
+4,000, 94.42%). **PW1, the power gate, failed:** at a true loss of 10 points, inside the 20-point margin, `PROVEN` is the right
+answer, and the rule gave it in 228 of 400 replicates, 57.0% (52.1–61.8%), against the 80% required; the other replicates
+read `NOT-PROVEN`, which is inconclusive, not a detected loss. Detecting a loss beyond the margin is `KILL`'s job: 94.42% at
+−40 points (PW2, passed) and 1,737 of 4,000 = 43.4% at −30 points (reported, not a gate). A sensitivity reading that takes
+Study F's archived grade for the one known flaky cell gave the same label.
+
+The same corrected rule and floor read PW1's −10-point scenario twice, with different seeds, and the two runs differ by about
+eight points. The difference follows the replicates' mean, which fell below the true −0.1000 in one run and above it in the
+other, and it appears under the earlier rule too:
+
+| | First control's seeds | Second control's seeds |
+|---|---|---|
+| Mean of the 400 replicates (truth −0.1000) | −0.1033 (SE 0.0020) | −0.0980 (SE 0.0019) |
+| Rule before 1.11.0, `PROVEN` | 226 = 56.5% | at most 258 = 64.5% (statistic above Study F's floor) |
+| Corrected rule, floor 2.4768, `PROVEN` | 196 = 49.0% (44.1–53.9%) | 228 = 57.0% (52.1–61.8%) |
+
+So the power is between 49% and 57% in two runs of 400 replicates, 424 of 800 = 53.0% pooled (Wilson 95% 49.5–56.4%), against
+the 80% required. PW1 fails on any reading.
+
+Equal counts across gates (C1b and H1b both 91, C1p and C4 both 78, C4 78 in both controls) are coincidences: the seeds and
+the statistic vectors of those gates are distinct.
 
 What this licenses, and what it does not:
 
 - **Error control, at Study F's shape only:** go-json, 41 tasks, two attempts per arm, a 20-point margin, loss of whole
-  attempts, floor 2.4768. Under clustered loss the citable guarantee is "compatible with 2.5%" (upper bound 2.78%), not "at
-  most 2.5%".
-- **No detection claim.** Power at a true −10 points is 57%, not 80%. More tasks, not a lower floor, would raise it.
-- **Not covered:** the default without a floor (the floor decided every verdict; L2 demoted none), a loss of partial credit
+  attempts, `report --missing-data-guard` with floor 2.4768. Under clustered loss the citable guarantee is "compatible with
+  2.5%" (upper bound 2.78%), not "at most 2.5%".
+- **Without the required power.** The power to read `PROVEN` at a true loss of 10 points is between 49% and 57%, not 80%.
+  More tasks, not a lower floor, would raise it.
+- **Not covered:** a plain `report` and any run without a floor (the floor decided every verdict; L2 demoted none), a loss of partial credit
   spread over a task's tests, missing cells that cluster, and any other number of tasks, repository, attempts per arm or
   margin. World H is fresh attempts of the same tasks and arms the floor's Codex pool came from: the favourable case for the
   floor, not a transfer. Monotonicity between the loss models is shown at one point (ρ = 0.5) only.
@@ -88,8 +126,9 @@ F's interval, −3.0 to +4.7 points, as a roughly 92% interval.
 
 ### Version binding of the validated error control
 
-The second control validated the decision code of the `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`. 1.11.0
-then changed `effort_lab.py` again (how a Claude usage limit is refused and requeued, and how `report` reads an arm with no
+The second control validated the decision code of the `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`. Three
+files of `scripts/` differ between that tree and this release's: `effort_lab.py`, `cli_telemetry.py` and `native_runner.py`.
+1.11.0 changed `effort_lab.py` again (how a Claude usage limit is refused and requeued, and how `report` reads an arm with no
 valid cell), so the released file is not byte-identical to the validated one and the binding by identity does not hold. The
 functions the control exercised (`proven_critical`, `whole_loss_draws`, `guard_decision`, `missing_data_guard`, `_reading`,
 `_paired`, `studentized`, `false_proven`, `aa_check`) are unchanged, and no module constant changed.
@@ -120,7 +159,7 @@ exercise those paths. The comparison holds for that `scripts/` tree only: a rele
 007's incremental value over a well-informed user of the same native CLI is not demonstrated. The paired study below found no
 detectable effect of invoking the skill, and no study yet compares the product as a whole with that baseline.
 
-## Release claim
+## Release claim of 1.5.1 (historical)
 
 The 1.5.1 working candidate has a [local deterministic admission-fence
 contrast](../evidence/v1.5.1/release-evidence.md): two sanitized structural cases,

@@ -1,7 +1,9 @@
 # Architecture
 
-007 Framework is a stateless instruction package. The coding-agent host executes
-models and tools; the repository remains the source of truth.
+007 Framework is a measurement layer for routing decisions between coding-agent
+configurations: an instruction package (the skill) and a local CLI that records
+receipts and runs replays. The coding-agent host executes models and tools; the
+repository remains the source of truth.
 
 ```text
 task + repo rules
