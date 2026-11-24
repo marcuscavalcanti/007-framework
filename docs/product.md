@@ -1,5 +1,20 @@
 # Product
 
+## Positioning (since 1.11.0)
+
+007 is a measurement layer for routing decisions between coding-agent configurations (models, efforts, CLIs). It produces
+outcome receipts and a pre-registered causal verdict with a declared error rate. It measures; a host or a gateway routes, and
+007 never chooses a model or moves traffic.
+
+- **Standalone:** 007 on a developer's machine, as described below. This is the building block and the only mode exercised.
+- **Gateway:** a gateway that assigns configurations to tasks feeds the same receipts to the same 007 code, which labels and
+  judges them. Not built or validated: 007 has no multi-user service, authentication or traffic-level calibration yet. A
+  result in one mode does not transfer to the other, and every public claim names its mode.
+
+A verdict counts only after a calibrated control of the rule that produced it. The skill and `007 route` remain in the
+product as experimental doctrine and tooling; neither has a demonstrated benefit over a well-informed user of the same native
+CLI ([evidence](evidence.md#errata-and-limits-published-for-1110)).
+
 ## Problem
 
 Coding agents optimize for producing an answer. Engineering teams need a

@@ -8,4 +8,4 @@ authors:
 repository-code: "https://github.com/marcuscavalcanti/007-framework"
 url: "https://github.com/marcuscavalcanti/007-framework"
 license: MIT
-abstract: "Provider-neutral tooling for evidence-bounded agentic coding, local receipts, and pre-registered replay experiments."
+abstract: "A measurement layer for routing decisions between coding-agent configurations: local outcome receipts and pre-registered replay verdicts with a declared error rate."

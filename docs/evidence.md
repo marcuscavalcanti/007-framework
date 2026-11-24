@@ -1,5 +1,107 @@
 # Evidence
 
+## Errata and limits published for 1.11.0
+
+Appended on 2026-11-24. No published result file is edited: each frozen report keeps its text and verdict, and these notes
+say what changed and why. The controls below ran at zero model cost. Their records stay in the maintainer's files because
+they hold host paths; the figures here are copied from them and were checked against their result files.
+
+### The arms were not blind through 1.10.1
+
+Until 1.11.0, the agent's working directory was `007-<task>-<arm>-r01-<random>`, and the runner receipt path in its arguments
+named the arm too. Study F's retained streams confirm it: their working directory reads, for example,
+`007-GJ-8469AAC2-xhigh-r01-…`. So in every replay comparison run with 1.10.1 or earlier, the Codex top-up, the Claude 10-point
+replay and Study F included, an agent could read `medium`, `high` or `xhigh` in its own path. That is a difference between
+the arms beyond the requested effort the studies meant to compare. Its effect on the agents' behaviour was not measured;
+there is no basis to say it changed a result or that it did not. Since 1.11.0 the agent sees a salted token instead of the
+label ([blind arms](lab.md#blind-arms-what-the-agent-sees)). A replication of Study F, and any new study, should run blind.
+
+### First calibrated control of Study F's rule: NOT-CALIBRATED
+
+A pre-registered positive control (2026-11-23) took Study F's own grades (41 go-json tasks, two attempts per arm, Claude Opus
+5.5 `medium` against `xhigh`) and planted a true loss by replacing `medium` attempts with the grade of an empty patch: one
+attempt at a time (independent loss) or both attempts of a task together (clustered loss). Study F's rule, floor 2.2315, read
+each of 4,000 bootstrap replicates per scenario (400 for power). Wilson 95% intervals:
+
+| Item | Criterion | Measured | Passes |
+|---|---|---|---|
+| C1, `PROVEN` at the margin, independent loss | ≤ 132/4,000 | 81 = 2.03% (1.63–2.51%) | yes |
+| C1b, `PROVEN` at the margin, clustered loss | ≤ 132/4,000 | 140 = 3.50% (2.97–4.12%) | **no** |
+| C4, `KILL` at the margin | ≤ 132/4,000 | 78 = 1.95% | yes |
+| PW1, `PROVEN` at a true loss of 10 points | ≥ 320/400 | 226 = 56.5% (51.6–61.3%) | **no** |
+| PW2, `KILL` at a true loss of 40 points | ≥ 3,200/4,000 | 3,798 = 94.95% | yes |
+
+The label was NOT-CALIBRATED: under a clustered loss the rule promised 2.5% and gave 3.50%.
+
+**Corrected mechanism.** The control's first reading blamed the missing-data guard (L2). That was wrong. The control's "loss"
+replaces a valid cell with another valid grade, so nothing is missing apart from Study F's one invalid cell, and L2 changed no
+verdict in either loss model. The cause was the critical value (`proven_critical`) and Study F's floor, which was built with
+it: both simulated a loss of the margin as attempts that fail independently. A clustered loss has half as many independent
+loss units (41 tasks instead of 82 attempts). The standard deviation of the mean difference rose from 0.047 to 0.066, the
+per-task differences became more skewed, and the 97.5% point of the statistic rose from 2.18 to 2.44. The floor, 2.23, sat
+between the two and decided 128 of the 140 false `PROVEN`. 1.11.0 simulates both loss models and keeps the larger critical
+value, and the floor rebuilt the same way is 2.4768 ([PROVEN under a clustered loss](lab.md#proven-under-a-clustered-loss)).
+
+### Second calibrated control, of the corrected rule: CALIBRATED-UNDERPOWERED
+
+A second pre-registered control (run 2026-11-24, one attempt, exit 0) tested the corrected rule with the rebuilt floor
+2.4768209601363016, on the 1.11.0 candidate's `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`. It used new seeds
+and two data worlds: F, Study F's grades as in the first control; and H, held out, a world built from the Codex go-json
+top-up (`medium` against `high`, the same 41 tasks, two attempts drawn per arm), whose sessions and receipts share none with
+the pools the floor came from. It added a partly clustered loss (ρ = 0.5). Gates at the margin, 4,000 replicates each, Wilson
+95%, each read by its pre-registered band:
+
+| Gate | Scenario | Count | Wilson 95% | Reading |
+|---|---|---|---|---|
+| C1 | F, independent loss | 56 = 1.40% | 1.08–1.81% | at or below the nominal 2.5% |
+| C1b | F, clustered loss | 91 = 2.27% | 1.86–2.78% | compatible with 2.5% |
+| C1p | F, partly clustered loss (ρ = 0.5) | 78 = 1.95% | 1.57–2.43% | at or below the nominal 2.5% |
+| H1 | H, independent loss | 50 = 1.25% | 0.95–1.64% | at or below the nominal 2.5% |
+| H1b | H, clustered loss | 91 = 2.27% | 1.86–2.78% | compatible with 2.5% |
+| C4 | `KILL` at the margin, F | 78 = 1.95% | 1.57–2.43% | at or below the nominal 2.5% |
+
+Interval coverage over the band from −30 to −10 points passed (mean 94.84%, every point at least 94.00%), as did the code
+checks (no `PROVEN` at −30 points in 4,000; A/A equality rejection 1.37% and 1.81%) and PW2 (`KILL` at −40 points in 3,777 of
+4,000, 94.42%). **PW1 failed:** a true loss of 10 points read `PROVEN` in 228 of 400 replicates, 57.0% (52.1–61.8%), against
+the 80% required. A sensitivity reading that takes Study F's archived grade for the one known flaky cell gave the same label.
+
+What this licenses, and what it does not:
+
+- **Error control, at Study F's shape only:** go-json, 41 tasks, two attempts per arm, a 20-point margin, loss of whole
+  attempts, floor 2.4768. Under clustered loss the citable guarantee is "compatible with 2.5%" (upper bound 2.78%), not "at
+  most 2.5%".
+- **No detection claim.** Power at a true −10 points is 57%, not 80%. More tasks, not a lower floor, would raise it.
+- **Not covered:** the default without a floor (the floor decided every verdict; L2 demoted none), a loss of partial credit
+  spread over a task's tests, missing cells that cluster, and any other number of tasks, repository, attempts per arm or
+  margin. World H is fresh attempts of the same tasks and arms the floor's Codex pool came from: the favourable case for the
+  floor, not a transfer. Monotonicity between the loss models is shown at one point (ρ = 0.5) only.
+
+**Study F still reads `PROVEN` and `PAYS`.** Re-read deterministically from its 164 archived results, Study F's statistic is
+10.841 in both readings. The corrected rule gives `PROVEN` against critical values of 2.512 and 2.482 (L2 also `PROVEN`, at
+2.524); Study F's own rule, as published, gives `PROVEN` against 2.279 and 2.287.
+
+### Study F's 95% interval covers about 92%
+
+In Study F's regime (no planted loss), the published 95% interval of the reach difference covered the truth in 1,838 of
+2,000 replicates in the first control (91.9%, 90.6–93.0%) and 1,832 of 2,000 in the second (91.6%, 90.3–92.7%). Read Study
+F's interval, −3.0 to +4.7 points, as a roughly 92% interval.
+
+### Version binding of the validated error control
+
+The second control validated the decision code of the `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`. 1.11.0
+then changed `effort_lab.py` again (how a Claude usage limit is refused and requeued, and how `report` reads an arm with no
+valid cell), so the released file is not byte-identical to the validated one and the binding by identity does not hold. The
+functions the control exercised (`proven_critical`, `whole_loss_draws`, `guard_decision`, `missing_data_guard`, `_reading`,
+`_paired`, `studentized`, `false_proven`, `aa_check`) are unchanged, and no module constant changed. What changed is upstream
+of the decision (which refused cells are set aside and requeued in a live run) and a report override that applies only when
+an arm has no valid cell, a case the control never produced. The validated claim is therefore bound to that tree's decision
+functions, not to the whole 1.11.0 `effort_lab.py`.
+
+### Incremental value
+
+007's incremental value over a well-informed user of the same native CLI is not demonstrated. The paired study below found no
+detectable effect of invoking the skill, and no study yet compares the product as a whole with that baseline.
+
 ## Release claim
 
 The 1.5.1 working candidate has a [local deterministic admission-fence
@@ -224,6 +326,7 @@ framework improves longitudinal productivity.
 - accuracy of touch-rate without agent commit attribution;
 - causal benefit of the complete framework bundle.
 - task-class or cross-project superiority of the experimental route recommendation.
+- incremental value over a well-informed user of the same native CLI.
 
 ## Product and release history
 

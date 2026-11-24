@@ -304,7 +304,12 @@ floor = max(v for v in values if v is not None)    # compare.critical_floor
   attempts on its own tasks, with its own `attempts` and margin, and needs its own calibrated control before its `PROVEN` is
   read. The product does not hard-code a floor.
 
-Study F's analysis is frozen and unchanged, and its rule needs a new calibrated control before it is reused. Not covered:
+Study F's analysis is frozen and unchanged. A second pre-registered control (2026-11-24) tested the corrected rule with the
+rebuilt floor on Study F's shape and on a held-out world from the Codex top-up, and read CALIBRATED-UNDERPOWERED: `PROVEN` at
+the margin 1.25–2.27% across six gates, clustered loss 2.27% (1.86–2.78%, compatible with 2.5%), and power at a true loss of 10
+points 57.0% against 80%. The rule may be reused for error control at Study F's shape only, with no detection claim; Study F
+still reads `PROVEN` under both rules. Counts and scope are in
+[the evidence errata](evidence.md#second-calibrated-control-of-the-corrected-rule-calibrated-underpowered). Not covered:
 - a partly clustered loss sits between the two models, and is covered only if the error moves monotonically between them,
   which was not tested;
 - a loss spread over a task's tests, rather than over whole attempts, is outside both models;
@@ -430,5 +435,7 @@ The Codex top-up and Claude public replay reports retain their pre-registered ma
 
 - [Codex go-json top-up, margin 3 pp](../evidence/go-json-topup-20261106/RESULT-TOPUP.md).
 - [Claude go-json replay, margin 10 pp](../evidence/go-json-claude-20261107/RESULT-CLAUDE.md).
+- [Study F, Claude go-json, margin 20 pp](../evidence/go-json-claude-f-20261112/RESULT-F.md). Its arms were not blind and its
+  interval covers about 92%: see [the errata](evidence.md#errata-and-limits-published-for-1110).
 
 The detailed planning assumptions and earlier README evidence table are preserved in the [immutable public README checkpoint](https://github.com/marcuscavalcanti/007-framework/blob/1e9f3c1a85e10e4508ccd94c9d44a74cbeec6a77/README.md#current-thesis-minimum-sufficient-effort-november-2026). Those estimates keep their original experiment scope. Choosing the margin and evaluating feasibility above define the decision for a new run.

@@ -67,6 +67,24 @@ schemas, and the dashboard snapshot.
   and full isolation needs an OS sandbox, which 007 does not provide. See
   [the lab guide](docs/lab.md#read-isolation-and-contamination).
 
+### Changed
+
+- The README now presents 007 as a measurement layer for routing decisions: outcome receipts plus a pre-registered causal
+  verdict with a declared error rate. 007 measures; a host or a gateway routes. Standalone use is the building block; the
+  gateway mode reuses the same receipts and verdict code and is not built or validated yet. `007 route` and the host skill
+  move out of the headline and are labelled experimental. A "Why, for whom, status" section states that 007's incremental
+  value over a well-informed user of the same native CLI is not demonstrated.
+- README evidence table: adds Study F (`PAYS` at 20 points, whole-change acceptance 56/82 against 61/81, margin chosen after an
+  exploratory reading) and the paired study of the skill (no detectable effect; after audit Claude 19/29 against 19/29, Codex
+  20/29 against 18/29), names each row's model, mode and requested effort, and states that savings are per attempt and
+  differences are on reachable hidden tests, not whole-change acceptance.
+- README structure: install comes before first use, with pipx listed as a prerequisite and the Claude Code skill path
+  (`~/.claude/skills/007-framework`) next to Codex's; the lab flow reads `mine → sensitivity → viability → feasibility → run →
+  status → report`, with `sufficiency` and `chain` as optional steps and what to expect (NOT-PROVEN at 3 points, read
+  isolation, `--jobs`); the routing selector's gates and its fallback-or-block behaviour are spelled out; new sections on
+  privacy and security, versioning and citation. Paths that belong to the 007 checkout and those that belong to your project
+  are now told apart.
+
 ### Fixed
 
 - **Runs before 1.11.0, Study F included, exposed the arm label to the agent.** The agent's working directory was
@@ -109,7 +127,7 @@ schemas, and the dashboard snapshot.
   way Study F built it (2.4768 instead of 2.2315), `PROVEN` at the margin is 2.33% clustered and 1.43% independent, and power
   at a true loss of 10 points falls from 56.5% to 49.0%. With Study F's floor kept, the rates are 2.75% (2.29–3.30%) and 1.88%
   and power is 55.8%. A `compare.critical_floor` computed before 1.11.0 covers independent loss only: rebuild it. Study F's
-  frozen analysis is unchanged; its rule needs a new calibrated control before reuse. See
+  frozen analysis is unchanged; a second calibrated control of the corrected rule is reported in the errata below. See
   [the lab guide](docs/lab.md#proven-under-a-clustered-loss).
 - **A Claude usage limit that cut a call after the agent had worked read as an invalid cell.** 1.9.0 covered only refusals with
   no usage, so with `--jobs 4` the cells in flight when the account's limit started could spend a `--max-invalid` of 3 and end
@@ -131,6 +149,40 @@ schemas, and the dashboard snapshot.
   durability verdicts read `NO-INFORMATION`, the thesis `UNPROVEN`, `rework_ok` is null instead of a vacuous true, the empty arm's
   median reasoning tokens are null, and `report.md` opens with a "No comparison" line naming the arm. With no valid cell in
   either arm, `report` still refuses with "no valid cells to report".
+
+- **Documentation that contradicted the code or the schema.**
+  - The README said a missing cost "stays an explicit accounting gap". `007 record` rejects a receipt without a numeric
+    `cost_usd`, source and status; only the explicit `cost_unavailable_opt_in` accepts `cost_usd: null` with
+    `cost_status: "unavailable"`, a `custom:<name>` source and a reason.
+  - The README gave task coverage the wrong denominator. It is the share of observed starts (`007 begin`) that have a matching
+    terminal receipt; an open start stays in the denominator.
+  - `references/metrics.md` said Codex logs over a 4 MiB window kept only tail counters. Since 1.7.0 the collector reads Codex
+    and Claude Code logs whole from a verified byte cursor (`local_activity.ActivityCollector._parse`, `read_log`,
+    `unchanged_prefix`); usage is marked partial only when a session's own counters are incomplete.
+  - The README put `feasibility` after `report` (it runs before spending), named a `replay-set.json` that does not ship (the
+    example is `examples/replay-set.example.json`), and used the CLI before installing it.
+- **Public errata for the published results, in [docs/evidence.md](docs/evidence.md#errata-and-limits-published-for-1110).**
+  No frozen report is edited.
+  - Blinding: every replay comparison run with 1.10.1 or earlier, Study F included, let the agent read its arm's label in its
+    workspace path. The arms were not blind; the effect is unmeasured.
+  - The first calibrated control of Study F's rule read NOT-CALIBRATED: `PROVEN` at the margin 81/4,000 (2.03%) under
+    independent loss and 140/4,000 (3.50%, Wilson 2.97–4.12%) under clustered loss; power at a true −10 points 226/400
+    (56.5%). Its first reading blamed the missing-data guard; the cause was the critical value and Study F's floor, both
+    calibrated for independent loss only, and L2 changed no verdict.
+  - A second pre-registered control of the corrected rule (floor 2.4768, `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`)
+    read CALIBRATED-UNDERPOWERED. `PROVEN` at the margin, of 4,000 each: C1 independent 56 (1.40%), C1b clustered 91 (2.27%,
+    1.86–2.78%), C1p partly clustered 78 (1.95%), H1 held-out independent 50 (1.25%), H1b held-out clustered 91 (2.27%), and
+    `KILL` at the margin C4 78 (1.95%). Power PW1 at a true −10 points 228/400 (57.0%) against 80%: no detection claim. It
+    licenses error control only at Study F's shape (go-json, 41 tasks, two attempts per arm, 20-point margin, whole-attempt
+    loss, floor 2.4768); under clustered loss the guarantee is "compatible with 2.5%", not "at most 2.5%". Not covered: the
+    default without a floor, partial-credit loss, clustered missing cells, any other study size. Study F still reads `PROVEN`
+    and `PAYS` under both rules (statistic 10.841).
+  - Study F's published 95% interval covers the truth about 92% of the time in its own regime (1,838/2,000 and 1,832/2,000 in
+    the two controls).
+  - Version binding: the validated error control is bound to the decision functions of `scripts/` tree `4fae7b3f…`. 1.11.0's
+    `effort_lab.py` is not byte-identical to that tree's (the usage-limit and empty-arm fixes above changed `refused`,
+    `_run`, `quota_check`, `_report` and `summary`); `proven_critical`, `guard_decision`, `missing_data_guard`, `_reading`,
+    `aa_check` and the functions they call are unchanged.
 
 ## [1.10.1] - 2026-11-22
 

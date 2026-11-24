@@ -36,10 +36,16 @@ Rules:
    diagnostic estimate. Only normalized terminal receipts close the operational
    cost gate; unresolved models remain `N/A`.
 
-Codex logs larger than the 4 MiB read window retain observed tail counters as
-partial usage, never a complete period or a pricing input. The dashboard marks
-affected per-project and aggregate token counts as partial. Small complete
-sessions keep the previous behavior; no cursor or full-session reread is added.
+Codex and Claude Code logs are read whole, at any size, with memory bounded by
+row metadata (`local_activity.ActivityCollector._parse` with `read_log`). The
+collector keeps a byte cursor per log: a grown plain log is read on from the
+cursor only after `unchanged_prefix` verifies the consumed bytes, a torn last row
+waits for the next read, and a changed `*.jsonl.zst` archive is read again from
+its start. Kimi and Gemini logs are re-read on every pass. A session whose token
+counters are missing, incomplete or incoherent keeps `usage_complete: false`: it
+is never a pricing input, and the dashboard marks the affected per-project and
+aggregate token counts as partial. (Before 1.7.0, a Codex log over 4 MiB was read
+only in its tail; that window is gone.)
 
 ## Common cohort accounting
 
