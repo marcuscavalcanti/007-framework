@@ -10,15 +10,9 @@ so far: a lower reasoning effort of the same model. 007 produces two things:
   unauthenticated local files. Missing evidence stays visible as a gap, never a zero.
 - **A pre-registered causal verdict with a declared error rate.** `007 lab` replays your repository's own commits under two
   configurations and tests a quality margin you fix before spending. Its rule is built to call a true loss of the margin
-  `PROVEN` about 2.5% of the time. A calibrated control checked that for one study shape, one repository and one floor
-  (go-json, 41 tasks, two attempts per arm, a 20-point margin, `report --missing-data-guard` with `compare.critical_floor`
-  2.4768): 1.25% to 2.27% across five loss scenarios (Wilson 95% upper bound 2.78% under clustered loss), compatible with
-  2.5%, not shown to be below it. A plain `report`, a run without a floor, or any other shape is outside that control, and
-  the CLI has no command that runs the control. Its power gate failed: when the true loss is 10 points, inside the 20-point
-  margin, the rule reads `PROVEN` between 49% and 57% of the time in two runs of 400 replicates (53% pooled, Wilson 95%
-  49.5–56.4), against the 80% required. The control ran on an earlier `scripts/` tree; rerun with this release's `scripts/`
-  tree it reproduces the stored result exactly, except the sensitivity analysis, which was not rerun
-  ([version binding](docs/evidence.md#version-binding-of-the-validated-error-control)).
+  `PROVEN` about 2.5% of the time. A calibrated control measured rates compatible with that for one opt-in report path and
+  one study shape only, and the rule's power gate failed; a plain `report` is outside that control
+  ([status](#why-for-whom-status)).
 
 007 measures; something else routes. In standalone use, you or your agent host read the receipts and the verdict on one
 machine; it is the only mode that exists. Gateway use is a design, not built: a gateway that assigns configurations to tasks
@@ -66,7 +60,10 @@ bound 2.78%) is compatible with 2.5%, not shown to be below it. At a true loss o
 `PROVEN` between 49% and 57% of the time in two runs of 400 replicates (53% pooled, Wilson 95% 49.5–56.4), against the 80%
 required. Not covered: a plain `report` (it ignores the floor), a run without a floor, a loss of partial credit, missing
 cells that cluster, and any other shape, which needs its own floor and control. The CLI has no command that runs the
-control. [Errata and controls](docs/evidence.md#errata-and-limits-published-for-1110)
+control. The control ran on an earlier `scripts/` tree; rerun with this release's tree it reproduces the stored result
+exactly, except the sensitivity analysis, which was not rerun
+([version binding](docs/evidence.md#version-binding-of-the-validated-error-control)).
+[Errata and controls](docs/evidence.md#errata-and-limits-published-for-1110)
 
 ## Install
 
