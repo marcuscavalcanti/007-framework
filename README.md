@@ -70,20 +70,19 @@ exactly, except the sensitivity analysis, which was not rerun
 Prerequisites: Python 3.11+, Git, and [pipx](https://pipx.pypa.io/) for the isolated install. CI qualifies Linux and macOS;
 the laboratory and observatory use POSIX file locks.
 
-Install the stable CLI from a published tag. The example uses v1.10.1, the latest release; the 1.11.0 commands below
-(`viability`, `status`, `run --aa`) need a later tag or a source checkout. The release page includes the source archive,
-SHA-256 checksums and build provenance details.
-[007 Framework 1.10.1](https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.10.1)
+Install the stable CLI from a published tag. The example uses v1.11.0, the latest release. The release page includes the
+source archive, SHA-256 checksums and build provenance details.
+[007 Framework 1.11.0](https://github.com/marcuscavalcanti/007-framework/releases/tag/v1.11.0)
 
 ```bash
-release_tag=v1.10.1
+release_tag=v1.11.0
 git clone --branch "$release_tag" --depth 1 https://github.com/marcuscavalcanti/007-framework.git
 cd 007-framework
 pipx install .
 pipx ensurepath
 ```
 
-Open a new shell after the PATH update, then run `007 --version` (expect `007 1.10.1`) and `007 --help`. From an existing
+Open a new shell after the PATH update, then run `007 --version` (expect `007 1.11.0`) and `007 --help`. From an existing
 checkout, `pipx install .` installs that source version. Updating a checkout does not upgrade an installed CLI: reinstall
 with `pipx install --force .` and check `007 --version`. Building the wheel uses setuptools. The installed runtime uses the
 Python standard library and includes its scripts, dashboard assets and default public evidence. Version metadata comes from
@@ -413,7 +412,7 @@ security fixes. A replay set mined before 1.10.1 keeps its embedded grader until
 
 Cite a result by its frozen report, not this README: give the evidence directory, the release tag and the report's SHA-256.
 Cite the software by version or commit, as [CITATION.cff](CITATION.cff) asks: Marcus Cavalcanti, *007 Framework*, version
-1.10.1, 2026, https://github.com/marcuscavalcanti/007-framework.
+1.11.0, 2026, https://github.com/marcuscavalcanti/007-framework.
 
 ## License
 

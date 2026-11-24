@@ -6,6 +6,8 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-24
+
 ### Added
 
 - `007 lab viability` runs before any paid run and costs nothing. It answers `VIABLE`, `NOT-VIABLE` with reasons, or
@@ -1120,7 +1122,8 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - private probes, acceptance-test bodies, repository snapshots, and credentials;
 - superseded laboratory implementations and provider-specific adapters.
 
-[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.1...v1.11.0
 [1.10.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...v1.9.0
