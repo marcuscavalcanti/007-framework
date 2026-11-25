@@ -2202,6 +2202,22 @@ class Viability(unittest.TestCase):
             with mock.patch.object(lab, "load_cells", return_value=self.pilot(8)), self.assertRaisesRegex(ValueError, "outside the set"):
                 lab.viability(root / "set.json", root)
 
+    def test_a_tasks_root_or_an_input_file_linked_outside_is_refused(self):
+        # review r3 R3-7: the resolved tasks/ root itself, and each input file, must stay inside the set
+        for case in ("root", "file"):
+            with self.subTest(case), tempfile.TemporaryDirectory() as d:
+                root = Path(d) / "set"
+                root.mkdir()
+                self.write_set(root, 8, {"immediate": {"mutants": 40, "rejected": 30}, "load_sensitive": []})
+                if case == "root":
+                    (root / "tasks").rename(Path(d) / "elsewhere")
+                    (root / "tasks").symlink_to(Path(d) / "elsewhere")
+                else:
+                    (root / "tasks" / "T0" / "hidden.json").rename(Path(d) / "hidden.json")
+                    (root / "tasks" / "T0" / "hidden.json").symlink_to(Path(d) / "hidden.json")
+                with mock.patch.object(lab, "load_cells", return_value=self.pilot(8)), self.assertRaisesRegex(ValueError, "outside the set"):
+                    lab.viability(root / "set.json", root)
+
     def test_a_task_id_that_leaves_the_set_is_refused_before_any_read(self):
         # review #13: a set's task ids were joined into paths unchecked
         with tempfile.TemporaryDirectory() as d:

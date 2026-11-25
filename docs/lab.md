@@ -182,8 +182,9 @@ and so is a cell whose workspace lies inside a protected path (move `TMPDIR`): d
 or workspace. A cell that asks for nothing (`unenforced`) is not refused: that path alone is left out of detection, since every call
 would match it (another path with the same label stays), and the cell records its label in `contamination.protection_dropped`.
 `replay_eval run` protects the hidden sources of every task the set declares, also when `--tasks` runs only some, and
-`viability` and `sufficiency` refuse a task id that is not a plain name (`../x`), or whose directory resolves outside the set's
-`tasks/` (a link), before reading any task file.
+`viability` and `sufficiency` refuse a task id that is not a plain name (`../x`), a `tasks/` root that resolves outside the set, a task directory that
+resolves outside that root, and a `hidden.json` or `baseline.json` that resolves outside its task directory (a link), before
+reading any task file.
 
 **Prevention depends on what each CLI enforces, and the set opts in.** The agent command names the rules with placeholders:
 

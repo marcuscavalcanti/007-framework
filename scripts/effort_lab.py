@@ -1971,12 +1971,23 @@ def feasibility(config_path, results, margin=None, sd=None):
             "tasks_needed_at_pilot_mean": tasks_needed(sd, margin, observed["mean"]) if observed and observed["mean"] is not None else None}
 
 
+TASK_INPUTS = ("hidden.json", "baseline.json")
+
+
 def _task_dir(set_dir, tid):
-    """The task's directory under the set's `tasks/`, its id a plain name and its resolved path still inside: never a link out."""
+    """The task's directory under the set's `tasks/`, its id a plain name; the resolved `tasks/` root inside the resolved set, the
+    resolved directory inside that root, and each input file (TASK_INPUTS) that exists resolved inside that directory: never a
+    link out of the set, checked before any of them is read."""
+    base = set_dir.resolve()
     root = (set_dir / "tasks").resolve()
+    if not root.is_relative_to(base):
+        raise ValueError("the set's tasks/ resolves outside the set")
     directory = set_dir / "tasks" / replay_eval.validate_task_id(tid)
     if directory.exists() and not directory.resolve().is_relative_to(root):
         raise ValueError(f"task directory resolves outside the set: {tid}")
+    for name in TASK_INPUTS:
+        if (directory / name).exists() and not (directory / name).resolve().is_relative_to(directory.resolve()):
+            raise ValueError(f"task file resolves outside the set: {tid}/{name}")
     return directory
 
 
