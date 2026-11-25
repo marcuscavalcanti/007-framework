@@ -720,6 +720,19 @@ class LabEndToEnd(unittest.TestCase):
         chained = lab.chain(path, twin, self.root / "stage2-twin")  # the copies are no part of the contrast stage 2 serves
         self.assertEqual((chained["tasks"], chained["aa_not_chained"]), (4 * tasks, 2 * tasks))
         self.assertNotIn("aa_not_chained", lab.chain(path, plain, self.root / "stage2-plain"))
+        # review #6: a refusal of the copy alone is no inequality between the compared arms; it is counted on its own
+        copy = next(twin.glob("*-r01-high-aa.json"))
+        copy.write_text(json.dumps({**json.loads(copy.read_text()), "valid": False, "accepted": False, "failure_class": "provider-rate-limit"}))
+        refused_copy = lab.report(path, twin, None)["verdict"]
+        self.assertEqual((refused_copy["refused_unequal"], refused_copy["aa_refused"]), (False, 1))
+        self.assertIsNone(without["verdict"]["aa_refused"])
+        # and a contaminated original is never chained, whatever patch it left
+        original = next(twin.glob("*-r01-medium.json"))
+        original.write_text(json.dumps({**json.loads(original.read_text()), "valid": False, "failure_class": "contaminated",
+                                        "contamination": {"status": "contaminated"}}))
+        chained = lab.chain(path, twin, self.root / "stage2-contaminated")
+        self.assertEqual(chained["tasks"], 4 * tasks - 1)
+        self.assertIn(original.stem, chained["broken"])
 
     def test_nothing_the_agent_sees_names_its_arm(self):
         """1.11.0: the agent's cwd, argv, environment, workspace names and prompt carry no arm name, effort word or A/A marker, in

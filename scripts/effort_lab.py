@@ -479,8 +479,8 @@ def chain(config_path, results, out):
             copies += 1
             continue
         meta, task = pairs[row["task"]], tasks[row["task"]]
-        if not isinstance(row.get("candidate_patch"), dict) or row.get("failure_class") == "provider-rate-limit":
-            broken.append(row["cell"])  # no candidate to chain from: a controller error or a refused call
+        if not isinstance(row.get("candidate_patch"), dict) or row.get("failure_class") == "provider-rate-limit" or contaminated(row):
+            broken.append(row["cell"])  # no candidate to chain from: a controller error, a refused call, or one that read the answer
             continue
         with tempfile.TemporaryDirectory(prefix="lab-chain-") as scratch:
             tree = Path(scratch) / "tree"
@@ -2788,8 +2788,10 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     tier["margin"] = margin
     tier["compare_changed_after_seal"] = manifest["compare_changed"]
     tier["run_binding"] = manifest["state"]
-    # a limit can be per model: unequal refusals mean the arms' valid cells may cover different commits
-    tier["refused_unequal"] = len({a.get("refused", 0) for a in accounting["arms"].values()}) > 1
+    # a limit can be per model: unequal refusals mean the compared arms' valid cells may cover different commits; the A/A copy's
+    # refusals are counted on their own (aa_refused), never as an inequality between the compared arms
+    tier["refused_unequal"] = accounting["arms"].get(low, {}).get("refused", 0) != accounting["arms"].get(ref, {}).get("refused", 0)
+    tier["aa_refused"] = accounting["arms"].get(aa["label"], {}).get("refused", 0) if aa else None
     tier["next_run_binding"] = stage2["state"] if stage2 else None
     tier["same_change_reachable"] = behaviour_verdict(reachable, sensitive, margin, critical=math.inf if critical is None else critical)
     # an arm with no valid cell pairs no task: the verdict is NO-INFORMATION, and the report says why instead of a bare default
@@ -2936,7 +2938,7 @@ def summary(result, low, ref, attempts):
           + f", {a['valid']} valid, {a['accepted']} accepted" + (f"; {a['refused']} attempts refused by the provider" if a.get('refused') else "")
           + "." for arm, a in (accounting or {}).get("arms", {}).items()],
         *(["- **Refusals hit the arms unequally:** a provider limit can be per model, so the arms' valid cells may cover different commits."]
-          if accounting and len({a.get("refused", 0) for a in accounting.get("arms", {}).values()}) > 1 else []),
+          if result["verdict"].get("refused_unequal") else []),
         *([f"- **Missing-data guard:** {g['verdict']}" + (f" ({g['missing_data']['label']})" if g["missing_data"]["label"] else "")
            + f", answer {g['answer']}; {g['missing_data']['usable']} of {g['missing_data']['planned']} planned cells usable; cost per accepted change "
            f"{g['cost_ratio']:.3f} of `{ref}`'s (95% {g['cost_ratio_ci95'][0]:.3f} to {g['cost_ratio_ci95'][1]:.3f}; worst case "

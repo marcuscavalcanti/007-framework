@@ -34,7 +34,7 @@ schemas, and the dashboard snapshot.
   show the copies' discordance and an A/A equality check beside the verdict. The copy is a third arm,
   `ARM-aa`, with ARM's model, effort and doctrine. Its cells are dispatched, charged and stopped like ARM's, and
   they count toward every budget and stop rule. `run-manifest.json` records the copy, and a resume that turns it on, off or onto
-  another arm stops with `manifest-mismatch`. `chain` skips the copies. `report` reads the copy from the manifest and keeps the
+  another arm stops with `manifest-mismatch`. `chain` skips the copies, and any contaminated cell. `report` reads the copy from the manifest and keeps the
   verdict on the set's two arms, so the verdict is unchanged. Next to the verdict, the `aa` block gives:
   - the acceptance discordance per task and overall, with a Clopper-Pearson interval;
   - missing, refused, invalid or unreadable copies, counted and named but never as agreement, with a worst case that counts
@@ -42,7 +42,8 @@ schemas, and the dashboard snapshot.
   - the verdict's own statistic computed A against A;
   - `rejects_equality` when its 95% interval excludes zero.
 
-  The printed verdict gains `aa_status` and `aa_qualified`. `aa_qualified` is false whenever there are no A/A cells, and
+  The printed verdict gains `aa_status`, `aa_qualified` and `aa_refused` (the copy's refusals; `refused_unequal` still compares
+  the two compared arms only). `aa_qualified` is false whenever there are no A/A cells, and
   `report.md` then says the verdict carries no measured noise floor. It also needs at least 8 tasks with a usable matched pair
   and the run's planned replicates (`report --replicates N`, now accepted without `--missing-data-guard`), so replicates never
   dispatched count as missing pairs; without them the status is `too-few-tasks` or `plan-unknown`. A copy set aside under
