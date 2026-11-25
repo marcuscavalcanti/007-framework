@@ -785,11 +785,12 @@ READ_ISOLATION_MARKERS = {"{read_isolation_claude_settings}": "claude-settings",
 CODEX_READ_PROFILE = "lab_read_isolation"
 
 
-def protected_paths(config, task, output_dir, vault_root=None):
+def protected_paths(config, task, output_dir, vault_root=None, refuse=True, dropped=None):
     """(label, absolute path) the agent of this cell must not read, existing ones only: the output directory (the run's manifest,
     ledger, other cells and `.blind/`), what the caller adds in `config["read_protect"]` (the set), every source repository (it
     holds the commit asked for), hidden tests, the vault, installed plugin and skill copies, and session logs under HOME. A path
-    that is the filesystem root, or HOME or one of its parents, is refused: denying it would deny the agent its own tools."""
+    that is the filesystem root, or HOME or one of its parents, is refused when `refuse` (prevention asked of the CLI: denying it
+    would deny the agent its own tools); otherwise it is left out and its label added to `dropped`."""
     found = [("run-directory", output_dir), *((label, value) for label, value in config.get("read_protect", []))]
     found += [("source-repository", value) for value in (config.get("repos") or {}).values()]
     found += [("hidden-test", entry["source"]) for entry in task.get("hidden_acceptance", []) if isinstance(entry, dict) and "source" in entry]
@@ -802,10 +803,21 @@ def protected_paths(config, task, output_dir, vault_root=None):
         if not path.exists() or str(path) in seen:
             continue
         if path == Path(path.anchor) or path == home or path in home.parents or path.resolve() in (home.resolve(), *home.resolve().parents):
-            raise ValueError(f"read isolation would deny HOME or the filesystem root ({label})")
+            if refuse:
+                raise ValueError(f"read isolation would deny HOME or the filesystem root ({label})")
+            if dropped is not None:
+                dropped.append(label)
+            continue
         seen.add(str(path))
         out.append((label, str(path)))
     return out
+
+
+def standalone_protect(replay_set, tasks):
+    """What `replay_eval run` adds to every cell's protected paths: the set file and every task's hidden sources, not only the
+    running task's (another task's answer is as readable)."""
+    return [("set-file", str(replay_set))] + [("hidden-test", entry["source"]) for task in tasks for entry in task.get("hidden_acceptance", [])
+                                             if isinstance(entry, dict) and "source" in entry]
 
 
 def read_isolation_mode(command):
@@ -1037,12 +1049,16 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             if path.exists() or path.is_symlink():
                 raise RuntimeError(f"runner receipt already exists: {path}")
         seen = {final: path for path, final in staged.items()}
-        protected = protected_paths(config, task, output_dir, vault_root)
+        isolation = read_isolation_mode(config["agent_command"])
+        prevention, dropped = isolation != "unenforced", []  # the layout refusals guard deny rules; detection alone drops the path
+        protected = protected_paths(config, task, output_dir, vault_root, refuse=prevention, dropped=dropped)
         inside = [label for label, path in protected if Path(path) in (workspace, *workspace.parents)
                   or Path(path).resolve() in (workspace, *workspace.parents)]
-        if inside:  # denying it would deny the agent its own workspace
+        if inside and prevention:  # denying it would deny the agent its own workspace
             raise RuntimeError(f"cell workspace lies inside a protected path ({inside[0]}): set TMPDIR elsewhere")
-        isolation = read_isolation_mode(config["agent_command"])
+        if inside:  # every call in the workspace would read as a hit: left out of detection, and said so
+            dropped += inside
+            protected = [(label, path) for label, path in protected if label not in inside]
         denied = [path for _, path in protected]
         settings, settings_sha256 = claude_read_settings(denied)
         replacements = {
@@ -1095,6 +1111,8 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
                                         protected, str(workspace))
         except OSError:
             contamination = {"status": "unscanned", "reason": "stream-unreadable"}
+        if dropped:
+            contamination["protection_dropped"] = sorted(set(dropped))
         # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
         hidden_failure, checks, checks_passed, outcomes = cleanup_failure, [], False, "unavailable"
         if cleanup_failure is None:
@@ -1658,7 +1676,7 @@ def main():
     validate_cell_artifacts(tasks, arms, replicates, directory=output_dir)
     # 1.11.0: each agent sees a salted token, never its arm (blind_token), and must not read the set file (protected_paths)
     cells = [cell_id(task, arm, replicate) for task in tasks for replicate in range(1, replicates + 1) for arm in arms]
-    config = {**config, "blind_salt": unique_salt(cells), "read_protect": [("set-file", str(replay_set))]}
+    config = {**config, "blind_salt": unique_salt(cells), "read_protect": standalone_protect(replay_set, tasks)}
     rows = []
     write_summary(output_dir, replay_set, config, replicates, rows)
     for task in tasks:

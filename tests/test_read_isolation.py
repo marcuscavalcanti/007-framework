@@ -297,6 +297,8 @@ class LabIsolation(unittest.TestCase):
     def test_a_workspace_inside_a_protected_path_is_refused_before_the_agent(self):
         path = self.mined()
         config = json.loads(path.read_text())
+        # the refusal guards deny rules: the cell asks its CLI for them (without, see test_layout_refusals_apply_only_when_prevention_is_asked)
+        config["agent_command"] = config["agent_command"] + ["--settings", "{read_isolation_claude_settings}"]
         output = self.root / "inside"
         output.mkdir()
         real = tempfile.mkdtemp
@@ -360,6 +362,25 @@ class LabIsolation(unittest.TestCase):
         self.assertEqual((state["stop"], state["calls"]), ("blind-token-collision", 0))
         with mock.patch.object(replay_eval, "blind_token", return_value="0" * 16), self.assertRaisesRegex(ValueError, "own token"):
             replay_eval.unique_salt(["a", "b"])
+
+    def test_layout_refusals_apply_only_when_prevention_is_asked(self):
+        """Review #13: a protected path that is HOME, or one holding the workspace, was refused for every cell, even one that asks
+        its CLI to deny nothing; those cells became controller errors and spent the invalid budget."""
+        config = json.loads(self.mined().read_text())
+        home = self.root / "home"
+        home.mkdir()
+        config["read_protect"] = [("too-wide", str(home))]
+        task = config["tasks"][0]
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            output = self.root / "plain-out"
+            output.mkdir()
+            row = replay_eval.execute_cell(config, task, "high", 1, output, 60)  # unenforced: runs, says what it could not protect
+            self.assertEqual((row["valid"], row["contamination"]["protection_dropped"]), (True, ["too-wide"]))
+            asked = {**config, "agent_command": config["agent_command"] + ["--settings", "{read_isolation_claude_settings}"]}
+            output = self.root / "asked-out"
+            output.mkdir()
+            with self.assertRaisesRegex(ValueError, "HOME or the filesystem root"):
+                replay_eval.execute_cell(asked, task, "high", 1, output, 60)
 
     def test_an_orphan_blind_receipt_is_counted_named_and_stops_a_resume(self):
         path, results = self.mined(), self.root / "results"
@@ -499,6 +520,15 @@ class ReplayRunner(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 replay_eval.main()
         self.assertEqual(seen, [True])
+
+    def test_a_standalone_run_protects_every_tasks_hidden_tests(self):
+        """Review #13: outside the lab only the current task's hidden sources were protected; another task's were readable."""
+        sources = [self.root / f"hidden-{i}.py" for i in range(2)]
+        for source in sources:
+            source.write_text("")
+        tasks = [{"id": f"t{i}", "hidden_acceptance": [{"source": str(sources[i])}]} for i in range(2)]
+        found = replay_eval.protected_paths({"read_protect": replay_eval.standalone_protect(self.set, tasks)}, tasks[0], self.root / "o")
+        self.assertLessEqual({("hidden-test", str(s)) for s in sources}, set(found))
 
     def test_a_summary_is_replaced_whole_never_truncated(self):
         """Review #12: summary.json, which seals the salt, was rewritten in place; a crash mid-write could lose it."""

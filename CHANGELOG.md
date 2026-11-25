@@ -27,7 +27,8 @@ schemas, and the dashboard snapshot.
   outcomes: too few tasks, an oracle that rejects 0.2968 of planted defects (under 0.30), and a reference accepted in
   4.3% of cells, which also makes `PAYS` unreachable and leaves the study underpowered. Study F's go-json numbers read
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
-  computation with it, and their output is unchanged. The accepted-task shares are keyed by role (`candidate`,
+  computation with it, and their output is unchanged. Both refuse a task id that is not a plain name before reading task files.
+  The accepted-task shares are keyed by role (`candidate`,
   `reference`) and both are required; a `sensitivity_v2` decision must be one `sensitivity-v2` gives; and a saving of 0 or
   less reads `underpowered` at once, since it fixes the break-even margin at 0.
 - `007 lab run --aa ARM` runs ARM twice on the same tasks, at one more paid attempt per task and replicate, so the report can
@@ -78,7 +79,9 @@ schemas, and the dashboard snapshot.
   `unscanned` (`empty-stream`), and a torn, over-long (16 MiB) or too deeply nested line with no hit makes it `incomplete`.
   `report` and `status` (pooled) show the modes and the scan results; cells from before 1.11.0
   read `unrecorded` and are never rescanned. Prevention is only what each CLI enforces, detection sees only logged tool calls,
-  and full isolation needs an OS sandbox, which 007 does not provide. See
+  and full isolation needs an OS sandbox, which 007 does not provide. The layout refusals (a protected path that is HOME or
+  holds the workspace) apply only to cells that ask for deny rules; an `unenforced` cell leaves such a path out of detection and
+  names it in `contamination.protection_dropped`. `replay_eval run` protects every task's hidden sources. See
   [the lab guide](docs/lab.md#read-isolation-and-contamination).
 
 ### Changed

@@ -1956,7 +1956,7 @@ def _sufficiency_shares(config, set_dir, rows):
     """[(task, the largest share of the behaviour its commit introduced that one valid cell passes)], None without cell or new test."""
     shares = []
     for task in config["tasks"]:
-        directory = set_dir / "tasks" / task["id"]
+        directory = set_dir / "tasks" / replay_eval.validate_task_id(task.get("id"))
         baseline = set(json.loads((directory / "baseline.json").read_text()))
         hidden = [k for k in json.loads((directory / "hidden.json").read_text()) if k != "__module__" and k not in baseline]
         cells = [r for r in rows if r["task"] == task["id"]]
@@ -2127,7 +2127,7 @@ def viability(config_path=None, results=None, stated=None):
             found[key], sources[key] = value, source
     if config_path is not None:
         config = json.loads(config_path.read_text())
-        set_dir, ids = config_path.parent, {t["id"] for t in config["tasks"]}
+        set_dir, ids = config_path.parent, {replay_eval.validate_task_id(t.get("id")) for t in config["tasks"]}  # joined into paths below
         put("tasks", len(ids), "set")
         put("declared_margin", declared_margin(config), "set")
         if (set_dir / "sensitivity.json").is_file():

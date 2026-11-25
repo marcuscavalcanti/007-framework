@@ -2089,6 +2089,19 @@ class Viability(unittest.TestCase):
             with self.assertRaises(ValueError):
                 lab.viability(None, root)
 
+    def test_a_task_id_that_leaves_the_set_is_refused_before_any_read(self):
+        # review #13: a set's task ids were joined into paths unchecked
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "set"
+            root.mkdir()
+            self.write_set(root, 8, {"immediate": {"mutants": 40, "rejected": 30}, "load_sensitive": []})
+            config = json.loads((root / "set.json").read_text())
+            config["tasks"][0]["id"] = "../escape"
+            (root / "set.json").write_text(json.dumps(config))
+            rows = [{**cell("../escape", "medium", 1, {"a"}), "cell": "x", "accepted": True, "cost_usd": 1.0}]
+            with mock.patch.object(lab, "load_cells", return_value=rows), self.assertRaisesRegex(ValueError, "unsafe task id"):
+                lab.viability(root / "set.json", root)
+
     def test_a_sensitivity_without_counts_is_unknown_and_a_failing_v2_is_read(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

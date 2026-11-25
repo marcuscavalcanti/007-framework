@@ -145,8 +145,12 @@ that exist:
   `.agents/skills`), where an earlier study's agents found an answer;
 - other sessions' logs under HOME (`.claude/projects`, `.codex/sessions`).
 
-A protected path that is HOME, one of its parents or the filesystem root is refused, and so is a cell whose workspace lies
-inside a protected path (move `TMPDIR`): denying either would deny the agent its own tools or workspace.
+When the cell asks its CLI for deny rules, a protected path that is HOME, one of its parents or the filesystem root is refused,
+and so is a cell whose workspace lies inside a protected path (move `TMPDIR`): denying either would deny the agent its own tools
+or workspace. A cell that asks for nothing (`unenforced`) is not refused: such a path is left out of detection, since every call
+would match it, and the cell records its label in `contamination.protection_dropped`. `replay_eval run` protects every task's
+hidden sources, not only the running task's, and `viability` and `sufficiency` refuse a task id that is not a plain name
+(`../x`) before reading any task file.
 
 **Prevention depends on what each CLI enforces, and the set opts in.** The agent command names the rules with placeholders:
 
