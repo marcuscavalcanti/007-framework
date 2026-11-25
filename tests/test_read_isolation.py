@@ -245,6 +245,8 @@ class LabIsolation(unittest.TestCase):
         path, results = self.mined(), self.root / "results"
         self.assertIsNone(self.run_lab(path, results)["stop"])
         cells = lab.load_cells(results)
+        # review #17: the cell names its stream by the cell's own name, which resolves beside it once promoted
+        self.assertTrue(cells and all(c["stream_copy"] == c["cell"] + ".stream.jsonl" and (results / c["stream_copy"]).is_file() for c in cells))
         self.assertTrue(cells and all(c["valid"] and c["contamination"]["status"] == "clean" for c in cells))
         self.assertTrue(all(c["contamination"]["tool_calls"] == 2 for c in cells))
         report = lab.report(path, results, None)

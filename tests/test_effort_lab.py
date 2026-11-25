@@ -786,7 +786,8 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual(report["aa"]["label"], "high-aa")
 
     def test_a_run_sealed_before_1_11_resumes_with_its_labelled_paths(self):
-        """A manifest without a salt (1.10 and before) keeps labelled workspaces on resume: one run never mixes the two."""
+        """A manifest without a salt keeps labelled workspaces on resume: one run never mixes the two. The manifest here is this
+        version's own (same framework digest) with its salt removed; a manifest another 007 sealed stops instead (next test)."""
         out = self.root / "lab"
         lab.mine(self.config, out, 2)
         path, results = out / "replay-set.json", self.root / "results"
@@ -809,6 +810,29 @@ class LabEndToEnd(unittest.TestCase):
         self.assertFalse([cell for cell in lab.load_cells(results) if "blind_token" in cell])
         self.assertFalse((results / ".blind").exists())
         self.assertEqual(lab.report(path, results, None)["run_manifest"]["state"], "sealed")
+
+    def test_a_run_sealed_by_another_007_resumes_only_under_it(self):
+        """Review #17: the seal binds `framework_sha256`, the digest of 007's own scripts, so a run sealed by 1.10.1 (checked once
+        with the real 1.10.1 tree: `manifest-mismatch`, `framework_sha256`) is resumed with the 007 that sealed it, never with this
+        one. Any other framework digest stands in for it here, since the test cannot depend on a release tag."""
+        out = self.root / "lab"
+        lab.mine(self.config, out, 2)
+        path, results = out / "replay-set.json", self.root / "results"
+        lab.sensitivity(path, 2)
+        self.assertIsNone(lab.run(path, results, replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1)["stop"])
+        sealed = results / "run-manifest.json"
+        old = sealed.read_bytes()
+        manifest = json.loads(old)
+        del manifest["blind_salt"]
+        manifest["framework_sha256"] = "0" * 64
+        sealed.write_text(json.dumps(manifest, indent=1) + "\n")
+        ledger = results / "dispatch.jsonl"
+        ledger.write_text(ledger.read_text().replace(hashlib.sha256(old).hexdigest(), lab._sha256(sealed)))
+        state = lab.run(path, results, replicates=2, jobs=2, max_calls=99, max_usd=99, stop_usd=1)
+        self.assertEqual((state["stop"], state["changed"], state["calls"]), ("manifest-mismatch", ["framework_sha256"], 0))
+        # every cell names its own stream beside it, where the receipt (kept byte for byte) names the token's
+        for row in lab.load_cells(results):
+            self.assertTrue(row.get("stream_copy") is None or (results / row["stream_copy"]).is_file())
 
     def test_oracle_health_is_blind_in_status_never_moves_the_verdict_and_holds_until_acknowledged(self):
         out = self.root / "lab"

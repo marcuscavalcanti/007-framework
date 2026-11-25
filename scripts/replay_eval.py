@@ -1203,6 +1203,8 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             "agent_output": agent_output,
             "diagnostic_text_retained": retain_text,
             **({"blind_token": token} if token else {}),
+            # the stream this attempt left, by the name it has beside the cell; the receipt, kept byte for byte, names the token's
+            **({"stream_copy": stream_copy.name} if promoted.get(stream_copy) else {}),
             "read_isolation": isolation,  # what the set asked the CLI to enforce; `unenforced` when it asked nothing
             "contamination": contamination,
         }

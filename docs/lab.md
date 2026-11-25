@@ -101,7 +101,7 @@ or not a regular file, or a `.blind` that is not a directory of its own fails th
 only the stream this attempt promoted is scanned for contamination. Before the first dispatch the salt is checked to give every
 planned cell its own token; a sealed salt whose tokens collide stops a resume with `blind-token-collision`. Results, `dispatch.jsonl`, `report` and `chain` therefore keep the real arm names (`status`
 pools every cell and names no arm), and each cell records its `blind_token`. The receipt is kept byte for byte, so its `stream_copy` field names
-`<token>.stream.jsonl`. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`
+`<token>.stream.jsonl`; the cell records `stream_copy` too, the name the stream has beside it once promoted. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`
 under its token. `report` lists every file there in `orphan_blind_files`, each named by its cell when the sealed salt and the
 ledger or the plan identify it, counts that cell as attempted without a result, and adds it to `orphan_receipts`; `report.md`
 says how many such files there are and how many it could not trace. `status` counts them, as token-named files and
@@ -124,8 +124,11 @@ as with a host copy of the repository (see [Limits](#limits)).
 directory, carried the arm name (`007-<task>-<arm>-r01-<random>`). The runner receipt path in the agent command's arguments
 carried it too (`<task>-r01-<arm>.runner.json`). A stage-2 workspace also carried the stage-1 arm, through its task id. This was a
 visible difference between the arms of the main comparison, and its effect on any verdict was not measured. A run sealed before
-1.11.0 has no salt. Resumed with 1.11.0, it keeps its labelled paths, so one run never mixes the two procedures; its report and
-verdict are unchanged.
+1.11.0 has no salt. The seal also binds `framework_sha256`, the digest of 007's own scripts, so such a run is resumed with the 007
+that sealed it: 1.11.0 stops a 1.10.1 run with `manifest-mismatch` (`framework_sha256`), checked once with the real 1.10.1 tree.
+Pin the runner for the length of a run. A manifest without a salt (one sealed late, or a resume under its own 007) keeps its
+labelled paths, so one run never mixes the two procedures. Its report reads as before except where 1.11.0 changes a reading on
+purpose, such as the clustered critical value.
 
 `replay_eval run`, the experiment runner outside `007 lab`, uses the same tokens since 1.11.0. It seals its salt as
 `blind_salt` in its own `summary.json`, which it now writes before the first cell, so a run that dies keeps it. A summary

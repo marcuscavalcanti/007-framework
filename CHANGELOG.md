@@ -53,7 +53,7 @@ schemas, and the dashboard snapshot.
   and the run's planned replicates (`report --replicates N`, now accepted without `--missing-data-guard`), so replicates never
   dispatched count as missing pairs; without them the status is `too-few-tasks` or `plan-unknown`. A copy set aside under
   `refused/` reads `refused`, and the discordance interval states that it takes pooled pairs as independent. Reports of runs without `--aa` keep every earlier field and
-  value. See [the lab guide](docs/lab.md#the-aa-check-run---aa-arm).
+  value, except where this release changes them on purpose (the clustered critical value, under Fixed). See [the lab guide](docs/lab.md#the-aa-check-run---aa-arm).
 - `007 lab status --set S --results R` shows the grader's health while a run is in flight. A 2026-11-15 study went 0/124 with no
   alarm because its grader crashed with exit 1 before writing a report. `status` takes no lock and reveals no verdict. It pools
   every cell, A/A copies included, and never shows an arm, task or cell. It gives:
@@ -128,7 +128,11 @@ schemas, and the dashboard snapshot.
 
   The A/A copy and stage-2 cells get tokens like any other cell. Results, `report` and `chain` keep the real arm names
   (`status` pools every cell and names no arm), and each cell records its `blind_token`. The token is stable across resume, and a malformed salt stops a resume with
-  `manifest-mismatch`. A run sealed before 1.11.0 resumes with its labelled paths, and its report and verdict are unchanged. The
+  `manifest-mismatch`. A manifest without a salt resumes with its labelled paths, so one run never mixes the two. The seal binds
+  `framework_sha256`, so a run sealed by 1.10.1 or earlier resumes only under the 007 that sealed it (1.11.0 stops it with
+  `manifest-mismatch`, `framework_sha256`, as checked once with the real 1.10.1 tree); its report reads as before apart from
+  the clustered critical value. Each cell records `stream_copy`, its stream's name beside it, since the receipt, kept byte for
+  byte, names the token's. The
   model and effort flags, and any doctrine that differs between arms, still reach the agent: they are the treatment. See
   [the lab guide](docs/lab.md#blind-arms-what-the-agent-sees).
 - An agent receipt left in `--out/.blind/` by a controller that died is now counted. `report` lists it in
