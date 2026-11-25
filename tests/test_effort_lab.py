@@ -2552,15 +2552,18 @@ class OracleHealth(unittest.TestCase):
         self.assertEqual((lab_rows["classes"]["oracle-error"], lab_rows["classes"]["timeout"]), (4, 4))
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            exact = ["/any/python3", "-I", "-B", ".007-accept/lab_accept.py", ".007-accept/lab.json", ".007-accept/hidden.json", ".007-accept/baseline.json"]
+            exact = ["/any/python3.14", "-I", "-B", ".007-accept/lab_accept.py", ".007-accept/lab.json", ".007-accept/hidden.json", ".007-accept/baseline.json"]
             # review r2 N8: a command that merely mentions lab_accept.py is no lab_accept invocation; an undeclared contract is unknown
             tasks = [{"id": "L", "acceptance": [exact]}, {"id": "K", "acceptance_exit_contract": "lab-accept-v1", "acceptance": [["x"]]},
                      {"id": "C", "acceptance": [["make", "check"]]}, {"id": "M", "acceptance": [["make", "check", "NOTE=lab_accept.py"]]},
-                     {"id": "U", "acceptance_exit_contract": "other-v9", "acceptance": [["x"]]}]
+                     {"id": "U", "acceptance_exit_contract": "other-v9", "acceptance": [["x"]]},
+                     # review r3 R3-6: lab_accept's arguments behind another program are no lab_accept invocation
+                     {"id": "F", "acceptance": [["/usr/bin/false", *exact[1:]]]}, {"id": "S", "acceptance": [[sys.executable, *exact[1:]]]}]
             (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh"}, "tasks": tasks}))
             (root / "sensitivity.json").write_text(json.dumps({"conformant": ["L", "C", "OTHER", "OTHER"]}))
             self.assertEqual(lab.grader_contracts(json.loads((root / "set.json").read_text())),
-                             {"L": "lab-accept-v1", "K": "lab-accept-v1", "C": "custom", "M": "custom", "U": "unknown"})
+                             {"L": "lab-accept-v1", "K": "lab-accept-v1", "C": "custom", "M": "custom", "U": "unknown", "F": "custom",
+                              "S": "lab-accept-v1"})
             crash = [graded("M", "xhigh", 1, 1, report=False), graded("NOT-IN-SET", "xhigh", 1, 1, report=False)]
             health = lab._oracle_state(root / "set.json", crash, .03)
             self.assertEqual((health["classes"]["oracle-error"], health["classes"]["rejected"]), (0, 2))

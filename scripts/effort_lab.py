@@ -2602,16 +2602,31 @@ def _exits(row):
 LAB_ACCEPT_ARGS = ["-I", "-B", f"{ACCEPT}/lab_accept.py", f"{ACCEPT}/lab.json", f"{ACCEPT}/hidden.json", f"{ACCEPT}/baseline.json"]
 
 
+def _python(program):
+    """The interpreter `mine` writes into lab_accept's command, or an equivalent: this Python, or a program named python,
+    python3 or python3.N."""
+    if not isinstance(program, str) or not program:
+        return False
+    try:
+        same = os.path.realpath(program) == os.path.realpath(sys.executable)
+    except (OSError, ValueError):
+        same = False
+    return same or bool(re.fullmatch(r"python(3(\.[0-9]{1,2})?)?", Path(program).name))
+
+
 def grader_contracts(config):
     """{task: contract} of the set's tasks: `lab-accept-v1` when declared, or when the task's only acceptance command is
-    lab_accept's exact invocation as `mine` writes it (any interpreter, these arguments); `custom` for any other grader; `unknown`
-    for a declared contract 007 does not know. A cell of a task the set does not list reads `unknown` too."""
+    lab_accept's exact invocation as `mine` writes it: these arguments behind the Python interpreter `mine` records
+    (sys.executable), this interpreter, or a program named python, python3 or python3.N. Another program with these arguments
+    is `custom` unless the task declares the contract; `unknown` is a declared contract 007 does not know. A cell of a task the
+    set does not list reads `unknown` too."""
     out = {}
     for task in config.get("tasks", []):
         if not isinstance(task, dict) or "id" not in task:
             continue
         declared, commands = task.get("acceptance_exit_contract"), task.get("acceptance")
-        exact = isinstance(commands, list) and len(commands) == 1 and isinstance(commands[0], list) and commands[0][1:] == LAB_ACCEPT_ARGS
+        exact = (isinstance(commands, list) and len(commands) == 1 and isinstance(commands[0], list) and commands[0][1:] == LAB_ACCEPT_ARGS
+                 and _python(commands[0][0]))
         out[task["id"]] = (replay_eval.LAB_ACCEPT_EXIT_CONTRACT if declared == replay_eval.LAB_ACCEPT_EXIT_CONTRACT or declared is None and exact
                            else "custom" if declared is None else "unknown")
     return out
