@@ -686,6 +686,61 @@ def blind_token(salt, cell):
     return f"{int(hashlib.sha256(f'{salt}:{cell}'.encode()).hexdigest(), 16) % 10**16:016d}"
 
 
+def blind_collisions(salt, cells):
+    """Cells of a plan whose tokens collide under `salt`: two such cells would share staging names in `.blind/`. [] normally."""
+    seen = {}
+    for cell in cells:
+        seen.setdefault(blind_token(salt, cell), []).append(cell)
+    return sorted(cell for group in seen.values() if len(group) > 1 for cell in group)
+
+
+def unique_salt(cells):
+    """A fresh salt under which every planned cell has its own token (one draw in practice: sixteen digits)."""
+    for _ in range(100):
+        salt = secrets.token_hex(16)
+        if not blind_collisions(salt, cells):
+            return salt
+    raise ValueError("no salt gives every planned cell its own token")
+
+
+def _open_directory(path):
+    """A descriptor of `path` as a directory of its own, never through a link: an agent's files are found relative to it, so a
+    directory swapped for a link while the agent ran cannot redirect what the controller promotes."""
+    try:
+        return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise RuntimeError(f"not a directory of its own (a link or another file): {path}") from None
+
+
+def _exists(name, directory_fd):
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _promote(source_fd, name, target_fd, final):
+    """Give this attempt's file `name` (in source_fd) its final name in target_fd: never through a link and never over a file
+    that is already there. (st_dev, st_ino) of the promoted file, or None when the agent left none. A link is removed (the link
+    only, never its target) and the cell fails."""
+    try:
+        info = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        if stat.S_ISLNK(info.st_mode):
+            os.unlink(name, dir_fd=source_fd)
+        raise RuntimeError(f"runner artifact is not a regular file: {name}")
+    if source_fd != target_fd or name != final:
+        try:
+            os.link(name, final, src_dir_fd=source_fd, dst_dir_fd=target_fd, follow_symlinks=False)
+        except FileExistsError:
+            raise RuntimeError(f"replay output appeared during the attempt: {final}") from None
+        os.unlink(name, dir_fd=source_fd)
+    return info.st_dev, info.st_ino
+
+
 def blind_files(directory):
     """Names an agent left under its token in `.blind/`: its controller died while it ran, or it is still running. [] if none."""
     try:
@@ -934,7 +989,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             (output_dir / BLIND_DIR).mkdir(mode=0o700, exist_ok=True)
             staged = {output_dir / BLIND_DIR / f"{token}{suffix}": final
                       for suffix, final in ((".runner.json", runner_receipt), (".stream.jsonl", stream_copy))}
-        for path in (runner_receipt, *staged):
+        for path in (runner_receipt, stream_copy, *staged):
             if path.exists() or path.is_symlink():
                 raise RuntimeError(f"runner receipt already exists: {path}")
         seen = {final: path for path, final in staged.items()}
@@ -960,6 +1015,10 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             for marker, value in replacements.items():
                 part = part.replace(marker, value)
             argv.append(part)
+        # held while the agent runs: what it leaves is promoted relative to these, never through a link it put in their place
+        target_fd = _open_directory(output_dir)
+        source_fd = _open_directory(output_dir / BLIND_DIR) if token else target_fd
+        promoted = {}
         started = time.monotonic()
         cleanup_failure = None
         agent_output = "unavailable"
@@ -974,13 +1033,22 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             timed_out = isinstance(exc.original, subprocess.TimeoutExpired)
             exit_code, tail = (-9, "TIMEOUT") if timed_out else (exc.returncode, str(exc) if retain_text else exc.state)
         finally:  # whatever the agent did: its receipt and stream take the cell's own names before anything reads them
-            for path, final in staged.items():
-                if path != final and (path.exists() or path.is_symlink()):
-                    os.rename(path, final)
+            try:
+                for path, final in staged.items():
+                    if path != final and _exists(final.name, target_fd):  # not this attempt's: never replaced, never read
+                        raise RuntimeError(f"replay output appeared during the attempt: {final}")
+                for path, final in staged.items():
+                    promoted[final] = _promote(source_fd, path.name, target_fd, final.name)
+            finally:
+                for fd in {source_fd, target_fd}:
+                    os.close(fd)
         agent_wall_s = round(time.monotonic() - started, 2)  # r46: the agent alone; wall_s also spans grading
         prompt.unlink(missing_ok=True)
-        try:  # a cell whose agent touched a protected path is invalid, whatever it produced
-            contamination = scan_stream(stream_copy if stream_copy.is_file() else None, protected, str(workspace))
+        try:  # a cell whose agent touched a protected path is invalid, whatever it produced; only this attempt's own stream is read
+            mine = promoted.get(stream_copy)
+            info = os.stat(stream_copy, follow_symlinks=False) if mine else None
+            contamination = scan_stream(stream_copy if info and (info.st_dev, info.st_ino) == mine and stat.S_ISREG(info.st_mode) else None,
+                                        protected, str(workspace))
         except OSError:
             contamination = {"status": "unscanned", "reason": "stream-unreadable"}
         # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
@@ -1545,7 +1613,8 @@ def main():
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     validate_cell_artifacts(tasks, arms, replicates, directory=output_dir)
     # 1.11.0: each agent sees a salted token, never its arm (blind_token), and must not read the set file (protected_paths)
-    config = {**config, "blind_salt": secrets.token_hex(16), "read_protect": [("set-file", str(replay_set))]}
+    cells = [cell_id(task, arm, replicate) for task in tasks for replicate in range(1, replicates + 1) for arm in arms]
+    config = {**config, "blind_salt": unique_salt(cells), "read_protect": [("set-file", str(replay_set))]}
     rows = []
     write_summary(output_dir, replay_set, config, replicates, rows)
     for task in tasks:

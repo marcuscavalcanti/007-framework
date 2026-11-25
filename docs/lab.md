@@ -93,8 +93,12 @@ Since 1.11.0, no path, argument or file name a cell's agent sees names its arm. 
 salt, `blind_salt` (32 hex digits), in `run-manifest.json`. A cell's token is sixteen digits of SHA-256 over the salt and the cell
 id (`replay_eval.blind_token`). The agent works in `007-<token>-<random>` under the temporary directory. Its runner receipt and
 stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `--out/.blind/`, and the grader runs in
-`007-acceptance-<token>-<random>`. When the agent exits, the controller renames both files to the cell's own names
-(`<task>-r01-<arm>.runner.json`). Results, `dispatch.jsonl`, `report` and `chain` therefore keep the real arm names (`status`
+`007-acceptance-<token>-<random>`. When the agent exits, the controller gives both files the cell's own names
+(`<task>-r01-<arm>.runner.json`). It finds them relative to directories it opened before the agent started, never through a link,
+and never over a file already there: a file at a cell's own name that this attempt did not create, a staged file that is a link
+or not a regular file, or a `.blind` that is not a directory of its own fails the cell (a link is removed, never its target), and
+only the stream this attempt promoted is scanned for contamination. Before the first dispatch the salt is checked to give every
+planned cell its own token; a sealed salt whose tokens collide stops a resume with `blind-token-collision`. Results, `dispatch.jsonl`, `report` and `chain` therefore keep the real arm names (`status`
 pools every cell and names no arm), and each cell records its `blind_token`. The receipt is kept byte for byte, so its `stream_copy` field names
 `<token>.stream.jsonl`. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`
 under its token. `report` lists every file there in `orphan_blind_files`, each named by its cell when the sealed salt and the

@@ -29,7 +29,6 @@ import os
 from pathlib import Path
 import random
 import re
-import secrets
 import shutil
 import statistics
 import subprocess
@@ -1436,7 +1435,7 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         if bound:  # dispatches named a manifest that is gone: never re-seal over them
             return {"stop": "manifest-missing", "calls": 0}
         # the agent's names come from this salt (replay_eval.blind_token); a directory with cells already run keeps their labelled paths
-        salt = None if done else secrets.token_hex(16)
+        salt = None if done else replay_eval.unique_salt([cell_name(c) for c in cells])
         # a directory from before 1.8 is sealed now and reported as sealed-late; written whole, then renamed
         with tempfile.NamedTemporaryFile("w", dir=out, prefix="." + RUN_MANIFEST + ".", delete=False) as handle:
             handle.write(json.dumps({**sealed, "compare": config.get("compare"), "aa": aa, "blind_salt": salt, "sealed_at": _now(), "cells_before_seal": len(done),
@@ -1470,6 +1469,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         if changed:  # not a STOP: restoring what was sealed makes the run resumable again, except an unbound one
             return {"stop": "manifest-mismatch", "changed": changed, "details": details, "calls": 0}
     sealed_digest = _sha256(manifest)
+    if salt and replay_eval.blind_collisions(salt, [cell_name(c) for c in cells]):  # two cells would share staging names
+        return {"stop": "blind-token-collision", "cells": replay_eval.blind_collisions(salt, [cell_name(c) for c in cells]), "calls": 0}
     if salt:  # the executor names the agent's workspace and receipt from it; the set as written, and its seal, never hold it
         config = {**config, "blind_salt": salt}
     # the set's directory holds every task's hidden tests: no agent may read it (replay_eval.protected_paths adds the rest)

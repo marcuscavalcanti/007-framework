@@ -741,7 +741,7 @@ class LabEndToEnd(unittest.TestCase):
         lab.mine(self.config, out, 2)
         path, results = out / "replay-set.json", self.root / "results"
         lab.sensitivity(path, 2)
-        with mock.patch.object(lab.secrets, "token_hex", return_value=None):
+        with mock.patch.object(lab.replay_eval, "unique_salt", return_value=None):
             self.assertIsNone(lab.run(path, results, replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1)["stop"])
         sealed = results / "run-manifest.json"
         old = sealed.read_bytes()

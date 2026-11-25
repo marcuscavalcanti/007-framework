@@ -35,6 +35,19 @@ with open(stream, "w") as handle:
         handle.write(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": block["id"], "content": out}]}}) + "\\n")
 """ + FAKE_AGENT
 
+# Review #11: an agent that tampers with where its controller promotes its artifacts. `mode` and `path` come after {stream_copy}:
+# planted, a clean-looking stream at the cell's own final name (path) and no fresh one; symlink, its stream a link to a clean file
+# outside the results (path) while it reads the run.
+TAMPER_AGENT = """import json, os, sys
+stream, mode, path = sys.argv[7:10]
+clean = json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "x"}}]}}) + "\\n"
+if mode == "planted":
+    open(path, "w").write(clean)
+elif mode == "symlink":
+    open(path, "w").write(clean)
+    os.symlink(path, stream)
+""" + FAKE_AGENT
+
 
 class StreamScan(unittest.TestCase):
     """The detector alone, on synthetic Claude and Codex streams."""
@@ -278,6 +291,59 @@ class LabIsolation(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "inside a protected path"):
                 replay_eval.execute_cell(config, config["tasks"][0], "high", 1, output, 60)
         self.assertEqual([p.name for p in output.iterdir()], [])
+
+    def tamper(self, mode, path):
+        """One blinded cell run by TAMPER_AGENT through execute_cell: (output directory, cell id, the call's outcome)."""
+        config = json.loads(self.mined().read_text())
+        config.update(blind_salt="0" * 32, agent_command=[sys.executable, "-I", str(self.root / "tamper.py"), "{cwd}", "{runner_receipt}",
+                                                          "{effort}", "{prompt_file}", GOOD, PARTIAL, "{stream_copy}", mode, str(path)])
+        (self.root / "tamper.py").write_text(TAMPER_AGENT)
+        output = self.root / f"out-{mode}"
+        output.mkdir(exist_ok=True)
+        task = config["tasks"][0]
+        try:
+            return output, replay_eval.cell_id(task, "high", 1), replay_eval.execute_cell(config, task, "high", 1, output, 60)
+        except RuntimeError as error:
+            return output, replay_eval.cell_id(task, "high", 1), error
+
+    def test_promotion_never_replaces_follows_a_link_or_scans_another_attempts_stream(self):
+        """Review #11: in token mode the stream's final name was not checked before the agent's files were renamed onto it, a
+        staged symlink was promoted and followed, and with no fresh stream a file already at the final name was scanned."""
+        config = json.loads(self.mined().read_text())
+        cid = replay_eval.cell_id(config["tasks"][0], "high", 1)
+        output, _, planted = self.tamper("planted", self.root / "out-planted" / f"{cid}.stream.jsonl")
+        self.assertIsInstance(planted, RuntimeError)  # a file this attempt did not create is never read as its stream
+        self.assertIn("appeared", str(planted))
+        self.assertFalse((output / f"{cid}.json").exists())
+        outside = self.root / "outside.jsonl"
+        output, _, linked = self.tamper("symlink", outside)
+        self.assertIsInstance(linked, RuntimeError)
+        self.assertIn("not a regular file", str(linked))
+        self.assertFalse((output / f"{cid}.stream.jsonl").is_symlink())
+        self.assertTrue(outside.is_file())  # the link is dropped, never its target
+        # a `.blind` that is a link would send every agent's files elsewhere: refused before the agent runs
+        output = self.root / "out-linked-blind"
+        output.mkdir()
+        (self.root / "elsewhere").mkdir()
+        (output / ".blind").symlink_to(self.root / "elsewhere")
+        config.update(blind_salt="0" * 32)
+        with self.assertRaisesRegex(RuntimeError, "not a directory"):
+            replay_eval.execute_cell(config, config["tasks"][0], "high", 1, output, 60)
+        self.assertEqual(list((self.root / "elsewhere").iterdir()), [])
+        # an honest agent still promotes both files, and its own stream is the one scanned
+        output, _, row = self.tamper("honest", self.root / "unused")
+        self.assertEqual(row["contamination"]["status"], "unscanned")  # TAMPER_AGENT writes no stream when honest
+        self.assertTrue((output / f"{cid}.runner.json").is_file())
+        self.assertEqual(replay_eval.blind_files(output), [])
+
+    def test_a_sealed_salt_whose_tokens_collide_stops_before_any_dispatch(self):
+        path, results = self.mined(), self.root / "results"
+        self.assertIsNone(self.run_lab(path, results, replicates=1)["stop"])
+        with mock.patch.object(replay_eval, "blind_token", return_value="0" * 16):  # every cell, one staging name
+            state = self.run_lab(path, results, replicates=2)
+        self.assertEqual((state["stop"], state["calls"]), ("blind-token-collision", 0))
+        with mock.patch.object(replay_eval, "blind_token", return_value="0" * 16), self.assertRaisesRegex(ValueError, "own token"):
+            replay_eval.unique_salt(["a", "b"])
 
     def test_an_orphan_blind_receipt_is_counted_named_and_stops_a_resume(self):
         path, results = self.mined(), self.root / "results"

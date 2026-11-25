@@ -107,7 +107,10 @@ schemas, and the dashboard snapshot.
   on any verdict was not measured. Since 1.11.0, `run` seals a random `blind_salt` in `run-manifest.json`. Each cell gets a token,
   sixteen digits of a salted SHA-256 of its id, and its agent sees only that token:
   - the workspace is `007-<token>-<random>`;
-  - the receipt and stream copy are written under `--out/.blind/` and renamed to the cell's own names once the agent exits;
+  - the receipt and stream copy are written under `--out/.blind/` and given the cell's own names once the agent exits, relative to
+    directories opened before the agent ran, never through a link and never over an existing file; a file at the cell's own
+    name that the attempt did not create, a staged link or a `.blind` that is a link fails the cell, and only the stream this
+    attempt promoted is scanned. A salt whose tokens collide is never used (`blind-token-collision` on a resume);
   - the grading directory is `007-acceptance-<token>-<random>`.
 
   The A/A copy and stage-2 cells get tokens like any other cell. Results, `report` and `chain` keep the real arm names
