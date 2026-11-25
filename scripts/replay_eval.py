@@ -23,7 +23,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -735,25 +735,76 @@ def _exists(name, directory_fd):
         return False
 
 
-def _promote(source_fd, name, target_fd, final):
-    """Give this attempt's file `name` (in source_fd) its final name in target_fd: never through a link and never over a file
-    that is already there. (st_dev, st_ino) of the promoted file, or None when the agent left none. A link is removed (the link
-    only, never its target) and the cell fails."""
+def _open_staged(source_fd, name):
+    """This attempt's file `name` in the pinned directory, opened without following a link: a descriptor of a regular file, or
+    None when the agent left none. A link is removed (the link only, never its target) and the cell fails."""
     try:
-        info = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
     except FileNotFoundError:
         return None
-    if not stat.S_ISREG(info.st_mode):
+    except OSError:  # ELOOP: a link where the file should be
+        info = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
         if stat.S_ISLNK(info.st_mode):
             os.unlink(name, dir_fd=source_fd)
+        raise RuntimeError(f"runner artifact is not a regular file: {name}") from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
         raise RuntimeError(f"runner artifact is not a regular file: {name}")
+    return fd
+
+
+def _publish(source_fd, name, fd, target_fd, final):
+    """Give the opened file `fd` (staged as `name`) its final name in target_fd, never over a file already there, and check
+    that the published name is that very file; a mismatch fails the cell. The descriptor is what the controller then reads."""
     if source_fd != target_fd or name != final:
-        try:
-            os.link(name, final, src_dir_fd=source_fd, dst_dir_fd=target_fd, follow_symlinks=False)
-        except FileExistsError:
-            raise RuntimeError(f"replay output appeared during the attempt: {final}") from None
+        os.link(name, final, src_dir_fd=source_fd, dst_dir_fd=target_fd, follow_symlinks=False)  # FileExistsError: never replaced
         os.unlink(name, dir_fd=source_fd)
-    return info.st_dev, info.st_ino
+    opened, named = os.fstat(fd), os.stat(final, dir_fd=target_fd, follow_symlinks=False)
+    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+        raise RuntimeError(f"published artifact identity does not match the file read: {final}")
+
+
+def _promote_all(staged, source_fd, target_fd):
+    """{final: descriptor or None}: every staged artifact opened first, then published one by one. A failure once one is
+    published is a partial publication, named; what was published stays (a paid receipt is counted as an orphan)."""
+    opened, published = {}, []
+    try:
+        for path, final in staged.items():
+            opened[final] = _open_staged(source_fd, path.name)
+        for path, final in staged.items():
+            if opened[final] is None:
+                continue
+            try:
+                _publish(source_fd, path.name, opened[final], target_fd, final.name)
+            except FileExistsError:
+                raise RuntimeError((f"partial publication: {', '.join(published)} published, " if published else "")
+                                   + f"replay output appeared during the attempt: {final.name}") from None
+            except OSError as error:
+                raise RuntimeError(f"partial publication: {', '.join(published) or 'nothing'} published, {final.name} not "
+                                   f"({type(error).__name__})") from None
+            published.append(final.name)
+    except BaseException:
+        for fd in opened.values():
+            if fd is not None:
+                os.close(fd)
+        raise
+    return opened
+
+
+MAX_RECEIPT_BYTES = 16 * 1024 * 1024
+
+
+def _read_fd(fd, limit):
+    os.lseek(fd, 0, os.SEEK_SET)
+    data = os.read(fd, limit + 1)
+    chunks = [data]
+    while data and sum(map(len, chunks)) <= limit:
+        data = os.read(fd, limit + 1)
+        chunks.append(data)
+    payload = b"".join(chunks)
+    if len(payload) > limit:
+        raise RuntimeError("runner receipt is too large")
+    return payload
 
 
 def blind_files(directory):
@@ -905,14 +956,14 @@ def scan_stream(stream, protected, workspace):
     script that computes it) or a read by a program the agent started is invisible to it. `clean` needs every line read: a stream
     with no readable line is `unscanned` (`empty-stream`), and one with an unreadable line (torn, too long, too deep) and no hit is
     `incomplete`."""
-    if stream is None or not Path(stream).is_file():
+    if stream is None or not hasattr(stream, "readline") and not Path(stream).is_file():
         return {"status": "unscanned", "reason": "no-retained-stream"}
     # as text: not inside a longer path (`/a/x/out` is not `/x/out`), and ending at a separator, `/` or the end
     roots = [(label, variant, re.compile(r"(?<![\w.~-])" + re.escape(variant) + r"(?![^/\s'\"`=;|&<>(),{}\[\]])"))
              for label, path in protected for variant in sorted(_path_variants(path))]
     home = str(Path.home())
     calls, hits, unparsed, parsed = set(), {}, 0, 0
-    with open(stream, "rb") as handle:
+    with (nullcontext(stream) if hasattr(stream, "readline") else open(stream, "rb")) as handle:
         for line, whole in _stream_lines(handle):
             if whole and not line.strip():
                 continue
@@ -1078,7 +1129,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
         # held while the agent runs: what it leaves is promoted relative to these, never through a link it put in their place
         target_fd = _open_directory(output_dir)
         source_fd = _open_directory(output_dir / BLIND_DIR) if token else target_fd
-        promoted = {}
+        promoted, receipt_bytes = {}, None
         started = time.monotonic()
         cleanup_failure = None
         agent_output = "unavailable"
@@ -1097,20 +1148,31 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
                 for path, final in staged.items():
                     if path != final and _exists(final.name, target_fd):  # not this attempt's: never replaced, never read
                         raise RuntimeError(f"replay output appeared during the attempt: {final}")
-                for path, final in staged.items():
-                    promoted[final] = _promote(source_fd, path.name, target_fd, final.name)
+                promoted = _promote_all(staged, source_fd, target_fd)
             finally:
                 for fd in {source_fd, target_fd}:
                     os.close(fd)
         agent_wall_s = round(time.monotonic() - started, 2)  # r46: the agent alone; wall_s also spans grading
         prompt.unlink(missing_ok=True)
-        try:  # a cell whose agent touched a protected path is invalid, whatever it produced; only this attempt's own stream is read
+        # the receipt and the stream are read, hashed and scanned from the files opened in the pinned directories: the same bytes
+        try:
+            if promoted.get(runner_receipt) is not None:
+                receipt_bytes = _read_fd(promoted[runner_receipt], MAX_RECEIPT_BYTES)
             mine = promoted.get(stream_copy)
-            info = os.stat(stream_copy, follow_symlinks=False) if mine else None
-            contamination = scan_stream(stream_copy if info and (info.st_dev, info.st_ino) == mine and stat.S_ISREG(info.st_mode) else None,
-                                        protected, str(workspace))
-        except OSError:
-            contamination = {"status": "unscanned", "reason": "stream-unreadable"}
+            if mine is None:  # a command that names {stream_copy} expected one: said so, not a silent unscanned
+                expected = any("{stream_copy}" in part for part in config["agent_command"])
+                contamination = {"status": "unscanned", "reason": "stream-missing" if expected else "no-retained-stream"}
+            else:
+                try:  # a cell whose agent touched a protected path is invalid, whatever it produced
+                    os.lseek(mine, 0, os.SEEK_SET)
+                    with os.fdopen(os.dup(mine), "rb") as handle:
+                        contamination = scan_stream(handle, protected, str(workspace))
+                except OSError:
+                    contamination = {"status": "unscanned", "reason": "stream-unreadable"}
+        finally:
+            for fd in promoted.values():
+                if fd is not None:
+                    os.close(fd)
         if dropped:
             contamination["protection_dropped"] = sorted(set(dropped))
         # An unconfirmed cleanup invalidates the cell and skips acceptance entirely.
@@ -1141,8 +1203,8 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             except (OSError, ValueError, RuntimeError) as exc:
                 hidden_failure = f"hidden-acceptance-{type(exc).__name__.lower()}"
         try:
-            runner_value = json.loads(runner_receipt.read_text()) if runner_receipt.is_file() else None
-        except json.JSONDecodeError:
+            runner_value = json.loads(receipt_bytes) if receipt_bytes is not None else None
+        except (ValueError, UnicodeDecodeError):
             runner_value = {}
         identity, identity_failure = (
             validate_served_identity(runner_value, policy, unavailable_map, requested_only=identity_mode == "requested-only")
@@ -1176,10 +1238,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             "served_effort": identity["effort"] if identity else "unmeasured",
             "identity_source": identity["identity_source"] if identity else "unmeasured",
             "identity_source_sha256": identity["source_sha256"] if identity else "unmeasured",
-            "runner_receipt_sha256": (
-                hashlib.sha256(runner_receipt.read_bytes()).hexdigest()
-                if runner_receipt.is_file() else "unmeasured"
-            ),
+            "runner_receipt_sha256": hashlib.sha256(receipt_bytes).hexdigest() if receipt_bytes is not None else "unmeasured",
             "usage": usage if usage is not None else "unmeasured",
             "tokens": usage.get("total_tokens", "unmeasured") if isinstance(usage, dict) else "unmeasured",
             "cost_usd": identity["cost_usd"] if identity else "unmeasured",
@@ -1204,7 +1263,7 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
             "diagnostic_text_retained": retain_text,
             **({"blind_token": token} if token else {}),
             # the stream this attempt left, by the name it has beside the cell; the receipt, kept byte for byte, names the token's
-            **({"stream_copy": stream_copy.name} if promoted.get(stream_copy) else {}),
+            **({"stream_copy": stream_copy.name} if promoted.get(stream_copy) is not None else {}),
             "read_isolation": isolation,  # what the set asked the CLI to enforce; `unenforced` when it asked nothing
             "contamination": contamination,
         }

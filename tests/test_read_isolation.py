@@ -352,9 +352,46 @@ class LabIsolation(unittest.TestCase):
         self.assertEqual(list((self.root / "elsewhere").iterdir()), [])
         # an honest agent still promotes both files, and its own stream is the one scanned
         output, _, row = self.tamper("honest", self.root / "unused")
-        self.assertEqual(row["contamination"]["status"], "unscanned")  # TAMPER_AGENT writes no stream when honest
+        # TAMPER_AGENT writes no stream when honest, though its command names {stream_copy}: said so, never a silent unscanned
+        self.assertEqual((row["contamination"]["status"], row["contamination"]["reason"]), ("unscanned", "stream-missing"))
         self.assertTrue((output / f"{cid}.runner.json").is_file())
         self.assertEqual(replay_eval.blind_files(output), [])
+
+    def blinded(self, name):
+        config = json.loads(self.mined().read_text())
+        config["blind_salt"] = "0" * 32
+        output = self.root / name
+        output.mkdir()
+        return config, config["tasks"][0], output
+
+    def test_a_published_stream_that_is_not_the_one_read_fails_the_cell(self):
+        """Review r2 N1: after promotion the stream was read again by its name, and a mismatch read as a silent `unscanned`. The
+        controller now reads, hashes and scans the very file it opened in the pinned directory, and a name that no longer points
+        to it fails the cell."""
+        config, task, output = self.blinded("swapped")
+        real = os.link
+
+        def link_then_swap(src, dst, **kwargs):
+            real(src, dst, **kwargs)
+            if str(dst).endswith(".stream.jsonl"):  # whatever replaces the published name after the link
+                (output / "other").write_text("")
+                os.replace(output / "other", output / dst)
+        with mock.patch.object(replay_eval.os, "link", side_effect=link_then_swap), self.assertRaisesRegex(RuntimeError, "identity"):
+            replay_eval.execute_cell(config, task, "high", 1, output, 60)
+
+    def test_a_partial_publication_fails_the_cell_and_says_what_was_published(self):
+        config, task, output = self.blinded("partial")
+        real = os.link
+
+        def stream_collides(src, dst, **kwargs):
+            if str(dst).endswith(".stream.jsonl"):
+                raise FileExistsError(dst)
+            return real(src, dst, **kwargs)
+        with mock.patch.object(replay_eval.os, "link", side_effect=stream_collides), self.assertRaisesRegex(RuntimeError, "partial publication"):
+            replay_eval.execute_cell(config, task, "high", 1, output, 60)
+        cid = replay_eval.cell_id(task, "high", 1)
+        self.assertTrue((output / f"{cid}.runner.json").is_file())  # the paid receipt stays: an orphan report and resume count
+        self.assertFalse((output / f"{cid}.json").exists())
 
     def test_a_sealed_salt_whose_tokens_collide_stops_before_any_dispatch(self):
         path, results = self.mined(), self.root / "results"

@@ -103,7 +103,13 @@ stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `
 (`<task>-r01-<arm>.runner.json`). It finds them relative to directories it opened before the agent started, never through a link,
 and never over a file already there: a file at a cell's own name that this attempt did not create, a staged file that is a link
 or not a regular file, or a `.blind` that is not a directory of its own fails the cell (a link is removed, never its target), and
-only the stream this attempt promoted is scanned for contamination. Before the first dispatch the salt is checked to give every
+only the stream this attempt promoted is scanned for contamination. The controller opens each staged file without following a link
+before publishing it, publishes it without replacing anything, checks that the published name is the file it opened (a mismatch
+fails the cell), and reads, hashes and scans those opened files, so the receipt digest, the parsed receipt and the scanned stream
+are the same bytes. A failure after one file was published fails the cell as a partial publication and names what was published;
+a published receipt stays, counted as an orphan. A command that names `{stream_copy}` but leaves no stream records
+`unscanned` with reason `stream-missing`. Threat model: this guards against collisions and accidents, not against a process with
+the user's authority that swaps files during the promotion; 007 runs as the user and isolates nothing (`SECURITY.md`). Before the first dispatch the salt is checked to give every
 planned cell its own token; a sealed salt whose tokens collide stops a resume with `blind-token-collision`. Results, `dispatch.jsonl`, `report` and `chain` therefore keep the real arm names (`status`
 pools every cell and names no arm), and each cell records its `blind_token`. The receipt is kept byte for byte, so its `stream_copy` field names
 `<token>.stream.jsonl`; the cell records `stream_copy` too, the name the stream has beside it once promoted. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`

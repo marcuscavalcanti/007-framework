@@ -329,6 +329,10 @@ directories request owner-only permissions. Existing host permissions govern exi
 - Read isolation in the lab (since 1.11.0) is opt-in: without the `{read_isolation_…}` placeholders in its agent command a
   cell records `unenforced`. The generated Claude and Codex rules were not checked against a running CLI. Detection needs a
   retained stream and sees only logged tool calls. Full isolation needs an OS sandbox, which 007 does not provide.
+- Blind promotion (since 1.11.0) gives an agent's receipt and stream their cell names without following a link or replacing a
+  file, and reads, hashes and scans the very files it opened. It guards against collisions and accidents, not against a
+  process running with your authority that swaps files during the promotion: 007 runs as you and isolates nothing
+  ([SECURITY.md](SECURITY.md)).
 
 Details: [PRIVACY.md](PRIVACY.md). Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
