@@ -65,8 +65,9 @@ schemas, and the dashboard snapshot.
     the declared margin's share), and any exit outside `lab_accept`'s contract.
 
   The 17 and 44 thresholds are where an honest oracle at the verdict's own acceptance gates (25% and 90%) gives one outcome less
-  than 1% of the time, taking graded cells as independent. `lab_accept`'s exit contract is read only for tasks that use it; a
-  task with its own grader command errs or times out only as the controller recorded, and any other exit rejects. `status` is read only: it exits 3 when it cannot read a stable snapshot of the
+  than 1% of the time, taking graded cells as independent. `lab_accept`'s exit contract is read only for tasks that declare it or
+  run its exact invocation; a task with its own grader command, an unknown declared contract or a task the set does not list
+  (counted in `contracts`) errs or times out only as the controller recorded, and any other exit rejects. `status` is read only: it exits 3 when it cannot read a stable snapshot of the
   results (every cell artifact and `.blind/` file unchanged across the read, three tries), else 1 while an alarm is open. `report`
   adds the same block, `oracle_health`, with a per-arm breakdown. An alarm never changes a verdict: it marks the run
   `oracle-suspect`. The printed verdict gains `oracle_status` and `oracle_suspect`, and `report.md` opens with a notice while the

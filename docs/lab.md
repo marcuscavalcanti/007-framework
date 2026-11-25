@@ -253,8 +253,11 @@ Each cell falls in one class. Classes are read from the grader's exits and never
 | `accepted`, `rejected` | a valid cell graded 0, or 1 with its report |
 | `unrecorded` | a valid cell that records no grader exit (cells from before the field, or an empty acceptance list) |
 
-These exit readings are `lab_accept`'s contract. They apply to tasks that declare `acceptance_exit_contract: "lab-accept-v1"`
-or run `lab_accept.py`, and to cells of tasks the set does not list. A task with its own grader command reads differently: it is
+These exit readings are `lab_accept`'s contract. They apply to tasks that declare `acceptance_exit_contract: "lab-accept-v1"`,
+or whose only acceptance command is `lab_accept`'s exact invocation as `mine` writes it (any interpreter, then `-I -B
+.007-accept/lab_accept.py .007-accept/lab.json .007-accept/hidden.json .007-accept/baseline.json`); a command that merely
+mentions the file does not count. A declared contract 007 does not know, and a cell of a task the set does not list, read
+`unknown`; `contracts` counts the cells of each. A task with its own grader command, or an unknown contract, reads differently: it is
 an `oracle-error` or `timeout` only when the controller recorded the grader failing or timing out (`acceptance-harness-error`,
 `hidden-acceptance-*`, `acceptance-timeout`), any exit other than 0 is a rejection, and no exit breaks the contract.
 

@@ -2502,18 +2502,26 @@ class OracleHealth(unittest.TestCase):
         custom = [graded(f"C{i}", "xhigh", 1, 1, report=False) for i in range(4)] + [graded(f"D{i}", "xhigh", 1, 3, report=False) for i in range(4)]
         rows = self.mixed(30, 30) + custom + [{**graded("Z", "xhigh", 1, 0), "acceptance": []}]
         ids = {r["task"] for r in custom}
-        health = lab.oracle_health(rows, .03, custom=ids)
+        health = lab.oracle_health(rows, .03, contracts={**{r["task"]: "lab-accept-v1" for r in rows}, **dict.fromkeys(ids, "custom")})
         self.assertEqual((health["alarms"], health["classes"]["rejected"], health["classes"]["unrecorded"]), ([], 38, 1))
         self.assertEqual(health["classes"]["oracle-error"] + health["classes"]["timeout"], 0)
         lab_rows = lab.oracle_health(rows, .03)  # the same cells under lab_accept's contract: crashes and timeouts
         self.assertEqual((lab_rows["classes"]["oracle-error"], lab_rows["classes"]["timeout"]), (4, 4))
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            tasks = [{"id": "L", "acceptance": [["python3", ".007-accept/lab_accept.py"]]}, {"id": "K", "acceptance_exit_contract": "lab-accept-v1",
-                     "acceptance": [["x"]]}, {"id": "C", "acceptance": [["make", "check"]]}]
+            exact = ["/any/python3", "-I", "-B", ".007-accept/lab_accept.py", ".007-accept/lab.json", ".007-accept/hidden.json", ".007-accept/baseline.json"]
+            # review r2 N8: a command that merely mentions lab_accept.py is no lab_accept invocation; an undeclared contract is unknown
+            tasks = [{"id": "L", "acceptance": [exact]}, {"id": "K", "acceptance_exit_contract": "lab-accept-v1", "acceptance": [["x"]]},
+                     {"id": "C", "acceptance": [["make", "check"]]}, {"id": "M", "acceptance": [["make", "check", "NOTE=lab_accept.py"]]},
+                     {"id": "U", "acceptance_exit_contract": "other-v9", "acceptance": [["x"]]}]
             (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh"}, "tasks": tasks}))
             (root / "sensitivity.json").write_text(json.dumps({"conformant": ["L", "C", "OTHER", "OTHER"]}))
-            self.assertEqual(lab.custom_graders(json.loads((root / "set.json").read_text())), {"C"})
+            self.assertEqual(lab.grader_contracts(json.loads((root / "set.json").read_text())),
+                             {"L": "lab-accept-v1", "K": "lab-accept-v1", "C": "custom", "M": "custom", "U": "unknown"})
+            crash = [graded("M", "xhigh", 1, 1, report=False), graded("NOT-IN-SET", "xhigh", 1, 1, report=False)]
+            health = lab._oracle_state(root / "set.json", crash, .03)
+            self.assertEqual((health["classes"]["oracle-error"], health["classes"]["rejected"]), (0, 2))
+            self.assertEqual(health["contracts"], {"custom": 1, "unknown": 1})
             health = lab._oracle_state(root / "set.json", [], .03)
             self.assertEqual(health["reference_controls_passed"], 2)
 

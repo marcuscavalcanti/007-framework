@@ -2538,12 +2538,22 @@ def _exits(row):
     return [c.get("exit") for c in checks if isinstance(c, dict)] if isinstance(checks, list) else []
 
 
-def custom_graders(config):
-    """The set's tasks whose grader is not lab_accept: no `lab-accept-v1` contract and no `lab_accept.py` in their acceptance
-    command. Their exits mean what their own command means, so lab_accept's exit contract is not applied to them."""
-    lab_accept = lambda task: task.get("acceptance_exit_contract") == replay_eval.LAB_ACCEPT_EXIT_CONTRACT or any(
-        "lab_accept.py" in str(part) for command in (task.get("acceptance") or []) if isinstance(command, list) for part in command)
-    return {task["id"] for task in config.get("tasks", []) if isinstance(task, dict) and "id" in task and not lab_accept(task)}
+LAB_ACCEPT_ARGS = ["-I", "-B", f"{ACCEPT}/lab_accept.py", f"{ACCEPT}/lab.json", f"{ACCEPT}/hidden.json", f"{ACCEPT}/baseline.json"]
+
+
+def grader_contracts(config):
+    """{task: contract} of the set's tasks: `lab-accept-v1` when declared, or when the task's only acceptance command is
+    lab_accept's exact invocation as `mine` writes it (any interpreter, these arguments); `custom` for any other grader; `unknown`
+    for a declared contract 007 does not know. A cell of a task the set does not list reads `unknown` too."""
+    out = {}
+    for task in config.get("tasks", []):
+        if not isinstance(task, dict) or "id" not in task:
+            continue
+        declared, commands = task.get("acceptance_exit_contract"), task.get("acceptance")
+        exact = isinstance(commands, list) and len(commands) == 1 and isinstance(commands[0], list) and commands[0][1:] == LAB_ACCEPT_ARGS
+        out[task["id"]] = (replay_eval.LAB_ACCEPT_EXIT_CONTRACT if declared == replay_eval.LAB_ACCEPT_EXIT_CONTRACT or declared is None and exact
+                           else "custom" if declared is None else "unknown")
+    return out
 
 
 def oracle_class(row, custom=False):
@@ -2573,25 +2583,33 @@ def _off_contract(row, custom=False):
         exits and row.get("valid") is True and bool(row.get("accepted")) != all(e == 0 for e in exits))
 
 
-def _oracle_counts(rows, custom=frozenset()):
-    classes, exits = dict.fromkeys(ORACLE_CLASSES, 0), {}
+def _contract(row, contracts):
+    return replay_eval.LAB_ACCEPT_EXIT_CONTRACT if contracts is None else contracts.get(row.get("task"), "unknown")
+
+
+def _oracle_counts(rows, contracts=None):
+    """`contracts` ({task: contract}, grader_contracts): only `lab-accept-v1` tasks are read under lab_accept's exit contract;
+    `custom` and `unknown` ones are not, and the counts say how many cells each contract had. None: every cell is lab_accept's."""
+    classes, exits, kinds = dict.fromkeys(ORACLE_CLASSES, 0), {}, {}
     for row in rows:
-        classes[oracle_class(row, row.get("task") in custom)] += 1
+        kind = _contract(row, contracts)
+        kinds[kind] = kinds.get(kind, 0) + 1
+        classes[oracle_class(row, kind != replay_eval.LAB_ACCEPT_EXIT_CONTRACT)] += 1
         for code in _exits(row):  # a number, or one bucket: an exit written as text could name anything
             key = str(code) if type(code) is int else "non-integer"
             exits[key] = exits.get(key, 0) + 1
-    return {"cells": len(rows), "classes": classes, "exit_codes": dict(sorted(exits.items())),
-            "contract_violations": sum(_off_contract(r, r.get("task") in custom) for r in rows)}
+    return {"cells": len(rows), "classes": classes, "exit_codes": dict(sorted(exits.items())), "contracts": dict(sorted(kinds.items())),
+            "contract_violations": sum(_off_contract(r, _contract(r, contracts) != replay_eval.LAB_ACCEPT_EXIT_CONTRACT) for r in rows)}
 
 
-def oracle_health(rows, margin, controls=None, custom=frozenset()):
+def oracle_health(rows, margin, controls=None, contracts=None):
     """The grader's health pooled over `rows`: counts only, no arm, task or cell. Alarms (ORACLE_THRESHOLDS): no acceptance
     after `zero_accepted_after` graded cells, every graded cell accepted after `all_accepted_after`, grader errors or timeouts at
     `min_count` or more and above the declared margin's share (alone they could move one arm by more than the margin), and any
-    exit outside the contract (lab_accept's tasks only; `custom` names the others). An alarm never changes a verdict. `controls`:
+    exit outside the contract (lab_accept's tasks only; `contracts` maps each task, see _oracle_counts). An alarm never changes a verdict. `controls`:
     the set's tasks whose reference control passed. The 1% thresholds take graded cells as independent; repeated attempts on one
     task are not."""
-    counts = _oracle_counts(rows, custom)
+    counts = _oracle_counts(rows, contracts)
     c, t = counts["classes"], ORACLE_THRESHOLDS
     graded = c["accepted"] + c["rejected"] + c["timeout"]
     alarms = [name for name, ringing in (
@@ -2618,8 +2636,7 @@ def _oracle_state(config_path, rows, margin):
         controls = len({c for c in conformant if isinstance(c, str)} & ids) if isinstance(conformant, list) else None
     except (OSError, ValueError, AttributeError):
         controls = None
-    custom = custom_graders(config)
-    return oracle_health(rows, margin, controls, custom)
+    return oracle_health(rows, margin, controls, grader_contracts(config))
 
 
 def blind_orphans(config, results, rows, planned_replicates=None):
@@ -2861,8 +2878,8 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     tier["aa_qualified"] = tier["aa_status"] == "qualified"  # never without A/A cells
     # pooled over every cell, copies included; per arm only here, where the report already shows each arm's acceptance
     oracle = _oracle_state(config_path, cells, margin)
-    custom = custom_graders(config)
-    oracle["per_arm"] = {arm: _oracle_counts([r for r in cells if r.get("arm") == arm], custom) for arm in sorted({r.get("arm") for r in cells})}
+    contracts = grader_contracts(config)
+    oracle["per_arm"] = {arm: _oracle_counts([r for r in cells if r.get("arm") == arm], contracts) for arm in sorted({r.get("arm") for r in cells})}
     tier["oracle_status"] = oracle["status"]
     tier["oracle_suspect"] = oracle["status"] == "oracle-suspect"  # the verdict's values stand; its label is not clean
     guard = None
