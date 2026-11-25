@@ -674,6 +674,13 @@ class LabEndToEnd(unittest.TestCase):
         self.assertIn("- **A/A, `high` twice:** not A/A-qualified: fewer than 8 tasks", text)
         self.assertIn(f"acceptance differs in 0 of {2 * tasks} pairs", text)
         self.assertIn(f"- **Cells, `high-aa`:** {2 * tasks} planned", text)
+        # a third replicate planned and never dispatched: its pairs are missing, not absent from the count (review #5)
+        planned = lab.report(path, twin, None, planned_replicates=3)["aa"]
+        self.assertEqual((planned["discordance"]["pairs"], planned["discordance"]["missing_pairs"]), (2 * tasks, tasks))
+        self.assertEqual(len(planned["missing_cells"]["absent"]), 2 * tasks)
+        self.assertEqual((planned["planned_replicates"], with_["aa"]["planned_replicates"]), (3, None))
+        with self.assertRaisesRegex(ValueError, "beyond the 1 planned"):
+            lab.report(path, twin, None, planned_replicates=1)
         chained = lab.chain(path, twin, self.root / "stage2-twin")  # the copies are no part of the contrast stage 2 serves
         self.assertEqual((chained["tasks"], chained["aa_not_chained"]), (4 * tasks, 2 * tasks))
         self.assertNotIn("aa_not_chained", lab.chain(path, plain, self.root / "stage2-plain"))
@@ -2074,10 +2081,41 @@ class AA(unittest.TestCase):
             (root / "tasks" / f"T{i}" / "hidden.json").write_text(json.dumps(["__module__", "a", "b", "c", "d"]))
             (root / "tasks" / f"T{i}" / "baseline.json").write_text(json.dumps(["a"]))
 
-    def check(self, root, cells, tasks=10, replicates=2):
+    def check(self, root, cells, tasks=10, replicates=2, **options):
         with mock.patch.dict(lab.GATES, {"draws": 300}):
             return lab.aa_check(cells, root / "tasks", {"arm": "xhigh", "label": "xhigh-aa"}, .03, 7, True,
-                                [f"T{i}" for i in range(tasks)], replicates)
+                                [f"T{i}" for i in range(tasks)], replicates, **options)
+
+    def test_qualification_needs_usable_matched_pairs_and_the_plan(self):
+        """Review #5: the equality statistic pools valid cells per task, so originals at replicate 1 and copies at replicate 2
+        alone gave a clean interval with no matched pair at all, and qualified."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 10)
+            base = [self.accepted(cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"} if (i + rep) % 3 else {"a", "b"})) for i in range(10) for rep in (1, 2)]
+            split = [r for r in base if r["replicate"] == 1] + [{**r, "arm": "xhigh-aa"} for r in base if r["replicate"] == 2]
+            out = self.check(root, split)
+            self.assertEqual((out["discordance"]["pairs"], out["discordance"]["missing_pairs"]), (0, 20))
+            self.assertEqual((out["status"], out["rejects_equality"]), ("too-few-tasks", False))
+            self.assertIn("matched pair", lab.aa_line(out, .03))
+            # the statistic itself is the verdict's own, unchanged: valid cells per task, A against A
+            self.assertEqual(out["reachable_behaviour"]["tasks"], 10)
+            # without the run's planned replicates, trailing undispatched copies cannot be counted: never qualified
+            twins = base + [{**r, "arm": "xhigh-aa"} for r in base]
+            unplanned = self.check(root, twins, planned=False)
+            self.assertEqual((unplanned["status"], unplanned["discordance"]["pairs"]), ("plan-unknown", 20))
+            self.assertIn("report --replicates", lab.aa_line(unplanned, .03))
+            self.assertEqual(self.check(root, twins)["status"], "qualified")
+
+    def test_a_copy_set_aside_under_refused_reads_refused_not_absent(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 10)
+            base = [self.accepted(cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"})) for i in range(10) for rep in (1, 2)]
+            twins = [{**r, "arm": "xhigh-aa"} for r in base if (r["task"], r["replicate"]) != ("T0", 1)]
+            out = self.check(root, base + twins, archived={"T0-r01-xhigh-aa"})
+            self.assertEqual(out["missing_cells"], {"refused": ["T0-r01-xhigh-aa"]})
+            self.assertIn("independent", out["discordance"]["ci95_assumes"])
 
     @staticmethod
     def accepted(row):

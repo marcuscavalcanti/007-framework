@@ -43,7 +43,10 @@ schemas, and the dashboard snapshot.
   - `rejects_equality` when its 95% interval excludes zero.
 
   The printed verdict gains `aa_status` and `aa_qualified`. `aa_qualified` is false whenever there are no A/A cells, and
-  `report.md` then says the verdict carries no measured noise floor. Reports of runs without `--aa` keep every earlier field and
+  `report.md` then says the verdict carries no measured noise floor. It also needs at least 8 tasks with a usable matched pair
+  and the run's planned replicates (`report --replicates N`, now accepted without `--missing-data-guard`), so replicates never
+  dispatched count as missing pairs; without them the status is `too-few-tasks` or `plan-unknown`. A copy set aside under
+  `refused/` reads `refused`, and the discordance interval states that it takes pooled pairs as independent. Reports of runs without `--aa` keep every earlier field and
   value. See [the lab guide](docs/lab.md#the-aa-check-run---aa-arm).
 - `007 lab status --set S --results R` shows the grader's health while a run is in flight. A 2026-11-15 study went 0/124 with no
   alarm because its grader crashed with exit 1 before writing a report. `status` takes no lock and reveals no verdict. It pools

@@ -60,21 +60,27 @@ Its agent sees a token like every other cell's (see [Blind arms](#blind-arms-wha
 stops with `manifest-mismatch` (`aa`), so the copy is either planned from the first dispatch or not at all. `chain` does not chain
 the copies (`aa_not_chained`).
 
-`report` reads `aa` from the manifest; there is no report option. The verdict reads the set's two arms only, so its value and
+`report` reads `aa` from the manifest. Give it the run's `--replicates` (`report --replicates N`, the plan the run does not
+record) so that replicates never dispatched count as missing pairs; without it the check counts only up to the highest
+replicate a cell reached and cannot qualify. The verdict reads the set's two arms only, so its value and
 statistics are the ones the same cells give without the copy. Next to it, the report's `aa` block gives:
 
 - **Discordance:** pairs (task, replicate) whose whole-change acceptance differs, per task and overall, with a Clopper-Pearson 95%
-  interval, over pairs whose two cells are usable.
+  interval, over pairs whose two cells are usable. The interval pools every pair and takes them as independent
+  (`ci95_assumes`); pairs of one task are not, so with several replicates per task it is narrower than a task-clustered one.
 - **Missing cells:** a pair with an absent, refused, invalid or unreadable cell is counted (`missing_pairs`) and its cells named
-  (`missing_cells`), never as agreement; `worst_case_rate` counts each such pair as discordant.
+  (`missing_cells`), never as agreement; `worst_case_rate` counts each such pair as discordant. A copy set aside under `refused/`
+  by `--requeue-refused` and not yet dispatched again reads `refused`, not `absent`.
 - **The verdict's statistic, A against A:** `reachable_diffs` on the valid cells of ARM and its copy, the 95% t interval, the
   studentized statistic, `proven_critical` and the same-change reading at the declared margin.
 - **The flag:** `rejects_equality` when that 95% interval, the verdict's own level, excludes zero.
 
 The printed verdict carries `aa_status` and `aa_qualified`. `aa_qualified` is true only for `qualified`: A/A cells exist, at least 8
-tasks (the verdict's own minimum) reach new behaviour in ARM and its copy, and the A/A does not reject equality. Otherwise the status
-is `absent` (no A/A cells: a run without `--aa`, or one whose copies never ran), `too-few-tasks` or `rejects-equality`, and
-`report.md` says the verdict is not A/A-qualified. A copy costs one more attempt per task and replicate: half again what the two arms
+tasks (the verdict's own minimum) reach new behaviour in ARM and its copy and have a usable matched pair (`tasks_with_matched_pairs`),
+the A/A does not reject equality, and the planned replicates were given. Otherwise the status is `absent` (no A/A cells: a run
+without `--aa`, or one whose copies never ran), `too-few-tasks`, `rejects-equality` or `plan-unknown` (no `--replicates`), and
+`report.md` says the verdict is not A/A-qualified. The matched-pair condition matters because the statistic pools each task's valid
+cells: originals only at replicate 1 and copies only at replicate 2 give a clean interval with no pair at all. A copy costs one more attempt per task and replicate: half again what the two arms
 cost alone.
 
 `pseudo_aa`, which splits one arm's replicate 1 against its later replicates, stays in the report; it is not this check. Study F's

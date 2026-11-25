@@ -2287,7 +2287,8 @@ def refused_attempts(results, arms):
         except (OSError, ValueError):
             row = None
         if isinstance(row, dict) and row.get("arm") in arms and isinstance(row.get("task"), str):
-            found.append({**row, "cell": f"refused/{match[1]}.{match[2]}", "valid": False, "accepted": False, "failure_class": REFUSED})
+            found.append({**row, "cell": f"refused/{match[1]}.{match[2]}", "attempt_of": match[1], "valid": False, "accepted": False,
+                          "failure_class": REFUSED})
     return found
 
 
@@ -2358,13 +2359,15 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
             "reach_frozen": frozen, "refused": sum(r.get("failure_class") == REFUSED and r["arm"] in (low, ref) for r in charged)}
 
 
-def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates, reach=None):
+def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates, reach=None, planned=True, archived=()):
     """`run --aa`: the arm against its copy, on the same tasks and plan. Discordance: whole-change acceptance differs within a
-    (task, replicate) pair, over pairs whose two cells are usable, with a Clopper-Pearson interval. A pair with an absent, refused,
-    invalid or unreadable cell is counted and its cells named, never as agreement; the worst case counts it discordant. The
+    (task, replicate) pair, over pairs whose two cells are usable, with a Clopper-Pearson interval (pairs pooled, taken as
+    independent). A pair with an absent, refused, invalid or unreadable cell is counted and its cells named, never as agreement;
+    the worst case counts it discordant. `replicates` is the plan when `planned`, else only the replicates cells reached, so
+    trailing undispatched pairs are not seen; a cell set aside under refused/ (`archived`, cell ids) reads refused. The
     same-change statistic is the verdict's own (reachable_diffs on valid cells, the t interval, proven_critical), A against A. It
     rejects equality when its 95% interval, the verdict's level, excludes zero. Qualified needs A/A cells, at least
-    min_signal_tasks tasks in the interval, and no rejection."""
+    min_signal_tasks tasks with a usable matched pair and in the interval, no rejection, and the planned replicates."""
     arm, label = aa["arm"], aa["label"]
     by = {(r["task"], r["replicate"], r["arm"]): r for r in cells}
     per_task, missing = {}, {}
@@ -2379,18 +2382,23 @@ def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates,
             entry["missing"] += 1
             for side, r in ((arm, a), (label, b)):
                 if not _usable(r):
-                    missing.setdefault(_unusable(r), []).append(replay_eval.cell_id({"id": task}, side, rep))
+                    cid = replay_eval.cell_id({"id": task}, side, rep)
+                    missing.setdefault("refused" if r is None and cid in archived else _unusable(r), []).append(cid)
     n, k, m = (sum(e[key] for e in per_task.values()) for key in ("pairs", "discordant", "missing"))
+    matched = sum(e["pairs"] > 0 for e in per_task.values())
     valid = [r for r in cells if r.get("valid") is True]
     diffs = reachable_diffs(valid, task_dir, arm, label, reach=reach)
     interval = paired_interval(diffs)
     critical = proven_critical(valid, task_dir, arm, label, seed, margin, reach=reach)
     ci = interval["ci95"]
     rejects = ci is not None and (ci[0] > 0 or ci[1] < 0)
-    status = ("absent" if not any(r["arm"] == label for r in cells) else "too-few-tasks" if ci is None or interval["tasks"] < GATES["min_signal_tasks"]
-              else "rejects-equality" if rejects else "qualified")
-    return {"arm": arm, "label": label, "status": status, "rejects_equality": rejects,
+    few = ci is None or interval["tasks"] < GATES["min_signal_tasks"] or matched < GATES["min_signal_tasks"]
+    status = ("absent" if not any(r["arm"] == label for r in cells) else "too-few-tasks" if few
+              else "rejects-equality" if rejects else "qualified" if planned else "plan-unknown")
+    return {"arm": arm, "label": label, "status": status, "rejects_equality": rejects, "planned_replicates": replicates if planned else None,
+            "tasks_with_matched_pairs": matched,
             "discordance": {"pairs": n, "discordant": k, "rate": k / n if n else None, "ci95": list(_binomial_bounds(k, n)) if n else None,
+                            "ci95_assumes": "pairs pooled over tasks and replicates, taken as independent",
                             "missing_pairs": m, "worst_case_rate": (k + m) / (n + m) if n + m else None},
             "missing_cells": {why: sorted(v) for why, v in sorted(missing.items())}, "per_task": per_task, "reachable_behaviour": interval,
             "statistic": studentized(diffs, margin) if len(diffs) > 1 else None, "critical": critical,
@@ -2553,12 +2561,15 @@ def status(config_path, results, acknowledge=None):
 def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None, planned_replicates=None):
     """`single_look`: the report may be read once, with no run active on the results; it writes LOOK.json, after which neither
     `report` nor `run` works on them. `missing_data_guard_reserve` (US$ for a cell with no measured cost, normally the run's
-    --stop-usd) adds the guard, which needs `planned_replicates` (the run's --replicates: the plan is not recorded). `frozen_reach`
+    --stop-usd) adds the guard, which needs `planned_replicates` (the run's --replicates: the plan is not recorded); the A/A
+    check needs it too to qualify. `frozen_reach`
     ({task: [tests]}, fixed before the attempts) replaces the reach the run's own cells would give; its digest is reported."""
     if (results / LOOK).exists():
         raise ValueError(f"the single look has been taken ({LOOK} exists): these results are not read again: {results}")
-    if missing_data_guard_reserve is not None and (type(planned_replicates) is not int or planned_replicates < 1):
+    if missing_data_guard_reserve is not None and planned_replicates is None:
         raise ValueError("the missing-data guard needs the run's planned replicates")
+    if planned_replicates is not None and (type(planned_replicates) is not int or planned_replicates < 1):
+        raise ValueError("planned replicates must be the run's --replicates, an integer >= 1")
     if not single_look:
         return _report(config_path, results, next_results, False, missing_data_guard_reserve, frozen_reach, planned_replicates)
     with contextlib.ExitStack() as locks:  # no run may add cells, to stage 1 or stage 2, while the single look is taken
@@ -2669,8 +2680,12 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     elif tier["thesis"] == "HOLDS" and tier["same_change_reachable"] != "PROVEN":
         tier["thesis"] = "UNPROVEN"
     pseudo = {a: paired_interval(reachable_diffs(rows, task_dir, low, ref, split=a, reach=frozen_reach)) for a in (low, ref)}
-    twin = aa_check(twins, task_dir, aa, margin, config["seed"], sensitive, [t["id"] for t in config["tasks"]], accounting["replicates"],
-                    frozen_reach) if aa else None
+    if planned_replicates is not None and planned_replicates < accounting["replicates"]:
+        raise ValueError(f"cells reach replicate {accounting['replicates']}, beyond the {planned_replicates} planned")
+    twin = aa_check(twins, task_dir, aa, margin, config["seed"], sensitive, [t["id"] for t in config["tasks"]],
+                    accounting["replicates"] if planned_replicates is None else planned_replicates, frozen_reach,
+                    planned=planned_replicates is not None,
+                    archived={r["attempt_of"] for r in refused_attempts(results, (aa["arm"], aa["label"]))}) if aa else None
     tier["aa_status"] = twin["status"] if twin else "absent"
     tier["aa_qualified"] = tier["aa_status"] == "qualified"  # never without A/A cells
     # pooled over every cell, copies included; per arm only here, where the report already shows each arm's acceptance
@@ -2680,8 +2695,6 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     tier["oracle_suspect"] = oracle["status"] == "oracle-suspect"  # the verdict's values stand; its label is not clean
     guard = None
     if missing_data_guard_reserve is not None:
-        if planned_replicates < accounting["replicates"]:
-            raise ValueError(f"cells reach replicate {accounting['replicates']}, beyond the {planned_replicates} planned")
         planned = [(t["id"], rep, arm) for t, rep, arm in plan(config, planned_replicates)]
         guard = missing_data_guard(config, results, task_dir, every, planned, low, ref, margin, missing_data_guard_reserve, frozen_reach)
     if stage2 is not None:
@@ -2710,8 +2723,12 @@ def aa_line(aa, margin):
     status = {"qualified": "A/A-qualified: the copy does not reject equality with its arm",
               "rejects-equality": "**the A/A rejects equality at the verdict's 95% level: the instrument alone produces differences of this size; "
                                   "the verdict is not A/A-qualified**",
-              "too-few-tasks": f"not A/A-qualified: fewer than {GATES['min_signal_tasks']} tasks reach new behaviour in both"}[aa["status"]]
-    discord = (f"acceptance differs in {d['discordant']} of {d['pairs']} pairs ({pct(d['rate'])}, 95% {pct(d['ci95'][0])} to {pct(d['ci95'][1])})"
+              "too-few-tasks": f"not A/A-qualified: fewer than {GATES['min_signal_tasks']} tasks reach new behaviour in both or have a usable "
+                               "matched pair",
+              "plan-unknown": "not A/A-qualified: without the run's planned replicates (`report --replicates N`) undispatched trailing "
+                              "pairs cannot be counted"}[aa["status"]]
+    discord = (f"acceptance differs in {d['discordant']} of {d['pairs']} pairs ({pct(d['rate'])}, 95% {pct(d['ci95'][0])} to {pct(d['ci95'][1])}, "
+               "pairs taken as independent)"
                if d["pairs"] else "no complete pair")
     lost = (f"; {d['missing_pairs']} pairs have an absent or unusable cell, never counted as agreement (worst case {pct(d['worst_case_rate'])})"
             if d["missing_pairs"] else "")
@@ -2856,7 +2873,8 @@ def main(argv=None):
             sub.add_argument("--missing-data-guard", action="store_true", help="add L0/L2 from the plan and the worst-case cost ratio")
             sub.add_argument("--reserve-usd", type=float, help="with --missing-data-guard: a cell with no measured cost counts at this (the run's --stop-usd)")
             sub.add_argument("--frozen-reach", type=Path, help="JSON {task: [tests]} fixed before the attempts, instead of the run's own reach")
-            sub.add_argument("--replicates", type=int, help="with --missing-data-guard: the run's --replicates, which fixes the plan")
+            sub.add_argument("--replicates", type=int, help="the run's --replicates, which fixes the plan: needed by --missing-data-guard "
+                                                            "and for an A/A check to qualify")
     plan_ = commands.add_parser("feasibility", help="before spending: tasks a verdict needs, from a pilot or a stated per-task SD")
     plan_.add_argument("--set", type=Path, required=True, dest="path")
     plan_.add_argument("--results", type=Path)
@@ -2930,8 +2948,6 @@ def main(argv=None):
         print(json.dumps(result))
         return 1 if result["oracle_health"]["status"] == "oracle-suspect" else 0
     else:
-        if args.replicates is not None and not args.missing_data_guard:
-            parser.error("--replicates on report only fixes the plan of --missing-data-guard")
         if args.missing_data_guard and (args.reserve_usd is None or args.replicates is None):
             parser.error("--missing-data-guard needs --reserve-usd (the run's --stop-usd) and --replicates (the run's)")
         reach = json.loads(args.frozen_reach.expanduser().read_text()) if args.frozen_reach else None
