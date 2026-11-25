@@ -84,7 +84,8 @@ schemas, and the dashboard snapshot.
   `{read_isolation_codex_profile}` gives Codex a permission profile that denies each path. Each cell records
   `read_isolation`, which is `unenforced` when the command asks nothing. Detection reads the retained stream
   (`--stream-copy {stream_copy}`): a tool call that names a protected path marks the cell `contaminated` and invalid, and it
-  counts against `--max-invalid`. A scan is `clean` only when every line was read as an event (an object with a `type`): an empty or
+  counts against `--max-invalid`. A scan is `clean` only when every nonblank line is an event (an object with a string `type`) and there is at
+  least one: an empty or
   wholly unreadable stream is `unscanned` (`empty-stream`), and a torn, over-long (16 MiB), too deeply nested or non-event line
   with no hit makes it `incomplete`.
   `report` and `status` (pooled) show the modes and the scan results; cells from before 1.11.0
@@ -199,7 +200,7 @@ schemas, and the dashboard snapshot.
   The ledger row records `usage_limit` and `resets_at`, `run` returns `resets_at`, and while that reset lies ahead (and planned
   cells remain) a resume stops at once with `quota-hold`, `resets_at` and `retry_after_s`, dispatching nothing. A limit that
   named no reset falls back to the 10-minute cooldown; one whose reset has passed needs none. The reset is read from the whole
-  field after `|`, which must be all digits (a 13-digit millisecond time, a fraction or an exponent names no reset instead of
+  field after `|`, up to whitespace or another `|`, which must be all digits (a 13-digit millisecond time, a fraction or an exponent names no reset instead of
   one centuries away or a prefix), the limit is recorded before the result's usage is checked, the latest of several wins, and a
   failed quota probe's reset holds a resume too, so no second probe is paid for before it. With no reset named, a contaminated
   cell the limit cut and a probe that read the limit get the 10-minute cooldown from when they were seen, as a refusal does. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
