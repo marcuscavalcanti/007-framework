@@ -2248,6 +2248,21 @@ class AA(unittest.TestCase):
             self.assertIn("report --replicates", lab.aa_line(unplanned, .03))
             self.assertEqual(self.check(root, twins)["status"], "qualified")
 
+    def test_qualification_reads_matched_pairs_on_reaching_tasks_only(self):
+        """Review r2 N2: eight tasks with matched pairs but no reach, and eight reaching tasks with no matched pair, met both
+        minimums, and the qualifying interval came wholly from the unmatched eight. Qualification now reads only usable matched
+        pairs on reaching tasks; the pooled statistic is reported as before."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 16)
+            flat = [self.accepted(cell(f"T{i}", arm, rep, {"a"})) for i in range(8) for arm in ("xhigh", "xhigh-aa") for rep in (1, 2)]
+            split = [self.accepted(cell(f"T{i}", "xhigh", 1, {"a", "b", "c", "d"})) for i in range(8, 16)]
+            split += [self.accepted(cell(f"T{i}", "xhigh-aa", 2, {"a", "b", "c", "d"})) for i in range(8, 16)]
+            out = self.check(root, flat + split, tasks=16)
+            self.assertEqual((out["tasks_with_matched_pairs"], out["reachable_behaviour"]["tasks"]), (8, 8))  # both minimums met apart
+            self.assertEqual(out["status"], "too-few-tasks")
+            self.assertEqual(out["qualifying_behaviour"]["tasks"], 0)
+
     def test_a_copy_set_aside_under_refused_reads_refused_not_absent(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

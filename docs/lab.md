@@ -77,11 +77,14 @@ statistics are the ones the same cells give without the copy. Next to it, the re
 - **The flag:** `rejects_equality` when that 95% interval, the verdict's own level, excludes zero.
 
 The printed verdict carries `aa_status` and `aa_qualified`. `aa_qualified` is true only for `qualified`: A/A cells exist, at least 8
-tasks (the verdict's own minimum) reach new behaviour in ARM and its copy and have a usable matched pair (`tasks_with_matched_pairs`),
-the A/A does not reject equality, and the planned replicates were given. Otherwise the status is `absent` (no A/A cells: a run
+tasks (the verdict's own minimum) that reach new behaviour have a usable matched pair, the A/A does not reject equality, and the
+planned replicates were given. Qualification reads its own interval, `qualifying_behaviour`: the same per-task difference and t
+interval, computed from usable matched pairs only, on tasks that reach new behaviour (reach taken from every valid cell, or the
+frozen reach). A rejection by it or by the pooled statistic disqualifies, either counted only with at least 8 tasks. Otherwise the status is `absent` (no A/A cells: a run
 without `--aa`, or one whose copies never ran), `too-few-tasks`, `rejects-equality` or `plan-unknown` (no `--replicates`), and
-`report.md` says the verdict is not A/A-qualified. The matched-pair condition matters because the statistic pools each task's valid
-cells: originals only at replicate 1 and copies only at replicate 2 give a clean interval with no pair at all. A copy costs one more attempt per task and replicate: half again what the two arms
+`report.md` says the verdict is not A/A-qualified. The matched-pair condition matters because the pooled statistic uses each task's
+valid cells: originals only at replicate 1 and copies only at replicate 2 give a clean interval with no pair at all, and eight
+matched tasks that reach nothing beside eight reaching tasks with no pair would meet both minimums apart. A copy costs one more attempt per task and replicate: half again what the two arms
 cost alone.
 
 `pseudo_aa`, which splits one arm's replicate 1 against its later replicates, stays in the report; it is not this check. Study F's

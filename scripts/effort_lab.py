@@ -2418,6 +2418,16 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
             "reach_frozen": frozen, "refused": sum(r.get("failure_class") == REFUSED and r["arm"] in (low, ref) for r in charged)}
 
 
+def _reach_tests(rows, task_dir):
+    """{task: reachable tests} as reach_rates finds them from `rows`: hidden tests red at base that some cell passes."""
+    out = {}
+    for task in sorted({r["task"] for r in rows}):
+        hidden = [k for k in json.loads((task_dir / task / "hidden.json").read_text()) if k != "__module__"]
+        base = set(json.loads((task_dir / task / "baseline.json").read_text()))
+        out[task] = [k for k in hidden if k not in base and any(c["acceptance_outcomes"].get(k) == "pass" for c in rows if c["task"] == task)]
+    return out
+
+
 def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates, reach=None, planned=True, archived=()):
     """`run --aa`: the arm against its copy, on the same tasks and plan. Discordance: whole-change acceptance differs within a
     (task, replicate) pair, over pairs whose two cells are usable, with a Clopper-Pearson interval (pairs pooled, taken as
@@ -2425,17 +2435,19 @@ def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates,
     the worst case counts it discordant. `replicates` is the plan when `planned`, else only the replicates cells reached, so
     trailing undispatched pairs are not seen; a cell set aside under refused/ (`archived`, cell ids) reads refused. The
     same-change statistic is the verdict's own (reachable_diffs on valid cells, the t interval, proven_critical), A against A. It
-    rejects equality when its 95% interval, the verdict's level, excludes zero. Qualified needs A/A cells, at least
-    min_signal_tasks tasks with a usable matched pair and in the interval, no rejection, and the planned replicates."""
+    rejects equality when its 95% interval, the verdict's level, excludes zero. Qualification reads its own interval
+    (`qualifying_behaviour`) from usable matched pairs on reaching tasks only: it needs A/A cells, at least min_signal_tasks such
+    tasks, no rejection by either interval, and the planned replicates."""
     arm, label = aa["arm"], aa["label"]
     by = {(r["task"], r["replicate"], r["arm"]): r for r in cells}
-    per_task, missing = {}, {}
+    per_task, missing, matched_rows = {}, {}, []
     for task in task_ids:
         entry = per_task[task] = {"pairs": 0, "discordant": 0, "missing": 0}
         for rep in range(1, replicates + 1):
             a, b = by.get((task, rep, arm)), by.get((task, rep, label))
             if _usable(a) and _usable(b):
                 entry["pairs"] += 1
+                matched_rows += [a, b]
                 entry["discordant"] += bool(a.get("accepted")) != bool(b.get("accepted"))
                 continue
             entry["missing"] += 1
@@ -2451,11 +2463,17 @@ def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates,
     critical = proven_critical(valid, task_dir, arm, label, seed, margin, reach=reach)
     ci = interval["ci95"]
     rejects = ci is not None and (ci[0] > 0 or ci[1] < 0)
-    few = ci is None or interval["tasks"] < GATES["min_signal_tasks"] or matched < GATES["min_signal_tasks"]
-    status = ("absent" if not any(r["arm"] == label for r in cells) else "too-few-tasks" if few
-              else "rejects-equality" if rejects else "qualified" if planned else "plan-unknown")
+    # what qualifies: usable matched pairs only, on tasks that reach new behaviour (the reach of every valid cell, or the frozen
+    # one); the pooled statistic above is reported as before, and a rejection by either one disqualifies
+    qualifying = paired_interval(reachable_diffs(matched_rows, task_dir, arm, label, reach=_reach_tests(valid, task_dir) if reach is None else reach))
+    q_ci = qualifying["ci95"]
+    q_rejects = q_ci is not None and (q_ci[0] > 0 or q_ci[1] < 0)
+    enough = lambda i: i["ci95"] is not None and i["tasks"] >= GATES["min_signal_tasks"]
+    status = ("absent" if not any(r["arm"] == label for r in cells)
+              else "rejects-equality" if rejects and enough(interval) or q_rejects and enough(qualifying)
+              else "too-few-tasks" if not enough(qualifying) else "qualified" if planned else "plan-unknown")
     return {"arm": arm, "label": label, "status": status, "rejects_equality": rejects, "planned_replicates": replicates if planned else None,
-            "tasks_with_matched_pairs": matched,
+            "tasks_with_matched_pairs": matched, "qualifying_behaviour": qualifying, "qualifying_rejects_equality": q_rejects,
             "discordance": {"pairs": n, "discordant": k, "rate": k / n if n else None, "ci95": list(_binomial_bounds(k, n)) if n else None,
                             "ci95_assumes": "pairs pooled over tasks and replicates, taken as independent",
                             "missing_pairs": m, "worst_case_rate": (k + m) / (n + m) if n + m else None},
@@ -2840,7 +2858,7 @@ def aa_line(aa, margin):
     status = {"qualified": "A/A-qualified: the copy does not reject equality with its arm",
               "rejects-equality": "**the A/A rejects equality at the verdict's 95% level: the instrument alone produces differences of this size; "
                                   "the verdict is not A/A-qualified**",
-              "too-few-tasks": f"not A/A-qualified: fewer than {GATES['min_signal_tasks']} tasks reach new behaviour in both or have a usable "
+              "too-few-tasks": f"not A/A-qualified: fewer than {GATES['min_signal_tasks']} tasks that reach new behaviour have a usable "
                                "matched pair",
               "plan-unknown": "not A/A-qualified: without the run's planned replicates (`report --replicates N`) undispatched trailing "
                               "pairs cannot be counted"}[aa["status"]]

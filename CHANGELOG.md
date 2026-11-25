@@ -49,8 +49,9 @@ schemas, and the dashboard snapshot.
 
   The printed verdict gains `aa_status`, `aa_qualified` and `aa_refused` (the copy's refusals; `refused_unequal` still compares
   the two compared arms only). `aa_qualified` is false whenever there are no A/A cells, and
-  `report.md` then says the verdict carries no measured noise floor. It also needs at least 8 tasks with a usable matched pair
-  and the run's planned replicates (`report --replicates N`, now accepted without `--missing-data-guard`), so replicates never
+  `report.md` then says the verdict carries no measured noise floor. It also needs at least 8 reaching tasks with a usable matched pair,
+  read from its own interval over those pairs only (`qualifying_behaviour`; the pooled statistic is reported as before), and
+  the run's planned replicates (`report --replicates N`, now accepted without `--missing-data-guard`), so replicates never
   dispatched count as missing pairs; without them the status is `too-few-tasks` or `plan-unknown`. A copy set aside under
   `refused/` reads `refused`, and the discordance interval states that it takes pooled pairs as independent. Reports of runs without `--aa` keep every earlier field and
   value, except where this release changes them on purpose (the clustered critical value, under Fixed). See [the lab guide](docs/lab.md#the-aa-check-run---aa-arm).
