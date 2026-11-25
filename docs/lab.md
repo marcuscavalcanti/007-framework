@@ -105,8 +105,8 @@ stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `
 (`<task>-r01-<arm>.runner.json`). It finds them relative to directories it opened before the agent started, never through a link,
 and never over a file already there: a file at a cell's own name that this attempt did not create, a staged file that is a link
 or not a regular file, or a `.blind` that is not a directory of its own fails the cell (a link is removed, never its target), and
-only the stream this attempt promoted is scanned for contamination. The controller opens each staged file without following a link
-before publishing it, publishes it without replacing anything, checks that the published name is the file it opened (a mismatch
+only the stream this attempt promoted is scanned for contamination. The controller opens each staged file without following a link and without waiting (a FIFO or device fails the
+regular-file check at once) before publishing it, publishes it without replacing anything, checks that the published name is the file it opened (a mismatch
 fails the cell), and reads, hashes and scans those opened files, so the receipt digest, the parsed receipt and the scanned stream
 are the same bytes. A failure after one file was published fails the cell as a partial publication and names what was published;
 a published receipt stays, counted as an orphan. A command that names `{stream_copy}` but leaves no stream records

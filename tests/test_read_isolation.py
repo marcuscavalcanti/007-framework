@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -398,6 +399,26 @@ class LabIsolation(unittest.TestCase):
         cid = replay_eval.cell_id(task, "high", 1)
         self.assertTrue((output / f"{cid}.runner.json").is_file())  # the paid receipt stays: an orphan report and resume count
         self.assertFalse((output / f"{cid}.json").exists())
+
+    def test_a_staged_fifo_fails_at_once_instead_of_waiting_for_a_writer(self):
+        """Review r3 R3-3: the staged file was opened before its type was checked, so a FIFO with no writer blocked forever."""
+        staging = self.root / "staging"
+        staging.mkdir()
+        os.mkfifo(staging / "x.stream.jsonl")
+        fd, outcome = os.open(staging, os.O_RDONLY | os.O_DIRECTORY), []
+
+        def attempt():
+            try:
+                outcome.append(replay_eval._open_staged(fd, "x.stream.jsonl"))
+            except RuntimeError as error:
+                outcome.append(error)
+        worker = threading.Thread(target=attempt, daemon=True)
+        worker.start()
+        worker.join(10)
+        os.close(fd)
+        self.assertFalse(worker.is_alive(), "opening a staged FIFO blocked")
+        self.assertIsInstance(outcome[0], RuntimeError)
+        self.assertIn("not a regular file", str(outcome[0]))
 
     def test_a_sealed_salt_whose_tokens_collide_stops_before_any_dispatch(self):
         path, results = self.mined(), self.root / "results"

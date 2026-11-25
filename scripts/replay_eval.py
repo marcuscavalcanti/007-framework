@@ -740,7 +740,8 @@ def _open_staged(source_fd, name):
     """This attempt's file `name` in the pinned directory, opened without following a link: a descriptor of a regular file, or
     None when the agent left none. A link is removed (the link only, never its target) and the cell fails."""
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=source_fd)
+        # O_NONBLOCK: a FIFO or device left there opens at once and fails the type check below, never waits for a writer
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=source_fd)
     except FileNotFoundError:
         return None
     except OSError:  # ELOOP: a link where the file should be
@@ -751,6 +752,7 @@ def _open_staged(source_fd, name):
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         raise RuntimeError(f"runner artifact is not a regular file: {name}")
+    os.set_blocking(fd, True)  # a regular file: ordinary reads from here
     return fd
 
 
