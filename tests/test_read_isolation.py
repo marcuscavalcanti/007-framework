@@ -383,8 +383,28 @@ class LabIsolation(unittest.TestCase):
             if str(dst).endswith(".stream.jsonl"):  # whatever replaces the published name after the link
                 (output / "other").write_text("")
                 os.replace(output / "other", output / dst)
-        with mock.patch.object(replay_eval.os, "link", side_effect=link_then_swap), self.assertRaisesRegex(RuntimeError, "identity"):
+        with mock.patch.object(replay_eval.os, "link", side_effect=link_then_swap), self.assertRaisesRegex(RuntimeError, "identity") as raised:
             replay_eval.execute_cell(config, task, "high", 1, output, 60)
+        # review r3 R3-2: the message says which names exist and which were checked, the failing one included
+        cid = replay_eval.cell_id(task, "high", 1)
+        self.assertIn(f"created: {cid}.runner.json, {cid}.stream.jsonl", str(raised.exception))
+        self.assertIn(f"verified: {cid}.runner.json", str(raised.exception))
+
+    def test_a_failure_after_a_link_says_the_name_was_created(self):
+        """Review r3 R3-2: the link publishes before the staged name is removed; an unlink failure said nothing was published
+        although the final name existed."""
+        config, task, output = self.blinded("unlinked")
+        real = os.unlink
+
+        def unlink(path, *args, **kwargs):
+            if str(path).endswith(".runner.json") and kwargs.get("dir_fd") is not None:
+                raise PermissionError(path)
+            return real(path, *args, **kwargs)
+        with mock.patch.object(replay_eval.os, "unlink", side_effect=unlink), self.assertRaises(RuntimeError) as raised:
+            replay_eval.execute_cell(config, task, "high", 1, output, 60)
+        cid = replay_eval.cell_id(task, "high", 1)
+        self.assertIn(f"created: {cid}.runner.json", str(raised.exception))
+        self.assertTrue((output / f"{cid}.runner.json").exists())
 
     def test_a_partial_publication_fails_the_cell_and_says_what_was_published(self):
         config, task, output = self.blinded("partial")

@@ -756,36 +756,43 @@ def _open_staged(source_fd, name):
     return fd
 
 
-def _publish(source_fd, name, fd, target_fd, final):
-    """Give the opened file `fd` (staged as `name`) its final name in target_fd, never over a file already there, and check
-    that the published name is that very file; a mismatch fails the cell. The descriptor is what the controller then reads."""
-    if source_fd != target_fd or name != final:
-        os.link(name, final, src_dir_fd=source_fd, dst_dir_fd=target_fd, follow_symlinks=False)  # FileExistsError: never replaced
-        os.unlink(name, dir_fd=source_fd)
-    opened, named = os.fstat(fd), os.stat(final, dir_fd=target_fd, follow_symlinks=False)
-    if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
-        raise RuntimeError(f"published artifact identity does not match the file read: {final}")
-
-
 def _promote_all(staged, source_fd, target_fd):
-    """{final: descriptor or None}: every staged artifact opened first, then published one by one. A failure once one is
-    published is a partial publication, named; what was published stays (a paid receipt is counted as an orphan)."""
-    opened, published = {}, []
+    """{final: descriptor or None}: every staged artifact opened first, then published one by one: linked to its final name
+    without replacing anything, the staged name removed, and the published name checked to be the very file opened (a mismatch
+    fails the cell). Each name is recorded as created right after its link and as verified right after its check, so a failure at
+    any later step says exactly which names exist and which were verified; what was created stays (a paid receipt is counted as
+    an orphan while it has no cell result)."""
+    opened, created, verified = {}, [], []
+
+    def failed(what):
+        prefix = "partial publication: " if created and not what.startswith("partial publication") else ""
+        return RuntimeError(f"{prefix}{what}; created: {', '.join(created) or 'none'}; verified: {', '.join(verified) or 'none'}")
     try:
         for path, final in staged.items():
             opened[final] = _open_staged(source_fd, path.name)
         for path, final in staged.items():
-            if opened[final] is None:
+            fd, name = opened[final], final.name
+            if fd is None:
                 continue
+            if source_fd != target_fd or path.name != name:
+                try:
+                    os.link(path.name, name, src_dir_fd=source_fd, dst_dir_fd=target_fd, follow_symlinks=False)
+                except FileExistsError:
+                    raise failed(f"replay output appeared during the attempt: {name}") from None
+                except OSError as error:
+                    raise failed(f"partial publication: {name} not linked ({type(error).__name__})") from None
+                created.append(name)
+                try:
+                    os.unlink(path.name, dir_fd=source_fd)
+                except OSError as error:
+                    raise failed(f"partial publication: staged {path.name} not removed ({type(error).__name__})") from None
             try:
-                _publish(source_fd, path.name, opened[final], target_fd, final.name)
-            except FileExistsError:
-                raise RuntimeError((f"partial publication: {', '.join(published)} published, " if published else "")
-                                   + f"replay output appeared during the attempt: {final.name}") from None
+                opened_id, named = os.fstat(fd), os.stat(name, dir_fd=target_fd, follow_symlinks=False)
             except OSError as error:
-                raise RuntimeError(f"partial publication: {', '.join(published) or 'nothing'} published, {final.name} not "
-                                   f"({type(error).__name__})") from None
-            published.append(final.name)
+                raise failed(f"partial publication: {name} not checked ({type(error).__name__})") from None
+            if (opened_id.st_dev, opened_id.st_ino) != (named.st_dev, named.st_ino):
+                raise failed(f"published artifact identity does not match the file read: {name}")
+            verified.append(name)
     except BaseException:
         for fd in opened.values():
             if fd is not None:

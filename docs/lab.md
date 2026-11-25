@@ -108,7 +108,9 @@ or not a regular file, or a `.blind` that is not a directory of its own fails th
 only the stream this attempt promoted is scanned for contamination. The controller opens each staged file without following a link and without waiting (a FIFO or device fails the
 regular-file check at once) before publishing it, publishes it without replacing anything, checks that the published name is the file it opened (a mismatch
 fails the cell), and reads, hashes and scans those opened files, so the receipt digest, the parsed receipt and the scanned stream
-are the same bytes. A failure after one file was published fails the cell as a partial publication and names what was published;
+are the same bytes. Each name is recorded as created right after its link and as verified right after its identity check, so any later failure,
+an identity mismatch included, fails the cell and says which names were created and which were verified (a partial publication
+when any was created);
 a published receipt stays, counted as an orphan. A command that names `{stream_copy}` but leaves no stream records
 `unscanned` with reason `stream-missing`. Threat model: this guards against collisions and accidents, not against a process with
 the user's authority that swaps files during the promotion; 007 runs as the user and isolates nothing (`SECURITY.md`). Before the first dispatch the salt is checked to give every

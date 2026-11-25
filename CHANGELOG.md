@@ -129,8 +129,8 @@ schemas, and the dashboard snapshot.
     directories opened before the agent ran, never through a link and never over an existing file; a file at the cell's own
     name that the attempt did not create, a staged link or a `.blind` that is a link fails the cell, and only the stream this
     attempt promoted is scanned. The receipt and stream are read, hashed and scanned from the files opened in the pinned
-    directory, a published name that is not the file read fails the cell, a partial publication fails it and says what was
-    published, and a missing expected stream reads `stream-missing`. This guards against collisions and accidents, not a
+    directory, a published name that is not the file read fails the cell, a failure at any step fails it and says which names were
+    created and which were verified, and a missing expected stream reads `stream-missing`. This guards against collisions and accidents, not a
     process with the user's authority. A salt whose tokens collide is never used (`blind-token-collision` on a resume);
   - the grading directory is `007-acceptance-<token>-<random>`.
 
