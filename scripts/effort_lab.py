@@ -2509,21 +2509,46 @@ def oracle_health(rows, margin, controls=None):
             "status": status, "sha256": hashlib.sha256(json.dumps(counts, sort_keys=True).encode()).hexdigest()}
 
 
+def _ack_binding(config_path, rows, health):
+    """What an acknowledgement is given for: the set file, the margin, the alarms, the pooled counts and every cell by its id and
+    receipt digest. Other cells with the same counts, another margin or another alarm list void it."""
+    try:
+        set_sha256 = _sha256(config_path)
+    except OSError:
+        set_sha256 = None
+    cells = sorted([str(r.get("cell")), str(r.get("runner_receipt_sha256"))] for r in rows)
+    value = {"set_sha256": set_sha256, "margin": health["margin"], "alarms": health["alarms"], "counts_sha256": health["sha256"], "cells": cells}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def _read_ack(results):
+    """ORACLE-ACK.json as an object, never through a link; None when absent, a link or unreadable."""
+    try:
+        handle = os.open(results / ORACLE_ACK, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(handle, "rb") as stream:
+            value = json.loads(stream.read(1024 * 1024))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _oracle_state(config_path, results, rows, margin):
-    """oracle_health with the set's reference controls and a person's acknowledgement, valid only for the counts it saw."""
+    """oracle_health with the set's reference controls and a person's acknowledgement, valid only for what it was given for
+    (_ack_binding). `rows` carry their cell id in `cell`."""
     try:
         conformant = json.loads((config_path.parent / "sensitivity.json").read_text()).get("conformant")
         controls = len(conformant) if isinstance(conformant, list) else None
     except (OSError, ValueError, AttributeError):
         controls = None
     health = oracle_health(rows, margin, controls)
-    try:
-        ack = json.loads((results / ORACLE_ACK).read_text())
-    except (OSError, ValueError):
-        ack = None
-    if health["alarms"] and isinstance(ack, dict) and ack.get("health_sha256") == health["sha256"]:
+    binding = _ack_binding(config_path, rows, health)
+    ack = _read_ack(results)
+    if health["alarms"] and isinstance(ack, dict) and ack.get("binding_sha256") == binding:
         health.update(status="acknowledged", acknowledgement={k: ack.get(k) for k in ("at", "reason")})
-    return health
+    return health, binding
 
 
 def blind_orphans(config, results, rows):
@@ -2560,19 +2585,53 @@ def read_isolation(rows):
                                          and r["contamination"].get("status") == "contaminated")}
 
 
+STATUS_TRIES = 3
+
+
+def _snapshot(results):
+    """One reading of a results directory a run may be writing: the cells and receipts between two identical readings of
+    `.blind/`, so a file promoted in between is read again, not lost; a file that vanished mid-read reads again too. After
+    STATUS_TRIES the last reading is returned as unstable. (cells, receipts, blind names, stable)."""
+    found, receipts, names = {}, {}, []
+    for _ in range(STATUS_TRIES):
+        names = replay_eval.blind_files(results)
+        try:
+            found, receipts = replay_eval.read_cell_artifacts(results)
+        except FileNotFoundError:
+            if not results.is_dir():  # nothing written yet
+                return {}, {}, [], True
+            continue
+        if replay_eval.blind_files(results) == names:
+            return found, receipts, names, True
+    return found, receipts, names, False
+
+
+def _status_health(config_path, results, margin):
+    found, receipts, names, stable = _snapshot(results)
+    rows = [{**row, "cell": cid} for cid, row in found.items()]
+    health, binding = _oracle_state(config_path, results, rows, margin)
+    return found, receipts, names, stable, rows, health, binding
+
+
+def _write_ack(results, value):
+    """Written whole, then renamed over ORACLE-ACK.json: a link there is replaced, never written through."""
+    with tempfile.NamedTemporaryFile("w", dir=results, prefix=f".{ORACLE_ACK}.", delete=False) as handle:
+        handle.write(json.dumps(value, indent=1) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(handle.name, results / ORACLE_ACK)
+
+
 def status(config_path, results, acknowledge=None):
     """Blinded while a run is in flight: the grader's health pooled over every cell written so far, A/A copies included, with no
-    arm, task, cell or verdict. Takes no lock and checks no receipt. `acknowledge` (a reason) records that a person looked at the
-    open alarm: `report` then labels the verdict acknowledged instead of oracle-suspect, until any count changes."""
+    arm, task, cell or verdict. Takes no lock and checks no receipt; `snapshot` says whether it read a stable directory.
+    `acknowledge` (a reason) records that a person looked at the open alarm: `report` then labels the verdict acknowledged instead
+    of oracle-suspect, until a cell, the set, the margin or the alarms change."""
     config = json.loads(config_path.read_text())
-    try:
-        found, receipts = replay_eval.read_cell_artifacts(results)
-    except FileNotFoundError:
-        found, receipts = {}, {}
-    rows = list(found.values())
-    health = _oracle_state(config_path, results, rows, declared_margin(config))
+    margin = declared_margin(config)
+    found, receipts, names, stable, rows, health, binding = _status_health(config_path, results, margin)
     # a count for labelled receipts (their names carry the arm); `.blind/` files by name, since a token names no arm
-    orphans = {"receipts": len(set(receipts) - set(found)), "blind_files": replay_eval.blind_files(results),
+    orphans = {"receipts": len(set(receipts) - set(found)), "blind_files": names,
                "note": "in flight while a run is active, else orphaned"}
     isolation = read_isolation(rows)
     del isolation["contaminated_cells"]  # pooled: names no cell
@@ -2581,11 +2640,16 @@ def status(config_path, results, acknowledge=None):
             raise ValueError(f"no open oracle alarm to acknowledge (status {health['status']})")
         if not acknowledge.strip():
             raise ValueError("an acknowledgement needs a reason")
+        if not stable:
+            raise ValueError("the results kept changing while status read them: acknowledge once they settle")
+        if _status_health(config_path, results, margin)[6] != binding:  # read again just before publishing
+            raise ValueError("the cells changed while acknowledging: run status again")
         at = _now()
-        (results / ORACLE_ACK).write_text(json.dumps({"at": at, "reason": acknowledge, "alarms": health["alarms"],
-                                                      "health_sha256": health["sha256"]}, indent=1) + "\n")
+        _write_ack(results, {"at": at, "reason": acknowledge, "alarms": health["alarms"], "health_sha256": health["sha256"],
+                             "binding_sha256": binding})
         health.update(status="acknowledged", acknowledgement={"at": at, "reason": acknowledge})
-    return {"schema": "007-lab/status/v1", "oracle_health": health, "orphans": orphans, "read_isolation": isolation}
+    return {"schema": "007-lab/status/v1", "snapshot": "stable" if stable else "unstable", "oracle_health": health, "orphans": orphans,
+            "read_isolation": isolation}
 
 
 def report(config_path, results, next_results, *, single_look=False, missing_data_guard_reserve=None, frozen_reach=None, planned_replicates=None):
@@ -2719,7 +2783,7 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     tier["aa_status"] = twin["status"] if twin else "absent"
     tier["aa_qualified"] = tier["aa_status"] == "qualified"  # never without A/A cells
     # pooled over every cell, copies included; per arm only here, where the report already shows each arm's acceptance
-    oracle = _oracle_state(config_path, results, cells, margin)
+    oracle, _ = _oracle_state(config_path, results, cells, margin)
     oracle["per_arm"] = {arm: _oracle_counts([r for r in cells if r.get("arm") == arm]) for arm in sorted({r.get("arm") for r in cells})}
     tier["oracle_status"] = oracle["status"]
     tier["oracle_suspect"] = oracle["status"] == "oracle-suspect"  # the verdict's values stand; its label is not clean

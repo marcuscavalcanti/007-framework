@@ -191,7 +191,9 @@ exited 1 before writing its report. `status` shows the grader's health while a r
 007 lab status --set lab/replay-set.json --results results --ack-oracle "REASON"
 ```
 
-`status` reads the cells written so far, A/A copies included, takes no lock and checks no receipt. It prints health pooled over
+`status` reads the cells written so far, A/A copies included, takes no lock and checks no receipt. It reads the cells between two
+identical listings of `.blind/`, and again (up to three times) when a file moved in between or vanished mid-read; `snapshot` says
+`stable`, or `unstable` when the directory kept changing. It prints health pooled over
 every cell and never an arm, task, cell or verdict, so it can be read during a run without peeking at the comparison. Its exit code
 is 1 while an alarm is open and 0 otherwise, so a driver can stop on it. `report` adds the same block (`oracle_health`) with a
 per-arm breakdown (`per_arm`). The report already shows each arm's acceptance, so it reveals nothing new.
@@ -232,9 +234,12 @@ without the alarm. The printed verdict carries `oracle_status`, which is one of:
 
 The printed verdict also carries `oracle_suspect`. While it is true, `report.md` opens with an oracle-suspect notice and the verdict
 is not a clean one. A person clears it with `status --ack-oracle REASON`, which is refused when no alarm is open. That command
-writes `ORACLE-ACK.json` (time, reason, alarms and the SHA-256 of the pooled counts). `report` then reads `acknowledged`, still
-naming the alarms and the reason. The acknowledgement holds only for the counts it was given: any new or changed cell reopens the
-alarm. `run` does not read health and does not stop on it.
+writes `ORACLE-ACK.json` (time, reason, alarms, the SHA-256 of the pooled counts and `binding_sha256`). The binding covers the set
+file, the declared margin, the alarm list, the pooled counts and every cell by its id and receipt digest. `report` then reads
+`acknowledged`, still naming the alarms and the reason. The acknowledgement holds only for what it was given: any new, changed or
+swapped cell, another margin or set, or another alarm reopens it. It is refused on an unstable snapshot, read again just before it
+is written, written whole and renamed into place (a link at its name is replaced, never written through), and never read through a
+link. `run` does not read health and does not stop on it.
 
 ## What the report can say
 

@@ -2344,6 +2344,56 @@ class OracleHealth(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(lab.main(["status", "--set", str(root / "set.json"), "--results", str(results)]), 0)
 
+    def alarmed(self, root, margin=.03):
+        """A set and 20 rejected cells: rejects-everything is open."""
+        (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh", "margin": margin}}))
+        results = root / "results"
+        results.mkdir(exist_ok=True)
+        for i in range(20):
+            row = graded(f"T{i}", ("medium", "xhigh")[i % 2], 1, 1)
+            (results / f"T{i}-r01-{row['arm']}.json").write_text(json.dumps({**row, "runner_receipt_sha256": "unmeasured"}))
+        return results
+
+    def test_an_acknowledgement_binds_the_cells_the_set_and_the_margin_and_is_written_whole(self):
+        """Review #9: the ACK hash covered the pooled counts only, so other cells with the same counts, or another margin, kept it."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            results = self.alarmed(root)
+            self.assertEqual(lab.status(root / "set.json", results, "looked at it")["oracle_health"]["status"], "acknowledged")
+            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "acknowledged")
+            (results / "T0-r01-medium.json").rename(results / "T0-r02-medium.json")  # another cell, the same pooled counts
+            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "oracle-suspect")
+            (results / "T0-r02-medium.json").rename(results / "T0-r01-medium.json")
+            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "acknowledged")
+            self.alarmed(root, margin=.05)  # the set's margin moved
+            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "oracle-suspect")
+            # an ACK that is a link is never written through, nor read
+            outside = root / "outside.json"
+            outside.write_text("keep")
+            (results / lab.ORACLE_ACK).unlink()
+            (results / lab.ORACLE_ACK).symlink_to(outside)
+            self.assertEqual(lab.status(root / "set.json", results, "again")["oracle_health"]["status"], "acknowledged")
+            self.assertEqual(outside.read_text(), "keep")
+            self.assertFalse((results / lab.ORACLE_ACK).is_symlink())
+            self.assertEqual([p.name for p in results.iterdir() if p.name.startswith(".")], [])  # no temporary file left
+
+    def test_status_reads_one_stable_snapshot(self):
+        """Review #9: a receipt promoted between the cell read and the `.blind/` read showed in neither; a file that vanished in
+        the middle of a read made the whole run read empty."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            results = self.alarmed(root)
+            real = lab.replay_eval.read_cell_artifacts
+            with mock.patch.object(lab.replay_eval, "read_cell_artifacts", side_effect=[FileNotFoundError("moved"), real(results)]):
+                out = lab.status(root / "set.json", results)
+            self.assertEqual((out["snapshot"], out["oracle_health"]["cells"]), ("stable", 20))
+            moving = iter([["a.runner.json"], [], [], [], [], []])
+            with mock.patch.object(lab.replay_eval, "blind_files", side_effect=lambda _: next(moving)):
+                out = lab.status(root / "set.json", results)
+            self.assertEqual((out["snapshot"], out["oracle_health"]["cells"]), ("stable", 20))  # read again once the file settled
+            with mock.patch.object(lab.replay_eval, "blind_files", side_effect=lambda _, n=iter(range(99)): [str(next(n))]):
+                self.assertEqual(lab.status(root / "set.json", results)["snapshot"], "unstable")
+
 
 if __name__ == "__main__":
     unittest.main()

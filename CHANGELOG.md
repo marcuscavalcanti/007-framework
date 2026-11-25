@@ -60,7 +60,9 @@ schemas, and the dashboard snapshot.
   than 1% of the time. `status` exits 1 while an alarm is open. `report` adds the same block, `oracle_health`, with a per-arm
   breakdown. An alarm never changes a verdict: it marks the run `oracle-suspect`. The printed verdict gains `oracle_status` and
   `oracle_suspect`, and `report.md` opens with a notice until a person runs `status --ack-oracle REASON`. That command writes
-  `ORACLE-ACK.json`, bound to the counts it saw, so any new cell reopens the alarm. Runs whose cells record no grader exit read
+  `ORACLE-ACK.json`, bound to the set, the margin, the alarms, the pooled counts and every cell by id and receipt digest, so any
+  new or swapped cell reopens the alarm; it is written whole and renamed into place, never through a link. `status` reads one
+  stable snapshot of the results, read again when a file moved mid-read, and says `snapshot: unstable` otherwise. Runs whose cells record no grader exit read
   `unmeasured` and keep every verdict value. See [the lab guide](docs/lab.md#oracle-health-status-and-the-report).
 - Read isolation and contamination detection for replay cells (`007 lab run` and `replay_eval run`). Each cell has a list of
   protected paths: `--out`, the set's directory (the set file for `replay_eval`), source repositories, hidden-test sources,
