@@ -2286,6 +2286,21 @@ class AA(unittest.TestCase):
             self.assertEqual(out["status"], "too-few-tasks")
             self.assertEqual(out["qualifying_behaviour"]["tasks"], 0)
 
+    def test_copies_that_are_all_archived_are_not_absent(self):
+        """Review r2 N7: with every copy set aside under refused/, the JSON listed refused copies while the status read `absent` and
+        report.md said there were no A/A cells."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.tasks(root, 10)
+            base = [self.accepted(cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"})) for i in range(10) for rep in (1, 2)]
+            archived = {f"T{i}-r0{rep}-xhigh-aa" for i in range(10) for rep in (1, 2)}
+            out = self.check(root, base, archived=archived)
+            self.assertNotEqual(out["status"], "absent")
+            self.assertEqual(len(out["missing_cells"]["refused"]), 20)
+            line = lab.aa_line(out, .03)
+            self.assertIn("20 pairs have an absent or unusable cell", line)
+            self.assertNotIn("no A/A cells", line)
+
     def test_a_copy_set_aside_under_refused_reads_refused_not_absent(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

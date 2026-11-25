@@ -2506,7 +2506,8 @@ def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates,
     q_ci = qualifying["ci95"]
     q_rejects = q_ci is not None and (q_ci[0] > 0 or q_ci[1] < 0)
     enough = lambda i: i["ci95"] is not None and i["tasks"] >= GATES["min_signal_tasks"]
-    status = ("absent" if not any(r["arm"] == label for r in cells)
+    copies = any(r["arm"] == label for r in cells) or any(c.endswith("-" + label) for c in archived)  # set aside under refused/ too
+    status = ("absent" if not copies
               else "rejects-equality" if rejects and enough(interval) or q_rejects and enough(qualifying)
               else "too-few-tasks" if not enough(qualifying) else "qualified" if planned else "plan-unknown")
     return {"arm": arm, "label": label, "status": status, "rejects_equality": rejects, "planned_replicates": replicates if planned else None,

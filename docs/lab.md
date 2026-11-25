@@ -81,7 +81,8 @@ tasks (the verdict's own minimum) that reach new behaviour have a usable matched
 planned replicates were given. Qualification reads its own interval, `qualifying_behaviour`: the same per-task difference and t
 interval, computed from usable matched pairs only, on tasks that reach new behaviour (reach taken from every valid cell, or the
 frozen reach). A rejection by it or by the pooled statistic disqualifies, either counted only with at least 8 tasks. Otherwise the status is `absent` (no A/A cells: a run
-without `--aa`, or one whose copies never ran), `too-few-tasks`, `rejects-equality` or `plan-unknown` (no `--replicates`), and
+without `--aa`, or one whose copies never ran; a copy set aside under `refused/` counts as present, so its pairs are counted
+missing), `too-few-tasks`, `rejects-equality` or `plan-unknown` (no `--replicates`), and
 `report.md` says the verdict is not A/A-qualified. The matched-pair condition matters because the pooled statistic uses each task's
 valid cells: originals only at replicate 1 and copies only at replicate 2 give a clean interval with no pair at all, and eight
 matched tasks that reach nothing beside eight reaching tasks with no pair would meet both minimums apart. A copy costs one more attempt per task and replicate: half again what the two arms
