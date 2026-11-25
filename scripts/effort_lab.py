@@ -2256,17 +2256,39 @@ def _reading(cells, task_dir, low, ref, margin, seed, reach, floor, critical=Tru
 
 def _cost_ratio(cells, results, low, ref, reserve, worst=False):
     """Cost per accepted change at `low` over the same at `ref`. A cell with no measured cost counts at `reserve`; in the worst
-    case at `reserve` for `low` and zero for `ref`, and an invalid `ref` cell counts as accepted."""
+    case at `reserve` for `low` and zero for `ref`, and an invalid `ref` cell counts as accepted. A refused attempt adds its
+    cost and never an accepted change; in the worst case a `ref` refusal costs zero, so it cannot lower the bound."""
     def cost(r):
+        if worst and r["arm"] == ref and r.get("failure_class") == REFUSED:
+            return 0.0
         value = cost_of(results, r["cell"], r)
         return value if harness_report._valid_money(value) else (reserve if r["arm"] == low else 0.0) if worst else reserve
 
     def per(arm):
         mine = [r for r in cells if r["arm"] == arm]
-        accepted = sum(bool(r.get("accepted")) if r.get("valid") is True else worst and arm == ref for r in mine)
+        accepted = sum(bool(r.get("accepted")) if r.get("valid") is True else worst and arm == ref and r.get("failure_class") != REFUSED
+                       for r in mine)
         return sum(map(cost, mine)) / accepted if accepted else math.inf
     a, b = per(low), per(ref)
     return a / b if math.isfinite(a) and math.isfinite(b) and b > 0 else math.inf
+
+
+REFUSED = "provider-rate-limit"  # the failure class of an attempt the provider refused (refused())
+
+
+def refused_attempts(results, arms):
+    """Refused attempts set aside under refused/ (`_set_aside`, `run --requeue-refused`), as rows of `arms`: each one once, by its
+    archived row, its cost read from that row or its archived receipt. Its cell ran again, so the archive is the only trace."""
+    found = []
+    for path in sorted((results / "refused").glob("*.json")) if (results / "refused").is_dir() else ():
+        match = re.fullmatch(r"(.+)\.([0-9]+)\.json", path.name)
+        try:
+            row = json.loads(path.read_text()) if match and path.is_file() and not path.is_symlink() else None
+        except (OSError, ValueError):
+            row = None
+        if isinstance(row, dict) and row.get("arm") in arms and isinstance(row.get("task"), str):
+            found.append({**row, "cell": f"refused/{match[1]}.{match[2]}", "valid": False, "accepted": False, "failure_class": REFUSED})
+    return found
 
 
 def _ratio_interval(cells, results, low, ref, reserve, seed, worst):
@@ -2314,7 +2336,8 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
     (invalid of any class, refused, never dispatched, or valid with unreadable outcomes) as the worst case for `low`: `low` fails
     every reachable test, `ref` passes every one; its critical value is simulated again. PROVEN needs PROVEN in L0 and L2, in P and
     B; L0 PROVEN with L2 short of it reads NOT-PROVEN, "not decisive by missing data". KILL follows L0. R is the cost per accepted
-    change at `low` over `ref` (refusals left out), with a task bootstrap, and a worst case. Answer: PAYS (PROVEN and both R upper
+    change at `low` over `ref`, with a task bootstrap, and a worst case; every refused attempt, in place or set aside under
+    refused/, adds its cost to its arm and task once and no accepted change. Answer: PAYS (PROVEN and both R upper
     bounds below 1), PROVEN-NOT-ECONOMIC, DOES-NOT-PAY (KILL), else the verdict. The instrument checks (serial re-grade, A/A) are
     not part of it."""
     seed, floor, frozen = config["seed"], (config.get("compare") or {}).get("critical_floor"), reach is not None
@@ -2326,13 +2349,13 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
             base = set(json.loads((task_dir / task / "baseline.json").read_text()))
             reach[task] = [k for k in hidden if k not in base and any(c["acceptance_outcomes"].get(k) == "pass" for c in rows if c["task"] == task)]
     verdict, readings, guard = guard_decision(every, planned, task_dir, low, ref, margin, seed, reach, floor)
-    dispatched = [r for r in every if r.get("failure_class") != "provider-rate-limit"]
-    ratio, ratio_worst = (_cost_ratio(dispatched, results, low, ref, reserve, w) for w in (False, True))
-    ci, ci_worst = (_ratio_interval(dispatched, results, low, ref, reserve, seed, w) for w in (False, True))
+    charged = every + refused_attempts(results, (low, ref))  # what was paid, refusals included (decision R2-1, 1.11.0)
+    ratio, ratio_worst = (_cost_ratio(charged, results, low, ref, reserve, w) for w in (False, True))
+    ci, ci_worst = (_ratio_interval(charged, results, low, ref, reserve, seed, w) for w in (False, True))
     answer = ("PAYS" if max(ci[1], ci_worst[1]) < 1 else "PROVEN-NOT-ECONOMIC") if verdict == "PROVEN" else "DOES-NOT-PAY" if verdict == "KILL" else verdict
     return {"verdict": verdict, "answer": answer, "margin": margin, "critical_floor": floor, "reserve_usd": reserve, "readings": readings,
             "missing_data": guard, "cost_ratio": ratio, "cost_ratio_ci95": ci, "cost_ratio_worst": ratio_worst, "cost_ratio_worst_ci95": ci_worst,
-            "reach_frozen": frozen, "refused": len(every) - len(dispatched)}
+            "reach_frozen": frozen, "refused": sum(r.get("failure_class") == REFUSED and r["arm"] in (low, ref) for r in charged)}
 
 
 def aa_check(cells, task_dir, aa, margin, seed, sensitive, task_ids, replicates, reach=None):

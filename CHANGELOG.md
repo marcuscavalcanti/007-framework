@@ -144,8 +144,15 @@ schemas, and the dashboard snapshot.
   no usage, so with `--jobs 4` the cells in flight when the account's limit started could spend a `--max-invalid` of 3 and end
   the run for good (`STOP.json`). The runner receipt now records `usage_limit`: its source (the CLI's "usage limit reached"
   result or a rejected `rate_limit_event`) and the reset time the provider gave, in Unix seconds, or none; never the text. Such a
-  call is refused whatever its usage (its cost is still charged), labelled `provider-rate-limit`, kept out of `--max-invalid`, and
-  set aside and dispatched again with `--requeue-refused`. Any other rate limit after the agent worked is still an invalid cell.
+  call is refused whatever its usage, labelled `provider-rate-limit`, kept out of `--max-invalid`, and set aside and dispatched
+  again with `--requeue-refused`. Any other rate limit after the agent worked is still an invalid cell. Its cost is charged to
+  the budget and, as the cost of every refused attempt, counted once in its arm's cost per accepted change (next entry).
+- **`report --missing-data-guard` left paid refusals out of the cost ratio behind `PAYS`.** A refused attempt was dropped from
+  the cost per accepted change, and one set aside under `refused/` by `--requeue-refused` left the cell directory altogether, so
+  an arm the provider refused more often looked cheaper. Every refused attempt, in place or archived, now adds its cost (its
+  receipt cost, else the reserve) once to its arm and task in the ratio and its bootstrap, and never an accepted change; in the
+  worst case a reference refusal costs nothing, so it cannot lower the bound. Verdicts are unchanged: a refused attempt stays
+  out of the grades. `missing_data_guard.refused` now counts the refused attempts the ratio includes.
 - **A Claude usage limit now stops dispatch as a failed quota gate does.** A usage-limit refusal pauses the run with
   `quota-hold`, not `rate-limit`, so `--rate-limit-wait-s` no longer retries a five-hour or seven-day window every 10 minutes.
   The ledger row records `usage_limit` and `resets_at`, `run` returns `resets_at`, and while that reset lies ahead (and planned

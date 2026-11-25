@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import sys
 import tarfile
@@ -532,6 +533,38 @@ class MissingDataGuard(unittest.TestCase):
             got = [lab.guard_decision(rows, self.planned, self.root, "lo", "hi", .2, 3, reach, None, loss=loss)[0]
                    for loss in (("independent",), lab.LOSS_MODELS)]
             self.assertEqual(got, [verdict, verdict])
+
+    def test_a_charged_refusal_counts_once_in_its_arms_cost(self):
+        """Decision R2-1: a refused attempt that worked and was charged enters its arm's cost per accepted change once, archived
+        under refused/ or in place; never as an accepted change. Here only `lo` was refused, each attempt charged US$7: lo's cost per
+        accepted change goes from US$1 to US$4.50 against hi's US$4, so the answer is no longer PAYS."""
+        rows, store = self.cells(), self.root / "refused"
+        store.mkdir()
+        for t in self.tasks:  # one requeued lo attempt per task, set aside as _set_aside leaves it; the cell then ran again
+            cid = f"{t}-r01-lo"
+            (store / f"{cid}.1.json").write_text(json.dumps({"task": t, "replicate": 1, "arm": "lo", "valid": False, "accepted": False,
+                                                             "failure_class": "provider-rate-limit", "cost_usd": "unmeasured"}))
+            (store / f"{cid}.1.runner.json").write_text(json.dumps({"cost_usd": 7.0, "problem": "native-error-rate-limit"}))
+        g = self.guard(rows)
+        self.assertEqual((g["verdict"], g["answer"], g["refused"]), ("PROVEN", "PROVEN-NOT-ECONOMIC", 30))
+        self.assertAlmostEqual(g["cost_ratio"], (60 + 30 * 7.0) / 60 / 4.0)
+        self.assertGreater(g["cost_ratio_ci95"][1], 1)
+        # the same paid refusals at hi lower hi's cost per accepted change in R, never in its worst case (counted at zero there)
+        for path in store.iterdir():
+            path.rename(store / path.name.replace("-lo.", "-hi."))
+        for path in store.glob("*.1.json"):
+            path.write_text(path.read_text().replace('"lo"', '"hi"'))
+        g = self.guard(rows)
+        self.assertEqual((g["answer"], g["refused"]), ("PAYS", 30))
+        self.assertAlmostEqual(g["cost_ratio"], 1.0 / ((240 + 30 * 7.0) / 60))
+        self.assertAlmostEqual(g["cost_ratio_worst"], .25)
+        # in place (not requeued): its cost counts, and its cell is missing data for L2 as before
+        refused = [{**r, "valid": False, "accepted": False, "failure_class": "provider-rate-limit", "cost_usd": 7.0}
+                   if (r["arm"], r["replicate"], r["task"]) == ("lo", 2, "T29") else r for r in rows]
+        shutil.rmtree(store)
+        g = self.guard(refused)
+        self.assertEqual((g["refused"], g["missing_data"]["imputed_in_L2"]), (1, {"refused": 1}))
+        self.assertAlmostEqual(g["cost_ratio"], (59 + 7.0) / 59 / 4.0)
 
     def test_a_kill_does_not_pay(self):
         g = self.guard(self.cells(low_fail={(t, r) for t in self.tasks for r in (1, 2)}))
