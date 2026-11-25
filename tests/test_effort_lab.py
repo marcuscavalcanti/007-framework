@@ -31,13 +31,28 @@ requested = {"provider": "none", "model": "none", "effort": effort}
 json.dump({"schema": "007-framework/runner-receipt/v1", "valid": True, "requested": requested, "served": requested, "identity_source": "fake", "source_sha256": "0" * 64,
            "cost_usd": 0.5, "cost_source": "fake", "usage": {"reasoning_output_tokens": 100}}, open(receipt, "w"))
 """
-# the leakage probe: FAKE_AGENT after a record of everything the agent process sees, written where LAB_CAPTURE says
-CAPTURE_AGENT = """import json, os, sys, uuid
+# the leakage probe: FAKE_AGENT after a record of what the agent process sees, written where LAB_CAPTURE says. Of the environment
+# it records no value (AGENTS.md, security probes): the variable names, the synthetic canary's presence, and the names of the
+# variables whose value names an arm, an effort word, the A/A suffix or stage 2's arm
+CAPTURE_AGENT = """import json, os, re, sys, uuid
 here = os.getcwd()
 tree = sorted(os.path.relpath(os.path.join(top, name), here) for top, dirs, files in os.walk(here) for name in dirs + files)
-seen = {"cwd": here, "argv": sys.argv, "env": dict(os.environ), "tree": tree, "stdin": sys.stdin.read(), "prompt_file": open(sys.argv[4]).read()}
+words = ("medium", "high", "xhigh", "low", "aa", "next", "alpha", "bravo")
+naming = sorted(k for k, v in os.environ.items() if any(re.search(rf"(?<![A-Za-z0-9_]){w}(?![A-Za-z0-9_])", v, re.I) for w in words))
+seen = {"cwd": here, "argv": sys.argv, "env_keys": sorted(os.environ), "canary": os.environ.get("LAB_CANARY") == "synthetic-canary",
+        "env_naming_arm": naming, "tree": tree, "stdin": sys.stdin.read(), "prompt_file": open(sys.argv[4]).read()}
 json.dump(seen, open(os.path.join(os.environ["LAB_CAPTURE"], uuid.uuid4().hex + ".json"), "w"))
 """ + FAKE_AGENT
+LAB_CANARY = "synthetic-canary"  # the one value the probe checks for by presence: the environment reached the agent
+
+
+def synthetic_environ(root, **extra):
+    """A cleared environment for a probe: PATH, a temporary HOME and TMPDIR, LANG, the canary and `extra`. No host variable."""
+    (Path(root) / "home").mkdir(exist_ok=True)
+    return {"PATH": os.environ.get("PATH", os.defpath), "HOME": str(Path(root) / "home"), "TMPDIR": tempfile.gettempdir(), "LANG": "C.UTF-8",
+            "LAB_CANARY": LAB_CANARY, **extra}
+
+
 GOOD = "def add(a, b):\n    return a + b\n\n\ndef clamp_total(a, b):\n    return min(add(a, b), 100)\n"
 PARTIAL = "def add(a, b):\n    return a + b\n\n\ndef clamp_total(a, b):\n    return add(a, b)\n"
 
@@ -67,6 +82,27 @@ def synthetic(repo):
     later = "import unittest\nimport calc\n\n\nclass Report(unittest.TestCase):\n" + "".join(f"    def test_report_{i}(self):\n        self.assertEqual(calc.report_total(90, {20 + i}), 100)\n\n" for i in range(5))
     commit(repo, {"calc.py": GOOD + "\n\ndef report_total(a, b):\n    return clamp_total(a, b)\n", "tests/test_report.py": later}, "feat: add report_total on top of the capped sum", "2026-01-10T00:00:00Z")
     return sha
+
+
+class CaptureAgentPrivacy(unittest.TestCase):
+    """Review #16 and the AGENTS.md security-probe rule: the leakage probe records no environment value, only a synthetic canary's
+    presence and the names of variables whose value names an arm."""
+
+    def test_the_probe_writes_no_environment_value(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "agent.py").write_text(CAPTURE_AGENT)
+            (root / "capture").mkdir()
+            (root / "work").mkdir()
+            (root / "prompt.txt").write_text("p")
+            env = synthetic_environ(root, LAB_CAPTURE=str(root / "capture"), LAB_PROBE_SECRET="synthetic-value-0f3a9c")
+            subprocess.run([sys.executable, "-I", str(root / "agent.py"), str(root / "work"), str(root / "receipt.json"), "high",
+                            str(root / "prompt.txt"), GOOD, PARTIAL], cwd=root / "work", env=env, input="", capture_output=True, check=True)
+            [record] = [p.read_text() for p in (root / "capture").iterdir()]
+            self.assertFalse("synthetic-value-0f3a9c" in record)  # never assertNotIn: it would print the record on failure
+            seen = json.loads(record)
+            self.assertTrue(seen["canary"])
+            self.assertEqual(seen["env_naming_arm"], [])
 
 
 class LabRunAccountingTests(unittest.TestCase):
@@ -694,8 +730,8 @@ class LabEndToEnd(unittest.TestCase):
         path, results, stage2, capture = out / "replay-set.json", self.root / "results", self.root / "stage2", self.root / "capture"
         capture.mkdir()
         lab.sensitivity(path, 2)
-        inherited = {**os.environ, "LAB_CAPTURE": str(capture)}
-        with mock.patch.dict(os.environ, {"LAB_CAPTURE": str(capture)}):
+        # a cleared synthetic environment: no host variable reaches the agent or the record
+        with mock.patch.dict(os.environ, synthetic_environ(self.root, LAB_CAPTURE=str(capture)), clear=True):
             first = lab.run(path, results, replicates=1, jobs=2, max_calls=99, max_usd=99, stop_usd=1, aa="high")
             again = lab.run(path, results, replicates=2, jobs=2, max_calls=99, max_usd=99, stop_usd=1, aa="high")  # a resume
             lab.chain(path, results, stage2)
@@ -703,7 +739,9 @@ class LabEndToEnd(unittest.TestCase):
         self.assertEqual([s["stop"] for s in (first, again, last)], [None, None, None])
         captures = [json.loads(p.read_text()) for p in sorted(capture.iterdir())]
         self.assertEqual(len(captures), first["calls"] + again["calls"] + last["calls"])
-        self.assertEqual(len({json.dumps(c["env"], sort_keys=True) for c in captures}), 1)  # one environment for all; never printed
+        self.assertEqual(len({json.dumps(c["env_keys"]) for c in captures}), 1)  # one environment for all; no value recorded
+        self.assertTrue(all(c["canary"] for c in captures))
+        self.assertEqual(sorted({k for c in captures for k in c["env_naming_arm"]}), [])
         roots = sorted({str(p) for base in (self.root, Path(tempfile.gettempdir())) for p in (base, base.resolve())}, key=len, reverse=True)
         words = ("medium", "high", "xhigh", "low", "aa", "next")  # the arms, effort words, the A/A suffix and stage 2's arm
         leaks = []
@@ -711,7 +749,6 @@ class LabEndToEnd(unittest.TestCase):
             self.assertRegex(Path(seen["cwd"]).name, r"^007-\d{16}-")
             self.assertRegex(Path(seen["argv"][2]).name, r"^\d{16}\.runner\.json$")
             fields = {"cwd": seen["cwd"], "argv": seen["argv"][:3] + seen["argv"][4:],  # argv[3] is {effort}: the treatment itself
-                      "env": {k: v for k, v in seen["env"].items() if inherited.get(k) != v},
                       "tree": [name for name in seen["tree"] if name.split(os.sep)[0] != ".git"],  # git's own hex object names
                       "stdin": seen["stdin"], "prompt_file": seen["prompt_file"]}
             for field, value in fields.items():

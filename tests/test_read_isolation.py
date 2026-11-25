@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import effort_lab as lab
 import native_runner
 import replay_eval
-from test_effort_lab import CAPTURE_AGENT, FAKE_AGENT, GOOD, PARTIAL, git, synthetic
+from test_effort_lab import CAPTURE_AGENT, FAKE_AGENT, GOOD, PARTIAL, git, synthetic, synthetic_environ
 
 # FAKE_AGENT after a Claude-shaped stream of its tool calls, written to {stream_copy}. With LAB_SNOOP set, the `medium` arm also
 # reads the run's manifest, lists `.blind/` and greps the output directory: the run directory is two levels above its receipt.
@@ -254,7 +254,7 @@ class LabIsolation(unittest.TestCase):
                 results = self.root / f"results-{name}"
                 for stale in capture.iterdir():
                     stale.unlink()
-                with mock.patch.dict(os.environ, {"LAB_CAPTURE": str(capture)}):
+                with mock.patch.dict(os.environ, synthetic_environ(self.root, LAB_CAPTURE=str(capture)), clear=True):
                     self.assertIsNone(self.run_lab(out / "replay-set.json", results, replicates=1)["stop"])
                 cells = lab.load_cells(results)
                 self.assertEqual({c["read_isolation"] for c in cells}, {mode})
@@ -424,9 +424,9 @@ class ReplayRunner(unittest.TestCase):
     def test_nothing_the_agent_sees_names_its_arm_and_the_salt_is_sealed_in_the_summary(self):
         capture, out = self.root / "capture", self.root / "out"
         capture.mkdir()
-        inherited = {**os.environ, "LAB_CAPTURE": str(capture)}
         argv = ["replay_eval.py", "--set", str(self.set), "run", "--arms", "alpha,bravo", "--out", str(out)]
-        with mock.patch.dict(os.environ, {"LAB_CAPTURE": str(capture)}), mock.patch.object(sys, "argv", argv), mock.patch.object(sys, "stdout"):
+        environ = synthetic_environ(self.root, LAB_CAPTURE=str(capture))
+        with mock.patch.dict(os.environ, environ, clear=True), mock.patch.object(sys, "argv", argv), mock.patch.object(sys, "stdout"):
             self.assertEqual(replay_eval.main(), 0)
         captures = [json.loads(p.read_text()) for p in sorted(capture.iterdir())]
         self.assertEqual(len(captures), 4)
@@ -435,8 +435,9 @@ class ReplayRunner(unittest.TestCase):
         for seen in captures:
             self.assertRegex(Path(seen["cwd"]).name, r"^007-\d{16}-")
             self.assertRegex(Path(seen["argv"][2]).name, r"^\d{16}\.runner\.json$")
+            self.assertTrue(seen["canary"])
+            self.assertEqual(seen["env_naming_arm"], [])
             fields = {"cwd": seen["cwd"], "argv": seen["argv"][:3] + seen["argv"][4:],  # argv[3] is {effort}: the treatment itself
-                      "env": {k: v for k, v in seen["env"].items() if inherited.get(k) != v},
                       "tree": [name for name in seen["tree"] if name.split(os.sep)[0] != ".git"],
                       "stdin": seen["stdin"], "prompt_file": seen["prompt_file"]}
             for field, value in fields.items():
