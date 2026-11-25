@@ -64,12 +64,11 @@ schemas, and the dashboard snapshot.
 
   The 17 and 44 thresholds are where an honest oracle at the verdict's own acceptance gates (25% and 90%) gives one outcome less
   than 1% of the time, taking graded cells as independent. `lab_accept`'s exit contract is read only for tasks that use it; a
-  task with its own grader command errs or times out only as the controller recorded, and any other exit rejects. `status` exits 1 while an alarm is open. `report` adds the same block, `oracle_health`, with a per-arm
-  breakdown. An alarm never changes a verdict: it marks the run `oracle-suspect`. The printed verdict gains `oracle_status` and
-  `oracle_suspect`, and `report.md` opens with a notice until a person runs `status --ack-oracle REASON`. That command writes
-  `ORACLE-ACK.json`, bound to the set, the margin, the alarms, the pooled counts and every cell by id and receipt digest, so any
-  new or swapped cell reopens the alarm; it is written whole and renamed into place, never through a link. `status` reads one
-  stable snapshot of the results, read again when a file moved mid-read, and says `snapshot: unstable` otherwise. Runs whose cells record no grader exit read
+  task with its own grader command errs or times out only as the controller recorded, and any other exit rejects. `status` is read only: it exits 3 when it cannot read a stable snapshot of the
+  results (every cell artifact and `.blind/` file unchanged across the read, three tries), else 1 while an alarm is open. `report`
+  adds the same block, `oracle_health`, with a per-arm breakdown. An alarm never changes a verdict: it marks the run
+  `oracle-suspect`. The printed verdict gains `oracle_status` and `oracle_suspect`, and `report.md` opens with a notice while the
+  alarm is open. There is no acknowledgement in 1.11.0; whoever reads the report decides whether the run stands (planned for 1.12). Runs whose cells record no grader exit read
   `unmeasured` and keep every verdict value. See [the lab guide](docs/lab.md#oracle-health-status-and-the-report).
 - Read isolation and contamination detection for replay cells (`007 lab run` and `replay_eval run`). Each cell has a list of
   protected paths: `--out`, the set's directory (the set file for `replay_eval`), source repositories, hidden-test sources,
@@ -141,8 +140,7 @@ schemas, and the dashboard snapshot.
 - An agent receipt left in `--out/.blind/` by a controller that died is now counted. `report` lists it in
   `orphan_blind_files`, named by its cell when the salt and the ledger or plan trace it, and counts that cell as attempted
   without a result; `status` counts them (token-named and other) and never prints a name. `status` prints allowlisted fields
-  only: exits as numbers or `non-integer`, isolation modes the runner writes or `other`, and an acknowledgement without its
-  reason. A resume stops with `uncertain-attempts` for such a file
+  only: exits as numbers or `non-integer` and isolation modes the runner writes or `other`; no time and no free text. A resume stops with `uncertain-attempts` for such a file
   even when the ledger lost its dispatch.
 - `replay_eval run`, outside `007 lab`, named each agent's workspace and receipt by its arm. It now uses the same salted tokens
   and seals the salt as `blind_salt` in its `summary.json`, written before the first cell and replaced whole each time, never

@@ -834,7 +834,7 @@ class LabEndToEnd(unittest.TestCase):
         for row in lab.load_cells(results):
             self.assertTrue(row.get("stream_copy") is None or (results / row["stream_copy"]).is_file())
 
-    def test_oracle_health_is_blind_in_status_never_moves_the_verdict_and_holds_until_acknowledged(self):
+    def test_oracle_health_is_blind_in_status_never_moves_the_verdict_and_holds_while_the_alarm_is_open(self):
         out = self.root / "lab"
         lab.mine(self.config, out, 2)
         path, results = out / "replay-set.json", self.root / "results"
@@ -881,24 +881,17 @@ class LabEndToEnd(unittest.TestCase):
         self.assertIn("oracle-errors", suspect["oracle_health"]["alarms"])
         self.assertEqual((suspect["verdict"]["oracle_status"], suspect["verdict"]["oracle_suspect"]), ("oracle-suspect", True))
         self.assertIn("**Oracle-suspect:** an oracle alarm is open", (results / "report.md").read_text())
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(lab.main(["status", "--set", str(path), "--results", str(results)]), 1)
-        with self.assertRaisesRegex(ValueError, "needs a reason"):
-            lab.status(path, results, " ")
-        self.assertEqual(lab.status(path, results, "the grader was fixed and the run is discarded")["oracle_health"]["status"], "acknowledged")
-        acked = lab.report(path, results, None)
-        self.assertEqual((verdict(acked), acked["verdict"]["oracle_status"], acked["verdict"]["oracle_suspect"]), (verdict(healthy), "acknowledged", False))
-        self.assertIn("alarm acknowledged by a person", (results / "report.md").read_text())
-        with self.assertRaisesRegex(ValueError, "no open oracle alarm"):
-            lab.status(path, results, "again")
-        first = files[0]
-        row = json.loads(first.read_text())
-        row["acceptance"][0]["exit"] = 137  # any change to the counts voids the acknowledgement
-        first.write_text(json.dumps(row))
-        self.assertEqual(lab.report(path, results, None)["verdict"]["oracle_status"], "oracle-suspect")
         with contextlib.redirect_stdout(io.StringIO()) as printed:
             self.assertEqual(lab.main(["status", "--set", str(path), "--results", str(results)]), 1)
         self.assertEqual(json.loads(printed.getvalue())["oracle_health"]["status"], "oracle-suspect")
+        # decision R3-2: no acknowledgement in 1.11.0. The alarm stays on the report while it is open; status only reads
+        (results / "ORACLE-ACK.json").write_text(json.dumps({"at": "2026-11-25T00:00:00Z", "reason": "looked"}))  # ignored
+        self.assertEqual(lab.report(path, results, None)["verdict"]["oracle_status"], "oracle-suspect")
+        self.assertIn("**Oracle-suspect:** an oracle alarm is open", (results / "report.md").read_text())
+        self.assertNotIn("acknowledg", (results / "report.md").read_text().lower())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stop:
+            lab.main(["status", "--set", str(path), "--results", str(results), "--ack-oracle", "looked"])
+        self.assertEqual(stop.exception.code, 2)
 
     def test_the_report_reads_the_declared_margin_and_says_it_in_plain_words(self):
         out = self.root / "lab"
@@ -2465,29 +2458,6 @@ class OracleHealth(unittest.TestCase):
             (results / f"T{i}-r01-{row['arm']}.json").write_text(json.dumps({**row, "runner_receipt_sha256": "unmeasured"}))
         return results
 
-    def test_an_acknowledgement_binds_the_cells_the_set_and_the_margin_and_is_written_whole(self):
-        """Review #9: the ACK hash covered the pooled counts only, so other cells with the same counts, or another margin, kept it."""
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            results = self.alarmed(root)
-            self.assertEqual(lab.status(root / "set.json", results, "looked at it")["oracle_health"]["status"], "acknowledged")
-            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "acknowledged")
-            (results / "T0-r01-medium.json").rename(results / "T0-r02-medium.json")  # another cell, the same pooled counts
-            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "oracle-suspect")
-            (results / "T0-r02-medium.json").rename(results / "T0-r01-medium.json")
-            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "acknowledged")
-            self.alarmed(root, margin=.05)  # the set's margin moved
-            self.assertEqual(lab.status(root / "set.json", results)["oracle_health"]["status"], "oracle-suspect")
-            # an ACK that is a link is never written through, nor read
-            outside = root / "outside.json"
-            outside.write_text("keep")
-            (results / lab.ORACLE_ACK).unlink()
-            (results / lab.ORACLE_ACK).symlink_to(outside)
-            self.assertEqual(lab.status(root / "set.json", results, "again")["oracle_health"]["status"], "acknowledged")
-            self.assertEqual(outside.read_text(), "keep")
-            self.assertFalse((results / lab.ORACLE_ACK).is_symlink())
-            self.assertEqual([p.name for p in results.iterdir() if p.name.startswith(".")], [])  # no temporary file left
-
     def test_a_custom_grader_is_not_read_as_lab_accept(self):
         """Review #10: lab_accept's exit contract was applied to every grader. A custom command that exits 1 with no report rejects,
         and its exit 3 is no timeout; an empty acceptance list records no grade; only the set's own controls count."""
@@ -2506,12 +2476,12 @@ class OracleHealth(unittest.TestCase):
             (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh"}, "tasks": tasks}))
             (root / "sensitivity.json").write_text(json.dumps({"conformant": ["L", "C", "OTHER", "OTHER"]}))
             self.assertEqual(lab.custom_graders(json.loads((root / "set.json").read_text())), {"C"})
-            health, _ = lab._oracle_state(root / "set.json", root, [], .03)
+            health = lab._oracle_state(root / "set.json", [], .03)
             self.assertEqual(health["reference_controls_passed"], 2)
 
     def test_status_prints_allowlisted_fields_only(self):
-        """Review #8: `.blind/` names, an acknowledgement's reason, isolation-mode strings and non-numeric exits were printed as
-        written, and any of them can name an arm."""
+        """Review #8: `.blind/` names, isolation-mode strings and non-numeric exits were printed as written, and any of them can
+        name an arm."""
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             results = self.alarmed(root)
@@ -2521,14 +2491,13 @@ class OracleHealth(unittest.TestCase):
             (results / ".blind").mkdir()
             (results / ".blind" / "medium.runner.json").write_text("{}")
             (results / ".blind" / ("1" * 16 + ".stream.jsonl")).write_text("")
-            out = lab.status(root / "set.json", results, "xhigh looked wrong")
+            out = lab.status(root / "set.json", results)
             text = json.dumps(out)
             self.assertFalse(re.search(r"(?i)medium|xhigh", text))
             self.assertEqual(out["orphans"]["blind_files"], {"tokens": 1, "other": 1})
             self.assertEqual(out["read_isolation"]["modes"], {"other": 1, "unrecorded": 19})
             self.assertEqual(out["oracle_health"]["exit_codes"], {"1": 19, "non-integer": 1})
-            self.assertEqual(set(out["oracle_health"]["acknowledgement"]), {"at"})
-            self.assertEqual(json.loads((results / lab.ORACLE_ACK).read_text())["reason"], "xhigh looked wrong")  # kept for report
+            self.assertFalse(re.search(r'"at"|acknowledg', text))  # no time, no free text
 
     def test_status_reads_one_stable_snapshot(self):
         """Review #9: a receipt promoted between the cell read and the `.blind/` read showed in neither; a file that vanished in
@@ -2546,6 +2515,25 @@ class OracleHealth(unittest.TestCase):
             self.assertEqual((out["snapshot"], out["oracle_health"]["cells"]), ("stable", 20))  # read again once the file settled
             with mock.patch.object(lab.replay_eval, "blind_files", side_effect=lambda _, n=iter(range(99)): [str(next(n))]):
                 self.assertEqual(lab.status(root / "set.json", results)["snapshot"], "unstable")
+
+    def test_a_cell_rewritten_during_the_read_is_unstable_and_status_exits_3(self):
+        """Review r2 N3: equal `.blind/` listings missed a labelled cell rewritten in place (run rewrites a refused cell with
+        os.replace), and an unstable reading still exited 0 or 1. Status now compares every cell artifact and exits 3."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            results = self.alarmed(root)
+            real, n = lab.replay_eval.read_cell_artifacts, iter(range(99))
+
+            def rewriting(directory):
+                found = real(directory)
+                cell = results / "T0-r01-medium.json"
+                cell.write_text(json.dumps({**json.loads(cell.read_text()), "pad": "x" * next(n)}))  # a new revision each read
+                return found
+            with mock.patch.object(lab.replay_eval, "read_cell_artifacts", side_effect=rewriting):
+                self.assertEqual(lab.status(root / "set.json", results)["snapshot"], "unstable")
+                with contextlib.redirect_stdout(io.StringIO()) as printed:
+                    self.assertEqual(lab.main(["status", "--set", str(root / "set.json"), "--results", str(results)]), 3)
+            self.assertEqual(json.loads(printed.getvalue())["snapshot"], "unstable")
 
 
 if __name__ == "__main__":

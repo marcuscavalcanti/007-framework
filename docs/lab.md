@@ -220,18 +220,17 @@ exited 1 before writing its report. `status` shows the grader's health while a r
 
 ```bash
 007 lab status --set lab/replay-set.json --results results
-007 lab status --set lab/replay-set.json --results results --ack-oracle "REASON"
 ```
 
-`status` reads the cells written so far, A/A copies included, takes no lock and checks no receipt. It reads the cells between two
-identical listings of `.blind/`, and again (up to three times) when a file moved in between or vanished mid-read; `snapshot` says
-`stable`, or `unstable` when the directory kept changing. It prints health pooled over
-every cell and never an arm, task, cell or verdict, so it can be read during a run without peeking at the comparison. Its exit code
-is 1 while an alarm is open and 0 otherwise, so a driver can stop on it. `report` adds the same block (`oracle_health`) with a
+`status` is read only and advisory: it reads the cells written so far, A/A copies included, takes no lock, writes nothing and
+checks no receipt. It reads them between two equal generations of every cell artifact and `.blind/` file (name, inode, size and
+modification time), and again, up to three times, when anything was added, removed or rewritten in between; `snapshot` says
+`stable`, or `unstable` when the directory kept changing. It prints health pooled over every cell and never an arm, task, cell,
+verdict, time or free text, so it can be read during a run without peeking at the comparison. It exits 3 when it could not read a
+stable snapshot, else 1 while an alarm is open and 0 otherwise, so a driver can stop on it. `report` adds the same block (`oracle_health`) with a
 per-arm breakdown (`per_arm`). The report already shows each arm's acceptance, so it reveals nothing new. `status` prints
 allowlisted fields only: grader exits as numbers (any other value counts as `non-integer`), isolation modes the runner writes
-(any other counts as `other`), `.blind/` files as counts, and an acknowledgement's time without its reason (the reason stays in
-`ORACLE-ACK.json` and the report). Limit: it is pooled, not private. Two readings taken around a single cell's completion differ
+(any other counts as `other`) and `.blind/` files as counts. Limit: it is pooled, not private. Two readings taken around a single cell's completion differ
 by that cell, so a person comparing consecutive snapshots can learn one cell's class; read it between chunks, not after every
 cell, when that matters.
 
@@ -272,17 +271,12 @@ without the alarm. The printed verdict carries `oracle_status`, which is one of:
 
 - `no-alarm`;
 - `unmeasured`: no cell records a grade, as for runs from before this field;
-- `oracle-suspect`;
-- `acknowledged`.
+- `oracle-suspect`.
 
 The printed verdict also carries `oracle_suspect`. While it is true, `report.md` opens with an oracle-suspect notice and the verdict
-is not a clean one. A person clears it with `status --ack-oracle REASON`, which is refused when no alarm is open. That command
-writes `ORACLE-ACK.json` (time, reason, alarms, the SHA-256 of the pooled counts and `binding_sha256`). The binding covers the set
-file, the declared margin, the alarm list, the pooled counts and every cell by its id and receipt digest. `report` then reads
-`acknowledged`, still naming the alarms and the reason. The acknowledgement holds only for what it was given: any new, changed or
-swapped cell, another margin or set, or another alarm reopens it. It is refused on an unstable snapshot, read again just before it
-is written, written whole and renamed into place (a link at its name is replaced, never written through), and never read through a
-link. `run` does not read health and does not stop on it.
+is not a clean one. 1.11.0 has no way to acknowledge an alarm: it stays on the report while the counts ring, and whoever reads the
+report decides whether the run stands and records why with the study. A recorded acknowledgement is planned for 1.12 if real use
+calls for it. `run` does not read health and does not stop on it.
 
 ## What the report can say
 

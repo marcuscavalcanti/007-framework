@@ -183,8 +183,9 @@ The flow is `mine → sensitivity → viability → feasibility → run → stat
   copies' discordance and an A/A equality check, and calls the verdict A/A-qualified only with at least eight reaching
   tasks that have a usable matched pair, no rejection of equality, and the run's planned replicates (`report --replicates N`).
 - `status` (since 1.11.0) shows the grader's health, pooled over every cell, while a run is in flight, without revealing a
-  verdict. An alarm marks the report oracle-suspect until a person runs `status --ack-oracle REASON`; `run` does not stop
-  on it, so a driver that should stop must check `status`'s exit code.
+  verdict. It only reads: an open alarm marks the report oracle-suspect while it rings (there is no acknowledgement in 1.11.0),
+  and `status` exits 3 when it cannot read a stable snapshot. `run` does not stop on it, so a driver that should stop must check
+  `status`'s exit code.
 - `report` gives the verdict at the declared margin. `report --missing-data-guard` adds the missing-data guard and the cost
   per accepted change (every charged attempt counted once, refused ones included), and is the only path that reads `compare.critical_floor`; only that path, at one shape, has a
   calibrated control (above). For a confirmatory run, freeze and hash the set, margin and reach before the first attempt.
