@@ -6,7 +6,12 @@ schemas, and the dashboard snapshot.
 
 ## [Unreleased]
 
-## [1.11.0] - 2026-11-24
+## [1.11.0-rc.1] - 2026-11-25
+
+Pre-release, not activated as stable: the stable release stays 1.10.1. The package version is `1.11.0rc1` (PEP 440, as
+`007 --version` prints it) for the tag `v1.11.0-rc.1`. Four rounds of review by OpenAI `gpt-6.2-astra` at `xhigh`; the last
+verdict was FIX FIRST, and the fixes made after it were not reviewed. The reviews and the limits they left are recorded in
+[docs/evidence.md](docs/evidence.md) and in the entries below.
 
 ### Added
 
@@ -1181,7 +1186,7 @@ Minor release: new commands and schemas are additive, and v1 receipts stay valid
 - superseded laboratory implementations and provider-specific adapters.
 
 [Unreleased]: https://github.com/marcuscavalcanti/007-framework/compare/v1.11.0...HEAD
-[1.11.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.1...v1.11.0
+[1.11.0-rc.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.1...v1.11.0-rc.1
 [1.10.1]: https://github.com/marcuscavalcanti/007-framework/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/marcuscavalcanti/007-framework/compare/v1.8.1...v1.9.0
