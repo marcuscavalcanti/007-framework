@@ -2654,6 +2654,23 @@ class OracleHealth(unittest.TestCase):
                 self.assertEqual(lab.main(["status", "--set", str(root / "set.json"), "--results", str(plain)]), 3)
             self.assertEqual(lab.status(root / "set.json", root / "absent")["snapshot"], "stable")  # nothing written yet
 
+    def test_a_results_path_that_cannot_be_looked_up_is_no_reading(self):
+        """Review r4 R4-3: os.path.lexists is false on a permission error too, so an existing results directory under an
+        unreadable parent read as an absent, stable, empty run. Only FileNotFoundError is absent now."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh"}}))
+            locked = root / "locked"
+            (locked / "results").mkdir(parents=True)
+            locked.chmod(0)
+            try:
+                if os.access(locked, os.X_OK):  # running as a user permissions do not bind (root): nothing to observe
+                    self.skipTest("permissions are not enforced for this user")
+                self.assertEqual(lab.status(root / "set.json", locked / "results")["snapshot"], "unstable")
+            finally:
+                locked.chmod(0o700)
+            self.assertEqual(lab.status(root / "set.json", root / "absent")["snapshot"], "stable")
+
     def test_a_cell_rewritten_during_the_read_is_unstable_and_status_exits_3(self):
         """Review r2 N3: equal `.blind/` listings missed a labelled cell rewritten in place (run rewrites a refused cell with
         os.replace), and an unstable reading still exited 0 or 1. Status now compares every cell artifact and exits 3."""

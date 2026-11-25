@@ -2824,9 +2824,13 @@ def _snapshot(results):
     read failed. (cells, receipts, blind names, stable): an absent directory is an empty, stable reading; a path that is no
     directory, or one never read stably, comes back unstable."""
     found, receipts, names = {}, {}, []
-    if not os.path.lexists(results):  # nothing written yet
+    try:
+        os.lstat(results)
+    except FileNotFoundError:  # nothing written yet: the only absent case
         return {}, {}, [], True
-    if not results.is_dir():  # a path that exists but is no directory: no reading, never an empty run
+    except OSError:  # a permission or other lookup error: no reading, never an empty run
+        return {}, {}, [], False
+    if not results.is_dir():  # a path that exists but is no directory
         return {}, {}, [], False
     for _ in range(STATUS_TRIES):
         try:
@@ -2834,9 +2838,10 @@ def _snapshot(results):
             names = replay_eval.blind_files(results)
             found, receipts = replay_eval.read_cell_artifacts(results)
             after = _generation(results)
+            settled = after == before and replay_eval.blind_files(results) == names  # the final listing inside the attempt too
         except (OSError, ValueError):  # a file that vanished, was caught half written, or a listing that failed
             continue
-        if after == before and replay_eval.blind_files(results) == names:
+        if settled:
             return found, receipts, names, True
     return found, receipts, names, False
 
