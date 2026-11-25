@@ -56,7 +56,8 @@ Without an A/A, a disagreement such as 3 pairs in 62 cannot be told apart from n
 tasks and replicates: its copy is a third arm, `ARM-aa`, with ARM's model, effort and doctrine and the same agent command. Its cells
 are shuffled into each replicate with the others, dispatched, charged and stopped like ARM's: they take a `--stop-usd` reserve, count
 toward `--max-calls`, `--max-usd`, `--max-invalid`, refusals and the cost marker, and `arm_accounting` lists `ARM-aa` as an arm.
-Its agent sees a token like every other cell's (see [Blind arms](#blind-arms-what-the-agent-sees)), never ARM's name or the label.
+The names the controller generates for it (workspace, receipt and stream paths) carry a token like every other cell's, never ARM's
+name or the label; the other channels listed under [Blind arms](#blind-arms-what-the-agent-sees) stay open for the copy too.
 `run-manifest.json` records `aa` (`{"arm", "label"}`, or `null`); a resume with A/A turned on or off, or on another arm,
 stops with `manifest-mismatch` (`aa`), so the copy is either planned from the first dispatch or not at all. `chain` does not chain
 the copies (`aa_not_chained`), nor a contaminated cell, whatever patch it left (it is listed in `broken_chains`).
