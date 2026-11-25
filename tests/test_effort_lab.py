@@ -2377,6 +2377,27 @@ class OracleHealth(unittest.TestCase):
             self.assertFalse((results / lab.ORACLE_ACK).is_symlink())
             self.assertEqual([p.name for p in results.iterdir() if p.name.startswith(".")], [])  # no temporary file left
 
+    def test_status_prints_allowlisted_fields_only(self):
+        """Review #8: `.blind/` names, an acknowledgement's reason, isolation-mode strings and non-numeric exits were printed as
+        written, and any of them can name an arm."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            results = self.alarmed(root)
+            row = json.loads((results / "T0-r01-medium.json").read_text())
+            row.update(acceptance=[{"exit": "medium"}], read_isolation="xhigh-only")
+            (results / "T0-r01-medium.json").write_text(json.dumps(row))
+            (results / ".blind").mkdir()
+            (results / ".blind" / "medium.runner.json").write_text("{}")
+            (results / ".blind" / ("1" * 16 + ".stream.jsonl")).write_text("")
+            out = lab.status(root / "set.json", results, "xhigh looked wrong")
+            text = json.dumps(out)
+            self.assertFalse(re.search(r"(?i)medium|xhigh", text))
+            self.assertEqual(out["orphans"]["blind_files"], {"tokens": 1, "other": 1})
+            self.assertEqual(out["read_isolation"]["modes"], {"other": 1, "unrecorded": 19})
+            self.assertEqual(out["oracle_health"]["exit_codes"], {"1": 19, "non-integer": 1})
+            self.assertEqual(set(out["oracle_health"]["acknowledgement"]), {"at"})
+            self.assertEqual(json.loads((results / lab.ORACLE_ACK).read_text())["reason"], "xhigh looked wrong")  # kept for report
+
     def test_status_reads_one_stable_snapshot(self):
         """Review #9: a receipt promoted between the cell read and the `.blind/` read showed in neither; a file that vanished in
         the middle of a read made the whole run read empty."""

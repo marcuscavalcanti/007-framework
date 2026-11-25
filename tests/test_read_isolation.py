@@ -362,7 +362,7 @@ class LabIsolation(unittest.TestCase):
         self.assertEqual(report["arm_accounting"]["arms"]["medium"]["no_result"], 1)
         self.assertIn("1 files an agent left under its token in `.blind/` (0 not traced to a cell)", (results / "report.md").read_text())
         status = lab.status(path, results)
-        self.assertEqual(status["orphans"]["blind_files"], [name])
+        self.assertEqual(status["orphans"]["blind_files"], {"tokens": 1, "other": 0})  # counts only: a name is whatever was written
         self.assertNotRegex(json.dumps(status), r"(?i)medium|high")
         resumed = self.run_lab(path, results)
         self.assertEqual((resumed["stop"], resumed["orphans"]), ("uncertain-attempts", [lost]))

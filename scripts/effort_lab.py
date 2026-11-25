@@ -2484,8 +2484,9 @@ def _oracle_counts(rows):
     classes, exits = dict.fromkeys(ORACLE_CLASSES, 0), {}
     for row in rows:
         classes[oracle_class(row)] += 1
-        for code in _exits(row):
-            exits[str(code)] = exits.get(str(code), 0) + 1
+        for code in _exits(row):  # a number, or one bucket: an exit written as text could name anything
+            key = str(code) if type(code) is int else "non-integer"
+            exits[key] = exits.get(key, 0) + 1
     return {"cells": len(rows), "classes": classes, "exit_codes": dict(sorted(exits.items())),
             "contract_violations": sum(_off_contract(r) for r in rows)}
 
@@ -2586,6 +2587,8 @@ def read_isolation(rows):
 
 
 STATUS_TRIES = 3
+# read_isolation_mode()'s values: anything else in a cell is counted as `other` by status
+STATUS_ISOLATION_MODES = ("unenforced", "claude-settings", "codex-profile", "claude-settings+codex-profile", "unrecorded")
 
 
 def _snapshot(results):
@@ -2630,11 +2633,17 @@ def status(config_path, results, acknowledge=None):
     config = json.loads(config_path.read_text())
     margin = declared_margin(config)
     found, receipts, names, stable, rows, health, binding = _status_health(config_path, results, margin)
-    # a count for labelled receipts (their names carry the arm); `.blind/` files by name, since a token names no arm
-    orphans = {"receipts": len(set(receipts) - set(found)), "blind_files": names,
+    # counts only: labelled receipts carry the arm in their names, and a `.blind/` name is whatever was written there
+    tokens = sum(bool(re.fullmatch(r"[0-9]{16}\.(runner\.json|stream\.jsonl)", name)) for name in names)
+    orphans = {"receipts": len(set(receipts) - set(found)), "blind_files": {"tokens": tokens, "other": len(names) - tokens},
                "note": "in flight while a run is active, else orphaned"}
     isolation = read_isolation(rows)
     del isolation["contaminated_cells"]  # pooled: names no cell
+    modes = {}
+    for mode, count in isolation["modes"].items():  # a mode the runner never writes is counted, not printed
+        key = mode if mode in STATUS_ISOLATION_MODES else "other"
+        modes[key] = modes.get(key, 0) + count
+    isolation["modes"] = dict(sorted(modes.items()))
     if acknowledge is not None:
         if health["status"] != "oracle-suspect":
             raise ValueError(f"no open oracle alarm to acknowledge (status {health['status']})")
@@ -2648,6 +2657,8 @@ def status(config_path, results, acknowledge=None):
         _write_ack(results, {"at": at, "reason": acknowledge, "alarms": health["alarms"], "health_sha256": health["sha256"],
                              "binding_sha256": binding})
         health.update(status="acknowledged", acknowledgement={"at": at, "reason": acknowledge})
+    if "acknowledgement" in health:  # a reason is free text: `report` and ORACLE-ACK.json keep it, the blinded view does not
+        health["acknowledgement"] = {"at": health["acknowledgement"].get("at")}
     return {"schema": "007-lab/status/v1", "snapshot": "stable" if stable else "unstable", "oracle_health": health, "orphans": orphans,
             "read_isolation": isolation}
 

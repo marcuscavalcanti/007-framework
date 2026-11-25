@@ -122,7 +122,9 @@ schemas, and the dashboard snapshot.
   [the lab guide](docs/lab.md#blind-arms-what-the-agent-sees).
 - An agent receipt left in `--out/.blind/` by a controller that died is now counted. `report` lists it in
   `orphan_blind_files`, named by its cell when the salt and the ledger or plan trace it, and counts that cell as attempted
-  without a result; `status` lists the file names, which are tokens. A resume stops with `uncertain-attempts` for such a file
+  without a result; `status` counts them (token-named and other) and never prints a name. `status` prints allowlisted fields
+  only: exits as numbers or `non-integer`, isolation modes the runner writes or `other`, and an acknowledgement without its
+  reason. A resume stops with `uncertain-attempts` for such a file
   even when the ledger lost its dispatch.
 - `replay_eval run`, outside `007 lab`, named each agent's workspace and receipt by its arm. It now uses the same salted tokens
   and seals the salt as `blind_salt` in its `summary.json`, written before the first cell. Outputs without a salt load as

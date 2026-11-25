@@ -103,8 +103,8 @@ pools every cell and names no arm), and each cell records its `blind_token`. The
 `<token>.stream.jsonl`. If the controller itself dies while an agent runs, that agent's receipt stays in `.blind/`
 under its token. `report` lists every file there in `orphan_blind_files`, each named by its cell when the sealed salt and the
 ledger or the plan identify it, counts that cell as attempted without a result, and adds it to `orphan_receipts`; `report.md`
-says how many such files there are and how many it could not trace. `status` lists the file names, which are tokens, beside a
-count of labelled orphan receipts. A resume stops with `uncertain-attempts` for any file in `.blind/`, even one whose dispatch
+says how many such files there are and how many it could not trace. `status` counts them, as token-named files and
+others (a name there is whatever was written, so it is never printed), beside a count of labelled orphan receipts. A resume stops with `uncertain-attempts` for any file in `.blind/`, even one whose dispatch
 the ledger lost, as well as for the ledger's own unfinished dispatches. The A/A copy gets a token like any other cell. So does a stage-2 cell, whose task id names
 its stage-1 cell and arm. The salt is not part of the set, so it never moves `set_sha256`. A resume reads it from the manifest, so a
 cell's token is the same on every resume. A salt that is not 32 hex digits stops a resume with `manifest-mismatch` (`blind_salt`).
@@ -196,7 +196,12 @@ identical listings of `.blind/`, and again (up to three times) when a file moved
 `stable`, or `unstable` when the directory kept changing. It prints health pooled over
 every cell and never an arm, task, cell or verdict, so it can be read during a run without peeking at the comparison. Its exit code
 is 1 while an alarm is open and 0 otherwise, so a driver can stop on it. `report` adds the same block (`oracle_health`) with a
-per-arm breakdown (`per_arm`). The report already shows each arm's acceptance, so it reveals nothing new.
+per-arm breakdown (`per_arm`). The report already shows each arm's acceptance, so it reveals nothing new. `status` prints
+allowlisted fields only: grader exits as numbers (any other value counts as `non-integer`), isolation modes the runner writes
+(any other counts as `other`), `.blind/` files as counts, and an acknowledgement's time without its reason (the reason stays in
+`ORACLE-ACK.json` and the report). Limit: it is pooled, not private. Two readings taken around a single cell's completion differ
+by that cell, so a person comparing consecutive snapshots can learn one cell's class; read it between chunks, not after every
+cell, when that matters.
 
 Each cell falls in one class. Classes are read from the grader's exits and never change the cell's verdict:
 
