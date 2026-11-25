@@ -1,5 +1,21 @@
 # Evidence
 
+## Release review of the 1.11.0 pre-release (`v1.11.0-rc.1`)
+
+Appended on 2026-11-25. The 1.11.0 candidate had four rounds of release review by OpenAI `gpt-6.2-astra` at `xhigh`; each
+returned FIX FIRST, the later rounds on the previous round's fixes only. The fixes made after the fourth round were not
+reviewed. With no SHIP verdict the candidate is not qualified as a stable release, so it is published as the pre-release
+`v1.11.0-rc.1` (package version `1.11.0rc1`), not activated, and 1.10.1 stays the stable release. The review records stay in
+the maintainer's files. Limits left open, also stated in [the lab guide](lab.md):
+
+- the oracle alarm has no acknowledgement in this release; an open alarm marks the report until it stops ringing;
+- blind promotion guards against collisions and accidents, not against a process running with the user's authority;
+- the viability pilot does not count an attempt that left only an orphan receipt, and an unsealed pilot is matched by task
+  ids only;
+- the A/A discordance interval pools pairs as independent; the oracle alarm thresholds take graded cells as independent;
+- implicit recognition of `lab_accept` reads the interpreter's name, not a verified identity;
+- the status snapshot compares observations of the covered files at both ends of a read, not everything between them.
+
 ## Errata and limits published for 1.11.0
 
 Appended on 2026-11-24. No published result file is edited: each frozen report keeps its text and verdict, and these notes
