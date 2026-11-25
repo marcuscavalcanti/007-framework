@@ -106,8 +106,24 @@ class StreamScan(unittest.TestCase):
             {"type": "item.completed", "item": {"id": "m", "type": "agent_message", "text": f"I will not read {out}"}},
             {"type": "assistant", "message": {"content": [{"type": "text", "text": f"thinking about {out}"}]}},
             {"type": "user", "message": {"content": [{"type": "tool_result", "content": out}]}},
-            raw=b'{"type": "assistant", "message": {"content": [\n')  # a torn last line: counted, never read as clean silently
-        self.assertEqual((found["status"], found["hits"], found["tool_calls"], found["unparsed_lines"]), ("clean", [], 3, 1))
+            raw=b'{"type": "assistant", "message": {"content": [\n')  # a torn last line: counted, and the scan is incomplete
+        self.assertEqual((found["status"], found["hits"], found["tool_calls"], found["unparsed_lines"]), ("incomplete", [], 3, 1))
+
+    def test_an_empty_malformed_or_hostile_stream_is_never_clean(self):
+        """Review #12: an empty or wholly malformed stream read `clean`; a deeply nested line or a call id that is a list aborted
+        the scan; a line of any length was read whole."""
+        out = str(self.out)
+        self.assertEqual(self.scan()["status"], "unscanned")
+        self.assertEqual(self.scan()["reason"], "empty-stream")
+        self.assertEqual(self.scan(raw=b"not json\n{torn")["status"], "unscanned")
+        deep = (b'{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "d", "name": "Read", "input": '
+                + b'{"a": ' * 5000 + b'"x"' + b"}" * 5000 + b"}]}}\n")  # nested past the recursion limit
+        listed = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": ["a"], "name": "Read", "input": {"file_path": out + "/x"}}]}}
+        found = self.scan(listed, self.claude("Read", file_path="ok"), raw=deep)
+        self.assertEqual((found["status"], found["tool_calls"], found["unparsed_lines"]), ("contaminated", 2, 1))
+        with mock.patch.object(replay_eval, "MAX_SCAN_LINE", 400):  # a short limit; the middle line is far longer, the others far shorter
+            long = self.scan(self.claude("Read", file_path="ok"), self.claude("Bash", command="x" * 2000), self.claude("Read", file_path="z"))
+        self.assertEqual((long["status"], long["tool_calls"], long["unparsed_lines"]), ("incomplete", 2, 1))
 
     def test_no_retained_stream_is_unscanned(self):
         self.assertEqual(replay_eval.scan_stream(None, self.protected, str(self.work))["status"], "unscanned")
@@ -206,7 +222,7 @@ class LabIsolation(unittest.TestCase):
         status = json.dumps(lab.status(path, results))
         self.assertNotRegex(status, r"(?i)medium|high")
         pooled = lab.status(path, results)["read_isolation"]
-        self.assertEqual(pooled["contamination"], {"clean": 2 * tasks, "contaminated": 2 * tasks, "unscanned": 0, "unrecorded": 0})
+        self.assertEqual(pooled["contamination"], {"clean": 2 * tasks, "contaminated": 2 * tasks, "incomplete": 0, "unscanned": 0, "unrecorded": 0})
         self.assertNotIn("contaminated_cells", pooled)
 
     def test_contamination_shows_in_the_report_per_arm_and_pooled(self):
@@ -367,6 +383,19 @@ class LabIsolation(unittest.TestCase):
         resumed = self.run_lab(path, results)
         self.assertEqual((resumed["stop"], resumed["orphans"]), ("uncertain-attempts", [lost]))
 
+    def test_an_orphan_token_is_traced_against_the_declared_plan(self):
+        """Review #12: with the ledger lost, a token was looked up only one replicate past the highest finished cell."""
+        path, results = self.mined(), self.root / "results"
+        self.assertIsNone(self.run_lab(path, results, replicates=1)["stop"])
+        config = json.loads(path.read_text())
+        salt = json.loads((results / "run-manifest.json").read_text())["blind_salt"]
+        lost = lab.replay_eval.cell_id(config["tasks"][0], "medium", 4)
+        (results / ".blind" / (replay_eval.blind_token(salt, lost) + ".runner.json")).write_text("{}")
+        (results / "dispatch.jsonl").unlink()
+        rows = lab.load_cells(results)
+        self.assertEqual(lab.blind_orphans(config, results, rows)[0]["cell"], None)  # without the plan: not traced, kept explicit
+        self.assertEqual(lab.blind_orphans(config, results, rows, planned_replicates=4)[0]["cell"], lost)
+
     def test_a_blind_file_alone_stops_a_resume_even_without_its_dispatch(self):
         """The ledger normally names the lost attempt too; without that row the `.blind/` file alone still stops the resume."""
         path, results = self.mined(), self.root / "results"
@@ -470,6 +499,17 @@ class ReplayRunner(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 replay_eval.main()
         self.assertEqual(seen, [True])
+
+    def test_a_summary_is_replaced_whole_never_truncated(self):
+        """Review #12: summary.json, which seals the salt, was rewritten in place; a crash mid-write could lose it."""
+        out = self.root / "sealed"
+        out.mkdir()
+        replay_eval.write_summary(out, self.set, {"seed": 5, "blind_salt": "a" * 32}, 1, [])
+        before = (out / "summary.json").read_bytes()
+        with mock.patch.object(replay_eval.os, "fsync", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            replay_eval.write_summary(out, self.set, {"seed": 5, "blind_salt": "a" * 32}, 1, [{"cell": 1}])
+        self.assertEqual((out / "summary.json").read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["summary.json"])
 
     def test_records_from_before_1_11_still_load_unchanged(self):
         """A replay output written before 1.11.0: labelled receipts, no salt in its summary, no token or scan in its cells."""

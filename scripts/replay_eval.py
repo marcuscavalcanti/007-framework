@@ -544,10 +544,25 @@ def experiment_schedule(config, arms, replicates):
     return schedule
 
 
+def _replace_text(path, text):
+    """Write `text` to a temporary file beside `path` and rename it over `path`; on any failure the old file stands, and the
+    temporary one is removed."""
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
+        try:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        except BaseException:
+            handle.close()
+            os.unlink(handle.name)
+            raise
+    os.replace(handle.name, path)
+
+
 def write_summary(output_dir, replay_set, config, replicates, rows):
     """The run's record. Since 1.11.0 it also seals `blind_salt` (written before the first cell, so a run that dies keeps it); a
-    summary without one was run with labelled paths."""
-    (output_dir / "summary.json").write_text(
+    summary without one was run with labelled paths. Written whole, then renamed over the last one: a crash never truncates it."""
+    _replace_text(output_dir / "summary.json",
         json.dumps({
             "experiment_id": config.get("experiment_id"),
             "replay_set_sha256": hashlib.sha256(replay_set.read_bytes()).hexdigest(),
@@ -854,30 +869,57 @@ def _tool_calls(row):
     return []
 
 
+MAX_SCAN_LINE = 16 * 1024 * 1024  # a longer stream line is skipped, counted unparsed, and leaves the scan incomplete
+
+
+def _stream_lines(handle):
+    """(line, whole) pairs, each read up to MAX_SCAN_LINE bytes; a longer line is drained in pieces and given as (None, False)."""
+    while True:
+        line = handle.readline(MAX_SCAN_LINE + 1)
+        if not line:
+            return
+        if len(line) <= MAX_SCAN_LINE or line.endswith(b"\n"):
+            yield line, True
+            continue
+        while line and not line.endswith(b"\n"):
+            line = handle.readline(MAX_SCAN_LINE + 1)
+        yield None, False
+
+
 def scan_stream(stream, protected, workspace):
     """Contamination check of one retained stream: every string a tool call carries (a path, a pattern, a shell command, written
     content) is matched against each protected path, as text and, for each path-like token, resolved against the workspace (`..`,
     `~`). Case is ignored. It sees only what the stream logs: a path built at run time (a variable, an encoded or globbed name, a
-    script that computes it) or a read by a program the agent started is invisible to it."""
+    script that computes it) or a read by a program the agent started is invisible to it. `clean` needs every line read: a stream
+    with no readable line is `unscanned` (`empty-stream`), and one with an unreadable line (torn, too long, too deep) and no hit is
+    `incomplete`."""
     if stream is None or not Path(stream).is_file():
         return {"status": "unscanned", "reason": "no-retained-stream"}
     # as text: not inside a longer path (`/a/x/out` is not `/x/out`), and ending at a separator, `/` or the end
     roots = [(label, variant, re.compile(r"(?<![\w.~-])" + re.escape(variant) + r"(?![^/\s'\"`=;|&<>(),{}\[\]])"))
              for label, path in protected for variant in sorted(_path_variants(path))]
     home = str(Path.home())
-    calls, hits, unparsed = set(), {}, 0
+    calls, hits, unparsed, parsed = set(), {}, 0, 0
     with open(stream, "rb") as handle:
-        for line in handle:
-            if not line.strip():
+        for line, whole in _stream_lines(handle):
+            if whole and not line.strip():
                 continue
             try:
+                if not whole:
+                    raise ValueError("line too long")
                 row = json.loads(line)
-            except ValueError:
+                found = []
+                for tool, call_id, arguments in _tool_calls(row):
+                    key = call_id if isinstance(call_id, (str, int, float, bool)) else json.dumps([tool, call_id, arguments], sort_keys=True, default=str)
+                    texts = list(_strings(arguments))
+                    found.append((tool, key, texts))
+            except (ValueError, RecursionError, TypeError):
                 unparsed += 1
                 continue
-            for tool, call_id, arguments in _tool_calls(row):
-                calls.add(call_id if call_id is not None else (tool, json.dumps(arguments, sort_keys=True, default=str)))
-                for text in _strings(arguments):
+            parsed += 1
+            for tool, key, texts in found:
+                calls.add(key)
+                for text in texts:
                     folded = text.casefold()
                     names = {folded}
                     for token in PATH_TOKEN.findall(text):
@@ -886,8 +928,10 @@ def scan_stream(stream, protected, workspace):
                             names.add(os.path.normpath(os.path.join(workspace, token)).casefold())
                     for label, root, pattern in roots:
                         if any(name == root or name.startswith(root + "/") for name in names) or pattern.search(folded):
-                            hits.setdefault(label, set()).add(tool)
-    return {"status": "contaminated" if hits else "clean", "tool_calls": len(calls), "unparsed_lines": unparsed,
+                            hits.setdefault(label, set()).add(str(tool))
+    if not hits and not parsed:
+        return {"status": "unscanned", "reason": "empty-stream", "tool_calls": 0, "unparsed_lines": unparsed, "hits": []}
+    return {"status": "contaminated" if hits else "incomplete" if unparsed else "clean", "tool_calls": len(calls), "unparsed_lines": unparsed,
             "hits": [{"protected": label, "tools": sorted(tools)} for label, tools in sorted(hits.items())]}
 
 

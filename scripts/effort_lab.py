@@ -2570,9 +2570,10 @@ def _oracle_state(config_path, results, rows, margin):
     return health, binding
 
 
-def blind_orphans(config, results, rows):
+def blind_orphans(config, results, rows, planned_replicates=None):
     """Files left in `.blind/` (an agent whose controller died, or one still running), each named by its cell when the sealed
-    salt and the ledger or the plan identify it, else None. Counted beside orphan receipts, never dropped."""
+    salt and the ledger or the plan identify it, else None. Counted beside orphan receipts, never dropped. Without the declared
+    plan (`planned_replicates`, the run's --replicates), the plan is guessed up to one replicate past the highest cell."""
     names = replay_eval.blind_files(results)
     if not names:
         return []
@@ -2585,6 +2586,8 @@ def blind_orphans(config, results, rows):
         arms = {**arms, aa.get("label"): None}
     # the cells a token can belong to: those with a result or a dispatch, and every planned one up to one replicate past the last
     reps = max([r["replicate"] for r in rows if type(r.get("replicate")) is int] + [1]) + 1
+    if planned_replicates is not None:
+        reps = max(reps, planned_replicates)
     candidates = {r["cell"] for r in rows} | {row["cell"] for row in (_ledger(results) or [])}
     candidates |= {replay_eval.cell_id(t, a, k) for t in config.get("tasks", []) for a in arms for k in range(1, reps + 1)}
     return [{"file": name, "cell": replay_eval.blind_cell(salt, name, candidates)} for name in names]
@@ -2592,7 +2595,7 @@ def blind_orphans(config, results, rows):
 
 def read_isolation(rows):
     """What each cell asked its CLI to enforce and what its stream showed. `unrecorded`: cells written before 1.11.0."""
-    modes, found = {}, {"clean": 0, "contaminated": 0, "unscanned": 0, "unrecorded": 0}
+    modes, found = {}, {"clean": 0, "contaminated": 0, "incomplete": 0, "unscanned": 0, "unrecorded": 0}
     for row in rows:
         mode = row.get("read_isolation") if isinstance(row.get("read_isolation"), str) else "unrecorded"
         modes[mode] = modes.get(mode, 0) + 1
@@ -2715,7 +2718,7 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     rows = cells = load_cells(results)
     # an orphan receipt (an attempt with no result) may have spent: named in the report, never silently dropped
     _, receipts = replay_eval.read_cell_artifacts(results)
-    blind = blind_orphans(config, results, rows)
+    blind = blind_orphans(config, results, rows, planned_replicates)
     receipts = {**receipts, **{entry["cell"]: {} for entry in blind if entry["cell"] and entry["cell"] not in receipts}}
     accounting = arm_accounting({**config, "arms": {**config["arms"], aa["label"]: None}} if aa else config, results, rows, receipts)
     orphans = sorted(set(receipts) - {r["cell"] for r in rows})

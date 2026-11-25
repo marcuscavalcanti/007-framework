@@ -74,7 +74,9 @@ schemas, and the dashboard snapshot.
   `{read_isolation_codex_profile}` gives Codex a permission profile that denies each path. Each cell records
   `read_isolation`, which is `unenforced` when the command asks nothing. Detection reads the retained stream
   (`--stream-copy {stream_copy}`): a tool call that names a protected path marks the cell `contaminated` and invalid, and it
-  counts against `--max-invalid`. `report` and `status` (pooled) show the modes and the scan results; cells from before 1.11.0
+  counts against `--max-invalid`. A scan is `clean` only when every line was read: an empty or wholly unreadable stream is
+  `unscanned` (`empty-stream`), and a torn, over-long (16 MiB) or too deeply nested line with no hit makes it `incomplete`.
+  `report` and `status` (pooled) show the modes and the scan results; cells from before 1.11.0
   read `unrecorded` and are never rescanned. Prevention is only what each CLI enforces, detection sees only logged tool calls,
   and full isolation needs an OS sandbox, which 007 does not provide. See
   [the lab guide](docs/lab.md#read-isolation-and-contamination).
@@ -129,7 +131,8 @@ schemas, and the dashboard snapshot.
   reason. A resume stops with `uncertain-attempts` for such a file
   even when the ledger lost its dispatch.
 - `replay_eval run`, outside `007 lab`, named each agent's workspace and receipt by its arm. It now uses the same salted tokens
-  and seals the salt as `blind_salt` in its `summary.json`, written before the first cell. Outputs without a salt load as
+  and seals the salt as `blind_salt` in its `summary.json`, written before the first cell and replaced whole each time, never
+  truncated in place. Outputs without a salt load as
   before.
 - **`PROVEN` was too easy when a task's attempts fail together.** A calibrated positive control of Study F's rule (41 go-json
   tasks, two attempts per arm, a 20-point margin, 4,000 replicates per loss model) labelled it NOT-CALIBRATED. A true loss of

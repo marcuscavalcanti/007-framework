@@ -170,11 +170,17 @@ cell's stream is scanned once its agent exits. Every string a tool call carries 
 `tool_use` inputs (Read, Grep, Glob, Bash commands, written content) and Codex command, file-change and MCP items, without their
 output. Matching ignores case, resolves `~` and `..` against the workspace, and accepts a path's resolved and `/private`-less
 spellings. A hit marks the cell `contaminated`: `valid` false, `failure_class: "contaminated"`, counted against `--max-invalid`
-like any invalid cell. A contaminated cell stays `contaminated` even when the provider also refused the call (a usage limit or a rate limit with no usage): it is never relabelled `provider-rate-limit` or requeued, so a read cannot be erased by redispatching the cell. A usage limit that cut it still pauses the run with `quota-hold` until the reset, and its ledger row carries `usage_limit` and `resets_at` for a resume. A cleanup failure is recorded first in `failure_class`; `contamination.status` still says `contaminated`, and the lab reads either. Each cell records `contamination` with its status (`clean`, `contaminated` or `unscanned` when no stream
-was kept), its tool-call count, its unparsed stream lines and, for a hit, the protected path's kind and the tools, never the
+like any invalid cell. A contaminated cell stays `contaminated` even when the provider also refused the call (a usage limit or a rate limit with no usage): it is never relabelled `provider-rate-limit` or requeued, so a read cannot be erased by redispatching the cell. A usage limit that cut it still pauses the run with `quota-hold` until the reset, and its ledger row carries `usage_limit` and `resets_at` for a resume. A cleanup failure is recorded first in `failure_class`; `contamination.status` still says `contaminated`, and the lab reads either. Each cell records `contamination` with its status (`clean`, `contaminated`, `incomplete` when a line could
+not be read and no hit was found, or `unscanned` when no stream was kept or no line of it could be read, `empty-stream`), its
+tool-call count, its unparsed stream lines and, for a hit, the protected path's kind and the tools, never the
 command. `report` adds `read_isolation`, with the modes, the scan statuses and the contaminated cells; per arm they appear among
 the invalid cells. `status` pools the same counts and names no cell. Cells written before 1.11.0 read `unrecorded`; nothing
 rescans them, so their verdicts are unchanged.
+
+A line is read up to 16 MiB; a longer, torn or too deeply nested line is counted unparsed and makes the scan `incomplete`, never
+`clean`. `replay_eval run` replaces `summary.json` whole (written beside it, then renamed), so a crash cannot truncate the salt it
+seals. With the dispatch ledger lost, `report` traces a `.blind/` token against the plan given with `--replicates`; without it,
+up to one replicate past the highest cell, and a file it cannot trace stays listed with no cell.
 
 The scan cannot see a path built at run time (a variable, an encoded, globbed or concatenated name, a script that computes
 it), a read made by a program the agent started, or a call the CLI does not log. It is conservative the other way too: a call
