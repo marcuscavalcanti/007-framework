@@ -2324,6 +2324,17 @@ class AA(unittest.TestCase):
             self.assertEqual(out["status"], "too-few-tasks")
             self.assertEqual(out["qualifying_behaviour"]["tasks"], 0)
 
+    def test_the_markdown_prints_the_qualifying_interval_and_names_the_rejecting_one(self):
+        """Review r3 R3-10: a rejection from the qualifying interval alone was printed beside the pooled interval only, which
+        could contain zero."""
+        aa = {"arm": "xhigh", "status": "rejects-equality", "rejects_equality": False, "qualifying_rejects_equality": True,
+              "discordance": {"pairs": 20, "discordant": 2, "rate": .1, "ci95": [.01, .3], "missing_pairs": 0, "worst_case_rate": .1},
+              "reachable_behaviour": {"tasks": 10, "mean": .01, "ci95": [-.02, .04]}, "same_change_reachable": "PROVEN",
+              "qualifying_behaviour": {"tasks": 9, "mean": .08, "ci95": [.03, .13]}}
+        line = lab.aa_line(aa, .03)
+        self.assertIn("qualifying interval (matched pairs on reaching tasks) +8.0 points (95% +3.0 to +13.0, 9 tasks)", line)
+        self.assertIn("rejected by the qualifying interval", line)
+
     def test_copies_that_are_all_archived_are_not_absent(self):
         """Review r2 N7: with every copy set aside under refused/, the JSON listed refused copies while the status read `absent` and
         report.md said there were no A/A cells."""

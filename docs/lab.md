@@ -81,7 +81,8 @@ The printed verdict carries `aa_status` and `aa_qualified`. `aa_qualified` is tr
 tasks (the verdict's own minimum) that reach new behaviour have a usable matched pair, the A/A does not reject equality, and the
 planned replicates were given. Qualification reads its own interval, `qualifying_behaviour`: the same per-task difference and t
 interval, computed from usable matched pairs only, on tasks that reach new behaviour (reach taken from every valid cell, or the
-frozen reach). A rejection by it or by the pooled statistic disqualifies, either counted only with at least 8 tasks. Otherwise the status is `absent` (no A/A cells: a run
+frozen reach). A rejection by it or by the pooled statistic disqualifies, either counted only with at least 8 tasks. `report.md` prints
+both intervals and, on a rejection, names the interval that rejected. Otherwise the status is `absent` (no A/A cells: a run
 without `--aa`, or one whose copies never ran; a copy set aside under `refused/` counts as present, so its pairs are counted
 missing), `too-few-tasks`, `rejects-equality` or `plan-unknown` (no `--replicates`), and
 `report.md` says the verdict is not A/A-qualified. The matched-pair condition matters because the pooled statistic uses each task's

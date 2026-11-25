@@ -3011,7 +3011,13 @@ def aa_line(aa, margin):
             if d["missing_pairs"] else "")
     reach = (f"; reach difference {100 * r['mean']:+.1f} points (95% {100 * r['ci95'][0]:+.1f} to {100 * r['ci95'][1]:+.1f}, {r['tasks']} tasks), "
              f"same change at margin {100 * margin:g} points {aa['same_change_reachable']}" if r.get("ci95") else "")
-    return f"- **A/A, `{aa['arm']}` twice:** {status}; {discord}{lost}{reach}."
+    q = aa.get("qualifying_behaviour") or {}
+    qualifying = (f"; qualifying interval (matched pairs on reaching tasks) {100 * q['mean']:+.1f} points (95% {100 * q['ci95'][0]:+.1f} to "
+                  f"{100 * q['ci95'][1]:+.1f}, {q['tasks']} tasks)" if q.get("ci95") else "; no qualifying interval (too few matched pairs on reaching tasks)"
+                  if "qualifying_behaviour" in aa else "")
+    by = [name for name, hit in (("the pooled interval", aa.get("rejects_equality")), ("the qualifying interval", aa.get("qualifying_rejects_equality"))) if hit]
+    rejected = f"; rejected by {' and '.join(by)}" if aa["status"] == "rejects-equality" and by else ""
+    return f"- **A/A, `{aa['arm']}` twice:** {status}; {discord}{lost}{reach}{qualifying}{rejected}."
 
 
 ORACLE_ALARM_TEXT = {"rejects-everything": "no graded cell accepted", "accepts-everything": "every graded cell accepted",
