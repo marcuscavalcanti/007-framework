@@ -211,12 +211,17 @@ Each cell falls in one class. Classes are read from the grader's exits and never
 | `timeout` | exit 3 (a suite that did not finish, a rejection) or `acceptance-timeout` |
 | `invalid` | invalid for a reason outside the grader (the agent's exit or timeout, a refusal, identity, cleanup) |
 | `accepted`, `rejected` | a valid cell graded 0, or 1 with its report |
-| `unrecorded` | a valid cell that records no grader exit (cells from before the field) |
+| `unrecorded` | a valid cell that records no grader exit (cells from before the field, or an empty acceptance list) |
+
+These exit readings are `lab_accept`'s contract. They apply to tasks that declare `acceptance_exit_contract: "lab-accept-v1"`
+or run `lab_accept.py`, and to cells of tasks the set does not list. A task with its own grader command reads differently: it is
+an `oracle-error` or `timeout` only when the controller recorded the grader failing or timing out (`acceptance-harness-error`,
+`hidden-acceptance-*`, `acceptance-timeout`), any exit other than 0 is a rejection, and no exit breaks the contract.
 
 It also gives `exit_codes`, the distribution of every grader exit, and `contract_violations`: cells with an exit `lab_accept` never
 gives (outside 0 to 3, such as a signal), or whose acceptance disagrees with their exits. `graded` counts accepted, rejected and
 timeout cells. `reference_controls_passed` counts the set's tasks whose reference control passed in `sensitivity.json`
-(`conformant`), or is null without one.
+(`conformant`, distinct ids that are tasks of the set), or is null without one.
 
 | Alarm | Rings when | Why this threshold |
 |---|---|---|
@@ -226,7 +231,8 @@ timeout cells. `reference_controls_passed` counts the set's tasks whose referenc
 | `oracle-timeouts` | at least 3 `timeout` cells, and more than the margin's share of graded cells | The same rule. A timeout is a legitimate rejection, but one caused by load falls on whichever arm runs slower |
 | `exit-contract` | any contract violation | `lab_accept` exits 0, 1, 2 or 3 only |
 
-The 1% thresholds are fixed by this release, not taken from an earlier rule. A status read many times during a run can ring by
+The 1% thresholds are fixed by this release, not taken from an earlier rule. They take graded cells as independent; repeated
+attempts on one task are not, so a task the grader always rejects counts more than once. A status read many times during a run can ring by
 chance more often than once in a hundred runs. The alarm is a request to look, not a verdict.
 
 **An alarm never changes a verdict.** It marks the run `oracle-suspect`. Every verdict value stays as the same cells give it

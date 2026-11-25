@@ -2377,6 +2377,27 @@ class OracleHealth(unittest.TestCase):
             self.assertFalse((results / lab.ORACLE_ACK).is_symlink())
             self.assertEqual([p.name for p in results.iterdir() if p.name.startswith(".")], [])  # no temporary file left
 
+    def test_a_custom_grader_is_not_read_as_lab_accept(self):
+        """Review #10: lab_accept's exit contract was applied to every grader. A custom command that exits 1 with no report rejects,
+        and its exit 3 is no timeout; an empty acceptance list records no grade; only the set's own controls count."""
+        custom = [graded(f"C{i}", "xhigh", 1, 1, report=False) for i in range(4)] + [graded(f"D{i}", "xhigh", 1, 3, report=False) for i in range(4)]
+        rows = self.mixed(30, 30) + custom + [{**graded("Z", "xhigh", 1, 0), "acceptance": []}]
+        ids = {r["task"] for r in custom}
+        health = lab.oracle_health(rows, .03, custom=ids)
+        self.assertEqual((health["alarms"], health["classes"]["rejected"], health["classes"]["unrecorded"]), ([], 38, 1))
+        self.assertEqual(health["classes"]["oracle-error"] + health["classes"]["timeout"], 0)
+        lab_rows = lab.oracle_health(rows, .03)  # the same cells under lab_accept's contract: crashes and timeouts
+        self.assertEqual((lab_rows["classes"]["oracle-error"], lab_rows["classes"]["timeout"]), (4, 4))
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            tasks = [{"id": "L", "acceptance": [["python3", ".007-accept/lab_accept.py"]]}, {"id": "K", "acceptance_exit_contract": "lab-accept-v1",
+                     "acceptance": [["x"]]}, {"id": "C", "acceptance": [["make", "check"]]}]
+            (root / "set.json").write_text(json.dumps({"compare": {"candidate": "medium", "reference": "xhigh"}, "tasks": tasks}))
+            (root / "sensitivity.json").write_text(json.dumps({"conformant": ["L", "C", "OTHER", "OTHER"]}))
+            self.assertEqual(lab.custom_graders(json.loads((root / "set.json").read_text())), {"C"})
+            health, _ = lab._oracle_state(root / "set.json", root, [], .03)
+            self.assertEqual(health["reference_controls_passed"], 2)
+
     def test_status_prints_allowlisted_fields_only(self):
         """Review #8: `.blind/` names, an acknowledgement's reason, isolation-mode strings and non-numeric exits were printed as
         written, and any of them can name an arm."""

@@ -2455,48 +2455,60 @@ def _exits(row):
     return [c.get("exit") for c in checks if isinstance(c, dict)] if isinstance(checks, list) else []
 
 
-def oracle_class(row):
+def custom_graders(config):
+    """The set's tasks whose grader is not lab_accept: no `lab-accept-v1` contract and no `lab_accept.py` in their acceptance
+    command. Their exits mean what their own command means, so lab_accept's exit contract is not applied to them."""
+    lab_accept = lambda task: task.get("acceptance_exit_contract") == replay_eval.LAB_ACCEPT_EXIT_CONTRACT or any(
+        "lab_accept.py" in str(part) for command in (task.get("acceptance") or []) if isinstance(command, list) for part in command)
+    return {task["id"] for task in config.get("tasks", []) if isinstance(task, dict) and "id" in task and not lab_accept(task)}
+
+
+def oracle_class(row, custom=False):
     """One cell as the grader's health reads it, never a verdict. A grader failure comes first, even on a cell the run counted
     valid: a set mined before 1.10.1 reads exit 2 as a rejection, and lab_accept writes its report before every exit 1, so a
-    single exit 1 with no readable report is a grader that crashed (the 0/124 failure). Exit 3 is a rejection by timeout."""
+    single exit 1 with no readable report is a grader that crashed (the 0/124 failure). Exit 3 is a rejection by timeout. A
+    `custom` grader (not lab_accept) fails only as the controller saw it fail; any exit but 0 rejects. A cell with no grader exit
+    (no acceptance, or an empty one) is unrecorded."""
     failure, exits = str(row.get("failure_class") or ""), _exits(row)
     unreported = row.get("outcomes_unreadable") or not isinstance(row.get("acceptance_outcomes"), dict)
-    if (failure == "acceptance-harness-error" or failure.startswith("hidden-acceptance-") or any(e not in (0, 1, 3) for e in exits)
-            or (exits == [1] and unreported)):
+    if (failure == "acceptance-harness-error" or failure.startswith("hidden-acceptance-")
+            or not custom and (any(e not in (0, 1, 3) for e in exits) or (exits == [1] and unreported))):
         return "oracle-error"
-    if failure == "acceptance-timeout" or 3 in exits:
+    if failure == "acceptance-timeout" or not custom and 3 in exits:
         return "timeout"
     if row.get("valid") is not True:
         return "invalid"
     if not exits:
-        return "unrecorded" if row.get("acceptance") is None else "invalid"
+        return "unrecorded"
     return "accepted" if all(e == 0 for e in exits) else "rejected"
 
 
-def _off_contract(row):
+def _off_contract(row, custom=False):
     """An exit lab_accept never gives (a signal, a missing interpreter), or a cell whose acceptance disagrees with its exits."""
     exits = _exits(row)
-    return any(e not in (0, 1, 2, 3) for e in exits) or bool(
+    return not custom and any(e not in (0, 1, 2, 3) for e in exits) or bool(
         exits and row.get("valid") is True and bool(row.get("accepted")) != all(e == 0 for e in exits))
 
 
-def _oracle_counts(rows):
+def _oracle_counts(rows, custom=frozenset()):
     classes, exits = dict.fromkeys(ORACLE_CLASSES, 0), {}
     for row in rows:
-        classes[oracle_class(row)] += 1
+        classes[oracle_class(row, row.get("task") in custom)] += 1
         for code in _exits(row):  # a number, or one bucket: an exit written as text could name anything
             key = str(code) if type(code) is int else "non-integer"
             exits[key] = exits.get(key, 0) + 1
     return {"cells": len(rows), "classes": classes, "exit_codes": dict(sorted(exits.items())),
-            "contract_violations": sum(_off_contract(r) for r in rows)}
+            "contract_violations": sum(_off_contract(r, r.get("task") in custom) for r in rows)}
 
 
-def oracle_health(rows, margin, controls=None):
+def oracle_health(rows, margin, controls=None, custom=frozenset()):
     """The grader's health pooled over `rows`: counts only, no arm, task or cell. Alarms (ORACLE_THRESHOLDS): no acceptance
     after `zero_accepted_after` graded cells, every graded cell accepted after `all_accepted_after`, grader errors or timeouts at
     `min_count` or more and above the declared margin's share (alone they could move one arm by more than the margin), and any
-    exit outside the contract. An alarm never changes a verdict. `controls`: the set's tasks whose reference control passed."""
-    counts = _oracle_counts(rows)
+    exit outside the contract (lab_accept's tasks only; `custom` names the others). An alarm never changes a verdict. `controls`:
+    the set's tasks whose reference control passed. The 1% thresholds take graded cells as independent; repeated attempts on one
+    task are not."""
+    counts = _oracle_counts(rows, custom)
     c, t = counts["classes"], ORACLE_THRESHOLDS
     graded = c["accepted"] + c["rejected"] + c["timeout"]
     alarms = [name for name, ringing in (
@@ -2540,11 +2552,17 @@ def _oracle_state(config_path, results, rows, margin):
     """oracle_health with the set's reference controls and a person's acknowledgement, valid only for what it was given for
     (_ack_binding). `rows` carry their cell id in `cell`."""
     try:
+        config = json.loads(config_path.read_text())
+    except (OSError, ValueError):
+        config = {}
+    ids = {t.get("id") for t in config.get("tasks", []) if isinstance(t, dict)}
+    try:
         conformant = json.loads((config_path.parent / "sensitivity.json").read_text()).get("conformant")
-        controls = len(conformant) if isinstance(conformant, list) else None
+        controls = len({c for c in conformant if isinstance(c, str)} & ids) if isinstance(conformant, list) else None
     except (OSError, ValueError, AttributeError):
         controls = None
-    health = oracle_health(rows, margin, controls)
+    custom = custom_graders(config)
+    health = oracle_health(rows, margin, controls, custom)
     binding = _ack_binding(config_path, rows, health)
     ack = _read_ack(results)
     if health["alarms"] and isinstance(ack, dict) and ack.get("binding_sha256") == binding:
@@ -2795,7 +2813,8 @@ def _report(config_path, results, next_results, single_look, missing_data_guard_
     tier["aa_qualified"] = tier["aa_status"] == "qualified"  # never without A/A cells
     # pooled over every cell, copies included; per arm only here, where the report already shows each arm's acceptance
     oracle, _ = _oracle_state(config_path, results, cells, margin)
-    oracle["per_arm"] = {arm: _oracle_counts([r for r in cells if r.get("arm") == arm]) for arm in sorted({r.get("arm") for r in cells})}
+    custom = custom_graders(config)
+    oracle["per_arm"] = {arm: _oracle_counts([r for r in cells if r.get("arm") == arm], custom) for arm in sorted({r.get("arm") for r in cells})}
     tier["oracle_status"] = oracle["status"]
     tier["oracle_suspect"] = oracle["status"] == "oracle-suspect"  # the verdict's values stand; its label is not clean
     guard = None
