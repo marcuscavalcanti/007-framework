@@ -29,8 +29,9 @@ schemas, and the dashboard snapshot.
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
   computation with it, and their output is unchanged. Both refuse a task id that is not a plain name, and a `tasks/` root, task directory or
   `hidden.json`/`baseline.json` that resolves outside the set, before reading task files.
-  From a pilot it refuses one sealed with another set and any cell of a foreign task, counts every attempted task (invalid,
-  refused, archived and dispatch-only included) in the shares' denominator, reads only the compared arms' cells (an A/A copy
+  From a pilot it refuses one sealed with another set and any cell or readable archive of a foreign task, counts as attempted
+  every task with a cell result, a readable archived refusal or a ledger dispatch of a compared arm (not one that left only an
+  orphan receipt) in the accepted-task and sufficient shares' denominator, reads only the compared arms' cells (an A/A copy
   supplies no sufficiency), never reads `VIABLE` from an `unbound` pilot, reads an untried arm or a valid cell without a cost as missing rather than
   as zero or as absent from the median, gives the denominators in `pilot`, and names a missing task file as an input error.
   The accepted-task shares are keyed by role (`candidate`,

@@ -2181,6 +2181,16 @@ class Viability(unittest.TestCase):
             self.assertNotEqual(unbound["verdict"], "VIABLE")
             self.assertIn("pilot-binding", unbound["missing"])
 
+    def test_an_archived_refusal_of_a_foreign_task_is_refused(self):
+        # review r3 R3-5: a readable archive of a compared arm for a task outside the set was silently dropped
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.write_set(root, 10, {"immediate": {"mutants": 40, "rejected": 30}, "load_sensitive": []})
+            (root / "refused").mkdir()
+            (root / "refused" / "OTHER-r01-medium.1.json").write_text(json.dumps({"task": "OTHER", "arm": "medium", "replicate": 1}))
+            with mock.patch.object(lab, "load_cells", return_value=self.pilot()), self.assertRaisesRegex(ValueError, "outside this set"):
+                lab.viability(root / "set.json", root)
+
     def test_a_pilot_sealed_with_another_set_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

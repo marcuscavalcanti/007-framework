@@ -2195,13 +2195,13 @@ def viability(config_path=None, results=None, stated=None):
         if results is not None:
             low, ref = config["compare"]["candidate"], config["compare"]["reference"]
             binding = sealed_state(config, results)["state"]  # a pilot sealed with another set is refused, not matched by task ids
-            every = load_cells(results)
-            if {r.get("task") for r in every} - ids:
+            every, archived = load_cells(results), refused_attempts(results, (low, ref))
+            if {r.get("task") for r in every} - ids or {r["task"] for r in archived} - ids:  # live cells and readable archives
                 raise ValueError("--results holds cells of tasks outside this set; give numbers from other runs in --inputs")
             rows = [r for r in every if r["valid"] is True and r.get("arm") in (low, ref)]  # an A/A copy or another arm never counts
             # attempted: every task with a cell of either arm, invalid or refused included, as the cost ratio's bootstrap counts them,
             # and every task known only from an archived refusal or a dispatch the ledger records
-            known = [(r.get("task"), r.get("arm")) for r in every] + [(r["task"], r["arm"]) for r in refused_attempts(results, (low, ref))]
+            known = [(r.get("task"), r.get("arm")) for r in every] + [(r["task"], r["arm"]) for r in archived]
             for row in _ledger(results) or []:
                 decoded = _decode_cell(row.get("cell", ""), ids, (low, ref)) if "dispatched_at" in row else None
                 known += [decoded[:2]] if decoded else []

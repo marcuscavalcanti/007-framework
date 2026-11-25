@@ -434,9 +434,12 @@ From pilot cells, the inputs are read as follows:
 - The pilot must be of this set: a sealed pilot whose manifest names another set is refused, and so is any cell, valid or not,
   of a task outside the set. `pilot.binding` says whether it was sealed; an unsealed pilot is matched by task ids only, and an
   `unbound` one (cells no sealed dispatch produced) never reads `VIABLE`: `pilot-binding` is listed as missing.
-- "Attempted" is every task with a cell of either compared arm, invalid and refused cells included, as the cost ratio's task
-  bootstrap counts them, and every task known only from an archived refusal under `refused/` or a dispatch in the ledger. Cells
-  of an A/A copy or of any other arm feed no input. `pilot` gives the denominators: attempted tasks, valid cells per role and valid cells without a cost.
+- "Attempted" is every task of the set with evidence of an attempt by a compared arm, from three sources: a cell result (valid,
+  invalid or refused), a readable archived refusal under `refused/`, and a dispatch row in the ledger. An attempt that left only
+  an orphan receipt or a `.blind/` file, with no result, archive or ledger row, is not counted (a limit). This denominator is
+  used by the accepted-task shares and the sufficient share; the reach share and SD are computed as `feasibility` computes them,
+  over tasks with valid cells of both arms. Cells of an A/A copy or of any other arm feed no input, and a cell or readable
+  archive of a compared arm for a task outside the set is refused. `pilot` gives the denominators: attempted tasks, valid cells per role and valid cells without a cost.
 - The reach share and SD are computed as `feasibility` computes them.
 - The sufficient share is computed as `sufficiency` computes it, over any valid cell, out of the attempted tasks.
 - The saving is 1 − (median cost per valid cell at the candidate ÷ median at the reference), as PREREG-F computed it. A valid
