@@ -27,7 +27,9 @@ schemas, and the dashboard snapshot.
   outcomes: too few tasks, an oracle that rejects 0.2968 of planted defects (under 0.30), and a reference accepted in
   4.3% of cells, which also makes `PAYS` unreachable and leaves the study underpowered. Study F's go-json numbers read
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
-  computation with it, and their output is unchanged.
+  computation with it, and their output is unchanged. The accepted-task shares are keyed by role (`candidate`,
+  `reference`) and both are required; a `sensitivity_v2` decision must be one `sensitivity-v2` gives; and a saving of 0 or
+  less reads `underpowered` at once, since it fixes the break-even margin at 0.
 - `007 lab run --aa ARM` runs ARM twice on the same tasks, at one more paid attempt per task and replicate, so the report can
   show the copies' discordance and an A/A equality check beside the verdict. The copy is a third arm,
   `ARM-aa`, with ARM's model, effort and doctrine. Its cells are dispatched, charged and stopped like ARM's, and

@@ -353,14 +353,18 @@ Every threshold is a gate the lab already applies or a recorded rule. The reason
 | `prompt-insufficient` | tasks × the share of attempted tasks where one cell passed ≥ 0.8 of the new behaviour < 8 | `sufficiency`'s default threshold, against the same 8 |
 | `reference-does-not-deliver` | reference-arm acceptance < 0.25 | `GATES["floor"]`: acceptance under it is not informative |
 | `pays-unreachable` | for some arm, (1 − share of tasks with an accepted cell)^tasks > 0.025 | Study F reads the cost ratio R from a task bootstrap at its 97.5% point. A resample with no accepted change in an arm makes R infinite. When that happens more than 2.5% of the time, the upper bound is infinite and `PAYS` cannot be read |
-| `underpowered` | power of `PROVEN` at the break-even margin < 0.50, or the margin is 0 | margin `m = min(0.20, reference acceptance × saving)` (PREREG-F; [Choosing the margin](#choosing-the-margin)); power as `feasibility` computes it, over tasks × reach share; 0.50 from the power rule of the D-2 study on the maintainer's repositories (an amendment kept in the private record) |
+| `underpowered` | power of `PROVEN` at the break-even margin < 0.50, or the margin is 0. A saving of 0 or less fixes the margin at 0, so it fires at once, whatever else is missing | margin `m = min(0.20, reference acceptance × saving)` (PREREG-F; [Choosing the margin](#choosing-the-margin)); power as `feasibility` computes it, over tasks × reach share; 0.50 from the power rule of the D-2 study on the maintainer's repositories (an amendment kept in the private record) |
 
 From pilot cells, the inputs are read as follows:
 
 - The reach share and SD are computed as `feasibility` computes them.
 - The sufficient share is computed as `sufficiency` computes it, over any valid cell.
 - The saving is 1 − (median cost per valid cell at the candidate ÷ median at the reference), as PREREG-F computed it.
-- The accepted-task shares are the distinct tasks with an accepted cell in each arm, over the tasks attempted.
+- The accepted-task shares are the distinct tasks with an accepted cell in each arm, over the tasks attempted. They are
+  keyed by role, `{"candidate": share, "reference": share}`, in the output and in `--inputs`; both roles are required, so
+  one favourable arm or a misspelled arm name is refused instead of read as the whole input.
+- A `sensitivity_v2` given in `--inputs` must carry one of the decisions `sensitivity-v2` gives (`passes`, `fails`,
+  `indeterminate`, `no-information`, `floor-unset`); any other string is refused.
 
 When the set's `compare.margin` differs from the break-even margin, a note says so. `report` tests the declared margin, so a
 `PAYS` reading needs the break-even margin declared before the first attempt. Cells of tasks outside the set are refused;

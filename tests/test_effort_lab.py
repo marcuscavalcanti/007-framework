@@ -1896,19 +1896,19 @@ REPO_B = {"tasks": 52, "sensitivity": {"mutants": 310, "rejected": 92}, "load_se
 # same repository (accepted xhigh 3 of 70; median per-task saving 0.679; SD 0.198 over 21 reaching tasks, replicates 1 and 2).
 # The 9 accepted cells of both arms fell in 3 distinct tasks, so no arm had more than 3 of 24.
 REPO_C = {"tasks": 24, "sensitivity": {"mutants": 136, "rejected": 46}, "load_sensitive": [], "reference_acceptance": [3, 70],
-          "saving": 0.6793728227263807, "sd": 0.19758041884322772, "reach_share": 21 / 24, "accepted_task_share": {"medium": 3 / 24, "xhigh": 3 / 24}}
+          "saving": 0.6793728227263807, "sd": 0.19758041884322772, "reach_share": 21 / 24, "accepted_task_share": {"candidate": 3 / 24, "reference": 3 / 24}}
 # Study F as planned (PREREG-F): the 2026-11-07 Claude run on go-json's 41 reaching commits, 2 attempts per arm. SD from its
 # primary t interval [-0.118, +0.0073] around -0.0553; xhigh accepted 63/82, medium 55/81, so at least 32 and 28 distinct tasks
 # had an accepted cell; 36 commits had one in some attempt; median cost US$0.568 vs US$2.272. Oracle: go-json's mined set,
 # 255 of 321 planted defects rejected.
 GO_JSON_PLANNED = {"tasks": 41, "sensitivity": {"mutants": 321, "rejected": 255}, "load_sensitive": [], "reach_share": 1.0,
                    "sd": (0.0073296801017865496 + 0.055326787034104104) * 41 ** .5 / lab.t975(40), "sufficient_share": 36 / 41,
-                   "reference_acceptance": [63, 82], "saving": 1 - 0.5682964 / 2.27185, "accepted_task_share": {"medium": 28 / 41, "xhigh": 32 / 41},
+                   "reference_acceptance": [63, 82], "saving": 1 - 0.5682964 / 2.27185, "accepted_task_share": {"candidate": 28 / 41, "reference": 32 / 41},
                    "declared_margin": 0.2}
 # Study F's own cells (RESULT-F): interval [-0.030, +0.047] around +0.0085; xhigh 61/81, medium 56/82 accepted; mean cost per
 # cell US$0.70 vs US$2.90 (no median published).
 GO_JSON_F = {**GO_JSON_PLANNED, "sd": (0.047348909666070395 - 0.00848210644074907) * 41 ** .5 / lab.t975(40), "reference_acceptance": [61, 81],
-             "saving": 1 - 0.70 / 2.90, "accepted_task_share": {"medium": 28 / 41, "xhigh": 31 / 41}, "sufficient_share": 31 / 41}
+             "saving": 1 - 0.70 / 2.90, "accepted_task_share": {"candidate": 28 / 41, "reference": 31 / 41}, "sufficient_share": 31 / 41}
 
 
 class Viability(unittest.TestCase):
@@ -1944,7 +1944,7 @@ class Viability(unittest.TestCase):
                  "oracle-blind-v2": {"sensitivity_v2": {"decision": "fails", "sensitivity": .1, "interval": [.05, .2]}},
                  "too-few-reaching-tasks": {"reach_share": 7 / 41}, "prompt-insufficient": {"sufficient_share": 7 / 41},
                  "reference-does-not-deliver": {"reference_acceptance": [20, 82], "saving": 1.0},
-                 "pays-unreachable": {"accepted_task_share": {"medium": 3 / 41, "xhigh": 32 / 41}},
+                 "pays-unreachable": {"accepted_task_share": {"candidate": 3 / 41, "reference": 32 / 41}},
                  "underpowered": {"sd": .9}}
         for reason, change in cases.items():
             with self.subTest(reason):
@@ -1979,6 +1979,20 @@ class Viability(unittest.TestCase):
             with self.subTest(bad), self.assertRaises(ValueError):
                 lab.viability_verdict(bad)
 
+    def test_accepted_task_shares_name_both_roles_and_v2_a_known_decision(self):
+        # one favourable arm, a misspelled arm or a typo in the v2 decision must not pass as a complete input
+        for bad in ({"accepted_task_share": {"candidate": 1.0}}, {"accepted_task_share": {"medium": .9, "xhigh": .9}},
+                    {"accepted_task_share": {"candidate": .9, "reference": .9, "other": .1}}, {"sensitivity_v2": {"decision": "fail"}}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                lab.viability_verdict({**GO_JSON_PLANNED, **bad})
+
+    def test_a_known_zero_break_even_margin_decides_at_once(self):
+        # nothing saved: the margin is 0 whatever the reference acceptance, SD or reach turn out to be
+        for saving in (0.0, -.3):
+            with self.subTest(saving):
+                out = lab.viability_verdict({"tasks": 41, "saving": saving})
+                self.assertEqual((out["verdict"], self.reasons(out), out["derived"]["break_even_margin"]), ("NOT-VIABLE", ("underpowered",), 0.0))
+
     def write_set(self, root, n, sensitivity, v2=None):
         for i in range(n):
             (root / "tasks" / f"T{i}").mkdir(parents=True)
@@ -2004,7 +2018,7 @@ class Viability(unittest.TestCase):
                 out = lab.viability(root / "set.json", root)
             inputs = out["inputs"]
             self.assertEqual((inputs["tasks"], inputs["reach_share"], inputs["sufficient_share"], inputs["reference_acceptance"]), (10, 1.0, 1.0, [20, 20]))
-            self.assertEqual((inputs["saving"], inputs["accepted_task_share"], inputs["declared_margin"]), (.75, {"medium": 1.0, "xhigh": 1.0}, .2))
+            self.assertEqual((inputs["saving"], inputs["accepted_task_share"], inputs["declared_margin"]), (.75, {"candidate": 1.0, "reference": 1.0}, .2))
             self.assertEqual(inputs["sensitivity"], {"mutants": 40, "rejected": 30})
             self.assertEqual(out["sources"]["sensitivity"], "sensitivity.json immediate")
             self.assertEqual(out["verdict"], "VIABLE")

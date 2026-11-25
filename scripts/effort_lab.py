@@ -1969,6 +1969,8 @@ VIABILITY = {
 }
 VIABILITY_INPUTS = ("tasks", "sensitivity", "reach_share", "sd", "sufficient_share", "reference_acceptance", "saving", "accepted_task_share")
 VIABILITY_OPTIONAL = ("load_sensitive", "sensitivity_v2", "declared_margin")
+VIABILITY_ROLES = ("candidate", "reference")  # accepted_task_share's keys: the set's compare roles, never arm names
+V2_DECISIONS = ("passes", "fails", "indeterminate", "no-information", "floor-unset")  # sensitivity_v2_summary's decisions
 VIABILITY_HELP = """\
 Verdict: VIABLE (every input known, no reason to fail), NOT-VIABLE (reasons below; any known failure decides, whatever is
 missing) or UNKNOWN (the inputs it lacks; missing data never reads VIABLE). Exit 0, 1 and 3 respectively.
@@ -1985,12 +1987,13 @@ Reasons, in the order of the D-2 measurability ladder (tasks, instrument, refere
   pays-unreachable           an arm accepted a change in so few tasks that a task resample misses them all > 2.5 % of the time:
                              the cost ratio's 97.5 % bootstrap point (study F) is then infinite and PAYS cannot be read
   underpowered               normal power of PROVEN at the break-even margin m = min(0.20, reference acceptance x saving)
-                             (PREREG-F) < 0.50 (the D-2 study's power rule); also when m is 0
+                             (PREREG-F) < 0.50 (the D-2 study's power rule); also when m is known to be 0 (no saving),
+                             whatever else is missing
 Inputs come from the set's directory (tasks, sensitivity.json, sensitivity-v2.json), from pilot cells of this set
 (--results: reach share and SD as in feasibility, sufficiency, reference acceptance, median cost saving, tasks with an
 accepted cell per arm) and from --inputs, a JSON object of recorded numbers that wins over both: tasks, sensitivity
 {mutants, rejected}, reach_share, sd, sufficient_share, reference_acceptance [accepted, cells], saving, accepted_task_share
-{arm: share}, and optionally load_sensitive, sensitivity_v2 {decision, sensitivity, interval}, declared_margin.
+{candidate: share, reference: share}, and optionally load_sensitive, sensitivity_v2 {decision, sensitivity, interval}, declared_margin.
 VIABLE is no known reason to fail, not a promised verdict: the power ignores the calibrated critical value."""
 
 
@@ -2003,8 +2006,9 @@ def _viability_check(inputs):
               "saving": lambda v: number(v) and v <= 1, "declared_margin": lambda v: number(v) and 0 < v <= VIABILITY["max_margin"],
               "reference_acceptance": lambda v: isinstance(v, list) and len(v) == 2 and all(map(count, v)) and 0 < v[1] and v[0] <= v[1],
               "sensitivity": lambda v: isinstance(v, dict) and count(v.get("mutants")) and count(v.get("rejected")) and v["rejected"] <= v["mutants"],
-              "accepted_task_share": lambda v: isinstance(v, dict) and bool(v) and all(map(share, v.values())),
-              "load_sensitive": lambda v: isinstance(v, list), "sensitivity_v2": lambda v: isinstance(v, dict) and isinstance(v.get("decision"), str)}
+              # both comparison arms, by role: one favourable arm, or a misspelled one, is not the input
+              "accepted_task_share": lambda v: isinstance(v, dict) and set(v) == set(VIABILITY_ROLES) and all(map(share, v.values())),
+              "load_sensitive": lambda v: isinstance(v, list), "sensitivity_v2": lambda v: isinstance(v, dict) and v.get("decision") in V2_DECISIONS}
     for key, value in inputs.items():
         if key not in checks:
             raise ValueError(f"unknown viability input: {key}")
@@ -2058,20 +2062,25 @@ def viability_verdict(inputs):
             fail("pays-unreachable", f"`{arm}` had an accepted change in {shares[arm]:.1%} of tasks: a resample of {tasks} tasks misses every one "
                                      f"{miss[arm]:.1%} of the time, above {g['max_bootstrap_miss']:.1%}, so the cost ratio's upper bound is infinite")
     saving, sd = get("saving"), get("sd")
-    if rate is not None and saving is not None:
-        margin = derived["break_even_margin"] = min(g["max_margin"], max(0.0, rate * saving))
+    # m = min(0.20, rate x saving) is 0 as soon as either factor is known to be 0 or less: no other input can change that
+    margin = (0.0 if (saving is not None and saving <= 0) or rate == 0 else
+              min(g["max_margin"], rate * saving) if rate is not None and saving is not None else None)
+    if margin is not None:
+        derived["break_even_margin"] = margin
         declared = get("declared_margin")
         if declared is not None and abs(declared - margin) > 1e-9:
             notes.append(f"the set declares compare.margin {declared:g}; this reading uses the break-even margin {margin:.4g} (study F's rule). "
                          "report tests the declared one: declare the break-even margin before the first attempt for a PAYS reading")
-        if sd is not None and reaching is not None:
+        if margin == 0:
+            fail("underpowered", "the break-even margin is 0: nothing saved, nothing to prove")
+        elif sd is not None and reaching is not None:
             _, power = _power(sd, margin, reaching)
-            needed = tasks_needed(sd, margin) if margin > 0 else None
+            needed = tasks_needed(sd, margin)
             derived.update(power_proven_if_equal=power, tasks_needed_if_equal=needed,
-                           tasks_to_mine_if_equal=math.ceil(needed / reach) if needed is not None and reach else None)
+                           tasks_to_mine_if_equal=math.ceil(needed / reach) if reach else None)
             if power < g["min_power"]:
                 fail("underpowered", f"power of PROVEN at the break-even margin {margin:.4g} with {reaching:.1f} reaching tasks is {power:.2f}, "
-                                     f"under {g['min_power']:g}" + (f"; about {needed} reaching tasks needed" if needed else "; nothing saved, nothing to prove"))
+                                     f"under {g['min_power']:g}; about {needed} reaching tasks needed")
     missing = [key for key in VIABILITY_INPUTS if get(key) is None]
     return {"verdict": "NOT-VIABLE" if reasons else "UNKNOWN" if missing else "VIABLE", "reasons": reasons, "missing": missing,
             "derived": derived, "notes": notes, "thresholds": dict(VIABILITY)}
@@ -2118,8 +2127,8 @@ def viability(config_path=None, results=None, stated=None):
                 costs = {arm: [c for r in rows if r["arm"] == arm for c in (cost_of(results, r["cell"], r),) if c is not None] for arm in (low, ref)}
                 if costs[low] and costs[ref] and statistics.median(costs[ref]) > 0:
                     put("saving", 1 - statistics.median(costs[low]) / statistics.median(costs[ref]), "results (median cost per valid cell, as PREREG-F)")
-                put("accepted_task_share", {arm: len({r["task"] for r in rows if r["arm"] == arm and r.get("accepted")}) / len(attempted)
-                                            for arm in (low, ref)}, "results")
+                put("accepted_task_share", {role: len({r["task"] for r in rows if r["arm"] == arm and r.get("accepted")}) / len(attempted)
+                                            for role, arm in zip(VIABILITY_ROLES, (low, ref))}, "results")
     elif results is not None:
         raise ValueError("--results needs --set: the cells are read against the set's tasks")
     for key, value in (stated or {}).items():
