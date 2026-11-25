@@ -390,6 +390,25 @@ class LabIsolation(unittest.TestCase):
         self.assertIn(f"created: {cid}.runner.json, {cid}.stream.jsonl", str(raised.exception))
         self.assertIn(f"verified: {cid}.runner.json", str(raised.exception))
 
+    def test_a_failure_before_anything_is_created_says_so_and_is_no_partial_publication(self):
+        """Review r4 R4-4: a staged-file open failure came without the lists, and a first-link failure was called a partial
+        publication with nothing created."""
+        config, task, output = self.blinded("first-link")
+        real = os.link
+
+        def refuse(src, dst, **kwargs):
+            if kwargs.get("dst_dir_fd") is not None:
+                raise PermissionError(dst)
+            return real(src, dst, **kwargs)
+        with mock.patch.object(replay_eval.os, "link", side_effect=refuse), self.assertRaises(RuntimeError) as raised:
+            replay_eval.execute_cell(config, task, "high", 1, output, 60)
+        self.assertIn("created: none; verified: none", str(raised.exception))
+        self.assertNotIn("partial publication", str(raised.exception))
+        outside = self.root / "outside-r44.jsonl"
+        output, _, linked = self.tamper("symlink", outside)  # a staged link: the preparation fails
+        self.assertIn("not a regular file", str(linked))
+        self.assertIn("created: none; verified: none", str(linked))
+
     def test_a_failure_after_a_link_says_the_name_was_created(self):
         """Review r3 R3-2: the link publishes before the staged name is removed; an unlink failure said nothing was published
         although the final name existed."""

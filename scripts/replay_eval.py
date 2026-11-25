@@ -764,12 +764,17 @@ def _promote_all(staged, source_fd, target_fd):
     an orphan while it has no cell result)."""
     opened, created, verified = {}, [], []
 
-    def failed(what):
-        prefix = "partial publication: " if created and not what.startswith("partial publication") else ""
+    def failed(what):  # the only place that says "partial publication", and only once something was created
+        prefix = "partial publication: " if created else ""
         return RuntimeError(f"{prefix}{what}; created: {', '.join(created) or 'none'}; verified: {', '.join(verified) or 'none'}")
     try:
         for path, final in staged.items():
-            opened[final] = _open_staged(source_fd, path.name)
+            try:
+                opened[final] = _open_staged(source_fd, path.name)
+            except RuntimeError as error:
+                raise failed(str(error)) from None
+            except OSError as error:
+                raise failed(f"staged {path.name} could not be opened ({type(error).__name__})") from None
         for path, final in staged.items():
             fd, name = opened[final], final.name
             if fd is None:
@@ -780,16 +785,16 @@ def _promote_all(staged, source_fd, target_fd):
                 except FileExistsError:
                     raise failed(f"replay output appeared during the attempt: {name}") from None
                 except OSError as error:
-                    raise failed(f"partial publication: {name} not linked ({type(error).__name__})") from None
+                    raise failed(f"{name} not linked ({type(error).__name__})") from None
                 created.append(name)
                 try:
                     os.unlink(path.name, dir_fd=source_fd)
                 except OSError as error:
-                    raise failed(f"partial publication: staged {path.name} not removed ({type(error).__name__})") from None
+                    raise failed(f"staged {path.name} not removed ({type(error).__name__})") from None
             try:
                 opened_id, named = os.fstat(fd), os.stat(name, dir_fd=target_fd, follow_symlinks=False)
             except OSError as error:
-                raise failed(f"partial publication: {name} not checked ({type(error).__name__})") from None
+                raise failed(f"{name} not checked ({type(error).__name__})") from None
             if (opened_id.st_dev, opened_id.st_ino) != (named.st_dev, named.st_ino):
                 raise failed(f"published artifact identity does not match the file read: {name}")
             verified.append(name)
