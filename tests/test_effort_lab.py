@@ -2214,7 +2214,7 @@ class Viability(unittest.TestCase):
 
     def test_a_tasks_root_or_an_input_file_linked_outside_is_refused(self):
         # review r3 R3-7: the resolved tasks/ root itself, and each input file, must stay inside the set
-        for case in ("root", "file"):
+        for case in ("root", "file", "dangling"):
             with self.subTest(case), tempfile.TemporaryDirectory() as d:
                 root = Path(d) / "set"
                 root.mkdir()
@@ -2222,10 +2222,13 @@ class Viability(unittest.TestCase):
                 if case == "root":
                     (root / "tasks").rename(Path(d) / "elsewhere")
                     (root / "tasks").symlink_to(Path(d) / "elsewhere")
-                else:
+                elif case == "file":
                     (root / "tasks" / "T0" / "hidden.json").rename(Path(d) / "hidden.json")
                     (root / "tasks" / "T0" / "hidden.json").symlink_to(Path(d) / "hidden.json")
-                with mock.patch.object(lab, "load_cells", return_value=self.pilot(8)), self.assertRaisesRegex(ValueError, "outside the set"):
+                else:  # review r4 R4-6: a link whose outside target is missing skipped the check, and baseline.json was read first
+                    (root / "tasks" / "T0" / "hidden.json").unlink()
+                    (root / "tasks" / "T0" / "hidden.json").symlink_to(Path(d) / "missing.json")
+                with mock.patch.object(lab, "load_cells", return_value=self.pilot(8)), self.assertRaisesRegex(ValueError, "resolves outside the set"):
                     lab.viability(root / "set.json", root)
 
     def test_a_task_id_that_leaves_the_set_is_refused_before_any_read(self):

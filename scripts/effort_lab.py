@@ -1976,8 +1976,8 @@ TASK_INPUTS = ("hidden.json", "baseline.json")
 
 def _task_dir(set_dir, tid):
     """The task's directory under the set's `tasks/`, its id a plain name; the resolved `tasks/` root inside the resolved set, the
-    resolved directory inside that root, and each input file (TASK_INPUTS) that exists resolved inside that directory: never a
-    link out of the set, checked before any of them is read."""
+    resolved directory inside that root, and each input file (TASK_INPUTS) that exists or is a link, even a broken one, resolved
+    inside that directory: never a link out of the set, both checked before either is read."""
     base = set_dir.resolve()
     root = (set_dir / "tasks").resolve()
     if not root.is_relative_to(base):
@@ -1985,8 +1985,9 @@ def _task_dir(set_dir, tid):
     directory = set_dir / "tasks" / replay_eval.validate_task_id(tid)
     if directory.exists() and not directory.resolve().is_relative_to(root):
         raise ValueError(f"task directory resolves outside the set: {tid}")
-    for name in TASK_INPUTS:
-        if (directory / name).exists() and not (directory / name).resolve().is_relative_to(directory.resolve()):
+    for name in TASK_INPUTS:  # both, before either is read; a link counts even when its target is missing
+        path = directory / name
+        if (path.is_symlink() or path.exists()) and not path.resolve().is_relative_to(directory.resolve()):
             raise ValueError(f"task file resolves outside the set: {tid}/{name}")
     return directory
 

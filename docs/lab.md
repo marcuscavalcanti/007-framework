@@ -188,8 +188,8 @@ or workspace. A cell that asks for nothing (`unenforced`) is not refused: that p
 would match it (another path with the same label stays), and the cell records its label in `contamination.protection_dropped`.
 `replay_eval run` protects the hidden sources of every task the set declares, also when `--tasks` runs only some, and
 `viability` and `sufficiency` refuse a task id that is not a plain name (`../x`), a `tasks/` root that resolves outside the set, a task directory that
-resolves outside that root, and a `hidden.json` or `baseline.json` that resolves outside its task directory (a link), before
-reading any task file.
+resolves outside that root, and a `hidden.json` or `baseline.json` that resolves outside its task directory (a link, even one
+whose target is missing): both input files of a task are checked before either is read.
 
 **Prevention depends on what each CLI enforces, and the set opts in.** The agent command names the rules with placeholders:
 
