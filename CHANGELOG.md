@@ -167,9 +167,11 @@ schemas, and the dashboard snapshot.
   digit token (a 13-digit millisecond time names no reset instead of one centuries away), the latest of several wins, and a
   failed quota probe's reset holds a resume too, so no second probe is paid for before it. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
   limit as `usage limit reached` instead of `no rate_limit_event`, and `quota.jsonl` records `resets_at`.
-- A refused call whose stream touched a protected path stays `contaminated`: it counts against `--max-invalid`, is never
+- A refused call whose stream touched a protected path stays contaminated (`contamination.status`; its `failure_class` is
+  `contaminated` unless a cleanup failure, recorded first, names the cell): it counts against `--max-invalid`, is never
   relabelled `provider-rate-limit` and is never requeued. Before, a contaminated cell whose receipt also named a refusal was
-  relabelled, kept out of `--max-invalid`, and with `--requeue-refused` moved to `refused/` and dispatched again.
+  relabelled, kept out of `--max-invalid`, and with `--requeue-refused` moved to `refused/` and dispatched again. When the
+  account's usage limit cut such a call, the run still pauses with `quota-hold` until the reset, live and on resume.
 - `007 lab report` raised `statistics.StatisticsError` when an arm of the comparison had no valid cell, and wrote no report. It
   now writes one: the verdict carries `arms_without_valid_cells` (empty when both arms have one), the same-change, time and
   durability verdicts read `NO-INFORMATION`, the thesis `UNPROVEN`, `rework_ok` is null instead of a vacuous true, the empty arm's

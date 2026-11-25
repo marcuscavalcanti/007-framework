@@ -1431,7 +1431,8 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     remaining = any(replay_eval.cell_id(t, a, r) not in done for t, r, a in cells)
     # a Claude usage limit lasts until the reset its refusal (or a failed quota probe) named, not 10 minutes: hold until then
     known = lambda row: row.get("usage_limit") is True and cli_telemetry.reset_epoch(row.get("resets_at"))
-    resets = [row["resets_at"] for row in refusals if known(row)] + probe_holds(out)
+    # every finished attempt the account's limit cut holds the run, a contaminated one (never refused or requeued) included
+    resets = [row["resets_at"] for row in history if "finished_at" in row and known(row)] + probe_holds(out)
     if resets and remaining and max(resets) > datetime.now(timezone.utc).timestamp():
         return {"stop": "quota-hold", "calls": 0, "resets_at": max(resets),
                 "retry_after_s": math.ceil(max(resets) - datetime.now(timezone.utc).timestamp())}
@@ -1624,7 +1625,13 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                         cell, row = future.result()
                         cid = cell_name(cell)
                         rate_limited = row.get("valid") is not True and not contaminated(row) and refused(out, cid)
-                        limit = usage_limit(out, cid) if rate_limited else None
+                        # the account's limit holds the run whatever else the cell is: contamination keeps it from being
+                        # requeued or relabelled, never from pausing dispatch
+                        limit = usage_limit(out, cid) if row.get("valid") is not True else None
+                        if limit and not rate_limited:
+                            stop = "quota-hold" if stop in (None, "call-budget", "rate-limit") else stop
+                            if limit["resets_at"]:
+                                limit_resets = max(limit_resets or 0, limit["resets_at"])
                         if rate_limited:
                             row = {**row, "failure_class": "provider-rate-limit", "failure_class_observed": row.get("failure_class")}
                             with tempfile.NamedTemporaryFile("w", dir=out, prefix=f".{cid}.", delete=False) as handle:

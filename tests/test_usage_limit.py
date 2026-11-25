@@ -240,6 +240,20 @@ class Controller(unittest.TestCase):
         again = self.go(execute)
         self.assertEqual((again["stop"], again["calls"]), (None, 0))
 
+    def test_a_contaminated_call_the_account_limit_cut_still_holds_dispatch(self):
+        """Review #15: contamination kept the cell from being requeued, as it should, but it also hid the account's usage limit,
+        so the other cells went on being dispatched into it. The cell stays contaminated and invalid; the run holds until the
+        reset, live and on resume."""
+        reset = now() + 3600
+        contaminated = {"failure_class": "contaminated", "contamination": {"status": "contaminated"}}
+        execute = executor(lambda cid, n: cid == "T0-r01-a" and LIMIT(reset), {"T0-r01-a": contaminated})
+        state = self.go(execute, max_invalid=99, requeue_refused=True)
+        self.assertEqual((state["stop"], state["invalid"], state["refused"], state["resets_at"]), ("quota-hold", 1, 0, reset))
+        self.assertEqual((execute.calls[-1], state["calls"]), ("T0-r01-a", len(execute.calls)))  # nothing dispatched after it
+        self.assertEqual(json.loads((self.out / "T0-r01-a.json").read_text())["failure_class"], "contaminated")
+        again = self.go(execute, max_invalid=99, requeue_refused=True)
+        self.assertEqual((again["stop"], again["calls"], again["resets_at"]), ("quota-hold", 0, reset))
+
     def test_contamination_wins_even_when_another_label_masks_it(self):
         # the cleanup label comes first in replay_eval; the scan still says contaminated, and that is enough
         masked = {"failure_class": "cleanup-incomplete", "contamination": {"status": "contaminated"}}
