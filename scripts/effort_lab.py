@@ -2375,36 +2375,54 @@ REFUSED = "provider-rate-limit"  # the failure class of an attempt the provider 
 
 def _archive(results, arms):
     """(rows of `arms`, unresolved names): each refused attempt set aside under refused/ (`_set_aside`) once, by its archived row,
-    its cost read from that row or its archived receipt. A row that cannot be read, or whose task, arm and replicate are not its
-    file name's cell, is unresolved, whatever arm it may be; so is a cell whose archived attempts do not number the requeued
-    refusals the ledger records for it, and every archive when the ledger exists but cannot be read. Without a ledger (a
-    directory not written by `run`) the archive alone is read."""
-    found, unresolved, counts = [], [], {}
-    for path in sorted((results / "refused").glob("*.json")) if (results / "refused").is_dir() else ():
-        match = re.fullmatch(r"(.+)\.([0-9]+)\.json", path.name)
-        if not match or path.name.endswith(tuple(s for s in replay_eval.CELL_ARTIFACT_SUFFIXES if s != ".json")):
+    its cost read from that row or its archived receipt. Files are grouped by canonical cell and attempt number (an int: `.1` and
+    `.01` are one attempt). Unresolved, whatever arm it may be: a duplicate attempt, an attempt with a receipt and no row, a row
+    that cannot be read or whose task, arm and replicate are not its file name's cell, and, when the ledger exists (even empty), a
+    cell whose attempts are not exactly 1 to the number of requeued refusals the ledger records for it; every archive when the
+    ledger exists but cannot be read. Without a ledger (a directory not written by `run`) each cell's attempts must run 1 to n."""
+    suffixes = sorted(replay_eval.CELL_ARTIFACT_SUFFIXES, key=len, reverse=True)
+    attempts, unresolved = {}, []
+    for path in sorted((results / "refused").iterdir()) if (results / "refused").is_dir() else ():
+        suffix = next((s for s in suffixes if path.name.endswith(s)), None)
+        match = re.fullmatch(r"(.+)\.([0-9]{1,9})", path.name[:-len(suffix)]) if suffix else None
+        if not match:
+            continue
+        files = attempts.setdefault((match[1], int(match[2])), {})
+        if suffix in files:
+            unresolved.append(f"refused/{path.name}")  # the same attempt twice
+            continue
+        files[suffix] = path
+    found, per_cell = [], {}
+    for (cid, number), files in sorted(attempts.items()):
+        per_cell.setdefault(cid, set()).add(number)
+        path = files.get(".json")
+        if path is None:
+            unresolved.append(f"refused/{cid}.{number}: no row")  # a receipt or other file with no archived row
             continue
         try:
             row = json.loads(path.read_text()) if path.is_file() and not path.is_symlink() else None
         except (OSError, ValueError):
             row = None
         own = isinstance(row, dict) and isinstance(row.get("task"), str) and isinstance(row.get("arm"), str) and type(row.get("replicate")) is int
-        if not own or replay_eval.cell_id({"id": row["task"]}, row["arm"], row["replicate"]) != match[1]:
+        if not own or replay_eval.cell_id({"id": row["task"]}, row["arm"], row["replicate"]) != cid:
             unresolved.append(f"refused/{path.name}")
             continue
-        counts[match[1]] = counts.get(match[1], 0) + 1
         if row["arm"] in arms:
-            found.append({**row, "cell": f"refused/{match[1]}.{match[2]}", "attempt_of": match[1], "valid": False, "accepted": False,
+            found.append({**row, "cell": f"refused/{path.name[:-len('.json')]}", "attempt_of": cid, "valid": False, "accepted": False,
                           "failure_class": REFUSED})
-    history = _ledger(results) if (results / "dispatch.jsonl").exists() else []
-    if history is None and counts:
-        unresolved.append("dispatch.jsonl")
-    elif history:
-        requeued = {}
-        for row in history:
+    history = _ledger(results) if (results / "dispatch.jsonl").exists() else None
+    if (results / "dispatch.jsonl").exists() and history is None:
+        if attempts:
+            unresolved.append("dispatch.jsonl")
+    else:
+        expected = {}
+        for row in history or []:
             if "finished_at" in row and row.get("refused") is True and row.get("requeued") is True:
-                requeued[row["cell"]] = requeued.get(row["cell"], 0) + 1
-        unresolved += [f"refused/{cell}" for cell in sorted(set(requeued) | set(counts)) if requeued.get(cell, 0) != counts.get(cell, 0)]
+                expected[row["cell"]] = expected.get(row["cell"], 0) + 1
+        for cid in sorted(set(per_cell) | set(expected)):
+            want = set(range(1, (expected.get(cid, 0) if history is not None else max(per_cell[cid])) + 1))
+            if per_cell.get(cid, set()) != want:
+                unresolved.append(f"refused/{cid}: attempts {sorted(per_cell.get(cid, set()))}, expected {sorted(want)}")
     return found, unresolved
 
 

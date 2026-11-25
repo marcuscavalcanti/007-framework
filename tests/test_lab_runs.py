@@ -583,10 +583,50 @@ class MissingDataGuard(unittest.TestCase):
                                                   + json.dumps({"cell": "T5-r01-lo", "finished_at": "2026-11-25T00:01:00+00:00", "refused": True,
                                                                 "requeued": True, "cost_usd": 7.0}) + "\n")
         g = self.guard(rows)
-        self.assertEqual((g["answer"], g["accounting_unresolved"]), ("ACCOUNTING-UNRESOLVED", ["refused/T5-r01-lo"]))
+        self.assertEqual((g["answer"], g["accounting_unresolved"]), ("ACCOUNTING-UNRESOLVED", ["refused/T5-r01-lo: attempts [], expected [1]"]))
         (self.root / "dispatch.jsonl").unlink()
         both = [{**r, "failure_class": "provider-rate-limit"} if (r["task"], r["replicate"], r["arm"]) == ("T0", 1, "hi") else r for r in rows]
         self.assertAlmostEqual(lab._cost_ratio(both, self.root, "lo", "hi", 10.0), (60 / 60) / (240 / 59))
+
+    def archived(self, name, row=None, receipt=None):
+        store = self.root / "refused"
+        store.mkdir(exist_ok=True)
+        if row is not None:
+            (store / f"{name}.json").write_text(json.dumps(row))
+        if receipt is not None:
+            (store / f"{name}.runner.json").write_text(json.dumps(receipt))
+
+    def ledger(self, *requeued):
+        (self.root / "dispatch.jsonl").write_text("".join(
+            json.dumps({"cell": cell, "dispatched_at": "2026-11-25T00:00:00+00:00"}) + "\n"
+            + json.dumps({"cell": cell, "finished_at": "2026-11-25T00:01:00+00:00", "refused": True, "requeued": True, "cost_usd": 1.0}) + "\n"
+            for cell in requeued))
+
+    def test_archived_attempts_are_reconciled_by_cell_and_attempt_number(self):
+        """Review r3 R3-1: `.1` and `.01` named one attempt twice and passed a count of two requeues while attempt 2 was missing;
+        an existing empty ledger was not compared; a receipt with no row was not seen."""
+        rows, row = self.cells(), {"task": "T0", "replicate": 1, "arm": "lo"}
+        cases = {"duplicate number": (("T0-r01-lo.1", row), ("T0-r01-lo.01", row)), "receipt only": (("T0-r01-lo.1", None),)}
+        for label, files in cases.items():
+            with self.subTest(label):
+                shutil.rmtree(self.root / "refused", ignore_errors=True)
+                for name, content in files:
+                    self.archived(name, content, {"cost_usd": 7.0})
+                if label == "duplicate number":
+                    self.ledger("T0-r01-lo", "T0-r01-lo")
+                else:  # no ledger at all: the archive alone must still show a receipt with no row
+                    (self.root / "dispatch.jsonl").unlink(missing_ok=True)
+                g = self.guard(rows)
+                self.assertEqual(g["answer"], "ACCOUNTING-UNRESOLVED")
+                self.assertTrue(g["accounting_unresolved"])
+        shutil.rmtree(self.root / "refused")
+        self.archived("T0-r01-lo.1", row, {"cost_usd": 7.0})
+        (self.root / "dispatch.jsonl").write_text("")  # a ledger that exists, empty: it records no requeue, so the archive is unexplained
+        self.assertEqual(self.guard(rows)["answer"], "ACCOUNTING-UNRESOLVED")
+        self.ledger("T0-r01-lo")  # reconciled: one requeue, attempt 1 archived with its row
+        self.assertEqual(self.guard(rows)["accounting_unresolved"], [])
+        (self.root / "dispatch.jsonl").unlink()
+        shutil.rmtree(self.root / "refused")
 
     def test_a_kill_does_not_pay(self):
         g = self.guard(self.cells(low_fail={(t, r) for t in self.tasks for r in (1, 2)}))
