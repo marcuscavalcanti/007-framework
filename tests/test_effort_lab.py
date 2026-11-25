@@ -2043,6 +2043,22 @@ class Viability(unittest.TestCase):
             with self.subTest(bad), self.assertRaises(ValueError):
                 lab.viability_verdict({**GO_JSON_PLANNED, **bad})
 
+    def test_pays_unreachable_reads_the_union_of_the_arms_misses(self):
+        """Review #3: a draw is unusable when either arm has no accepted change, so the miss probability is that of the union,
+        not the larger marginal. 41 tasks, 4 accepted per arm on disjoint tasks: each arm misses 1.49%, the union 2.95%."""
+        disjoint = {"candidate": 4 / 41, "reference": 4 / 41, "either": 8 / 41}
+        out = lab.viability_verdict({**GO_JSON_PLANNED, "accepted_task_share": disjoint})
+        self.assertEqual(self.reasons(out), ("pays-unreachable",))
+        self.assertAlmostEqual(out["derived"]["bootstrap_miss"]["either"], 2 * (37 / 41) ** 41 - (33 / 41) ** 41)
+        same = lab.viability_verdict({**GO_JSON_PLANNED, "accepted_task_share": {**disjoint, "either": 4 / 41}})  # the same 4 tasks
+        self.assertEqual(same["verdict"], "VIABLE")
+        # only the marginals: the union lies between 1.49% and 2.98%, across the 2.5% gate, so the input is missing, never VIABLE
+        bounds = lab.viability_verdict({**GO_JSON_PLANNED, "accepted_task_share": {"candidate": 4 / 41, "reference": 4 / 41}})
+        self.assertEqual((bounds["verdict"], bounds["missing"]), ("UNKNOWN", ["accepted_task_share.either"]))
+        for bad in ({**disjoint, "either": 3 / 41}, {**disjoint, "either": 9 / 41}):  # under an arm's share, or over their sum
+            with self.subTest(bad), self.assertRaises(ValueError):
+                lab.viability_verdict({**GO_JSON_PLANNED, "accepted_task_share": bad})
+
     def test_a_known_zero_break_even_margin_decides_at_once(self):
         # nothing saved: the margin is 0 whatever the reference acceptance, SD or reach turn out to be
         for saving in (0.0, -.3):
@@ -2075,7 +2091,7 @@ class Viability(unittest.TestCase):
                 out = lab.viability(root / "set.json", root)
             inputs = out["inputs"]
             self.assertEqual((inputs["tasks"], inputs["reach_share"], inputs["sufficient_share"], inputs["reference_acceptance"]), (10, 1.0, 1.0, [20, 20]))
-            self.assertEqual((inputs["saving"], inputs["accepted_task_share"], inputs["declared_margin"]), (.75, {"candidate": 1.0, "reference": 1.0}, .2))
+            self.assertEqual((inputs["saving"], inputs["accepted_task_share"], inputs["declared_margin"]), (.75, {"candidate": 1.0, "reference": 1.0, "either": 1.0}, .2))
             self.assertEqual(inputs["sensitivity"], {"mutants": 40, "rejected": 30})
             self.assertEqual(out["sources"]["sensitivity"], "sensitivity.json immediate")
             self.assertEqual(out["verdict"], "VIABLE")
@@ -2109,7 +2125,7 @@ class Viability(unittest.TestCase):
             # T9 was attempted, but every attempt was invalid: it is in the denominator, with no accepted change
             rows = [r if r["task"] != "T9" else {**r, "valid": False, "accepted": False, "failure_class": "agent-exit"} for r in self.pilot()]
             out = run(rows)
-            self.assertEqual(out["inputs"]["accepted_task_share"], {"candidate": .9, "reference": .9})
+            self.assertEqual(out["inputs"]["accepted_task_share"], {"candidate": .9, "reference": .9, "either": .9})
             self.assertEqual(out["pilot"]["attempted_tasks"], 10)
             # an arm never tried is unobserved, not a measured zero: UNKNOWN, never pays-unreachable
             out = run([r for r in self.pilot() if r["arm"] == "medium"])

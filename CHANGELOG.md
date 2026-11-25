@@ -32,7 +32,8 @@ schemas, and the dashboard snapshot.
   and refused included) in the shares' denominator, reads an untried arm or a valid cell without a cost as missing rather than
   as zero or as absent from the median, gives the denominators in `pilot`, and names a missing task file as an input error.
   The accepted-task shares are keyed by role (`candidate`,
-  `reference`) and both are required; a `sensitivity_v2` decision must be one `sensitivity-v2` gives; and a saving of 0 or
+  `reference`) and both are required; `pays-unreachable` reads the union of the arms' misses, exact with the optional `either`
+  share and otherwise bounded, reading missing when the bounds straddle 2.5%; a `sensitivity_v2` decision must be one `sensitivity-v2` gives; and a saving of 0 or
   less reads `underpowered` at once, since it fixes the break-even margin at 0.
 - `007 lab run --aa ARM` runs ARM twice on the same tasks, at one more paid attempt per task and replicate, so the report can
   show the copies' discordance and an A/A equality check beside the verdict. The copy is a third arm,

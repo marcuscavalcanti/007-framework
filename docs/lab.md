@@ -389,7 +389,7 @@ Every threshold is a gate the lab already applies or a recorded rule. The reason
 | `too-few-reaching-tasks` | tasks × the pilot's reach share < 8 | `feasibility`'s `planned_reaching`, against the same 8 |
 | `prompt-insufficient` | tasks × the share of attempted tasks where one cell passed ≥ 0.8 of the new behaviour < 8 | `sufficiency`'s default threshold, against the same 8 |
 | `reference-does-not-deliver` | reference-arm acceptance < 0.25 | `GATES["floor"]`: acceptance under it is not informative |
-| `pays-unreachable` | for some arm, (1 − share of tasks with an accepted cell)^tasks > 0.025 | Study F reads the cost ratio R from a task bootstrap at its 97.5% point. A resample with no accepted change in an arm makes R infinite. When that happens more than 2.5% of the time, the upper bound is infinite and `PAYS` cannot be read |
+| `pays-unreachable` | P(a task resample has no accepted cell in some arm) > 0.025: (1 − c)^n + (1 − r)^n − (1 − e)^n, with c and r each arm's share of tasks with an accepted cell and e the share accepted in either arm. Without e the union lies between the larger term and the sum; when those bounds straddle 0.025 the input reads missing (`accepted_task_share.either`) | Study F reads the cost ratio R from a task bootstrap at its 97.5% point. A resample with no accepted change in either arm makes R infinite. When that happens more than 2.5% of the time, the upper bound is infinite and `PAYS` cannot be read |
 | `underpowered` | power of `PROVEN` at the break-even margin < 0.50, or the margin is 0. A saving of 0 or less fixes the margin at 0, so it fires at once, whatever else is missing | margin `m = min(0.20, reference acceptance × saving)` (PREREG-F; [Choosing the margin](#choosing-the-margin)); power as `feasibility` computes it, over tasks × reach share; 0.50 from the power rule of the D-2 study on the maintainer's repositories (an amendment kept in the private record) |
 
 From pilot cells, the inputs are read as follows:
@@ -406,7 +406,8 @@ From pilot cells, the inputs are read as follows:
   attempt leaves them missing (`UNKNOWN`), never a measured zero.
 - A task file the pilot needs that cannot be read is a named input error (exit 2), not a traceback. They are
   keyed by role, `{"candidate": share, "reference": share}`, in the output and in `--inputs`; both roles are required, so
-  one favourable arm or a misspelled arm name is refused instead of read as the whole input.
+  one favourable arm or a misspelled arm name is refused instead of read as the whole input. A pilot also gives `either`, the
+  share of tasks with an accepted cell in either arm, which makes the miss probability exact; `--inputs` may give it.
 - A `sensitivity_v2` given in `--inputs` must carry one of the decisions `sensitivity-v2` gives (`passes`, `fails`,
   `indeterminate`, `no-information`, `floor-unset`); any other string is refused.
 

@@ -2014,8 +2014,9 @@ Reasons, in the order of the D-2 measurability ladder (tasks, instrument, refere
   prompt-insufficient        tasks x the share of attempted tasks where one cell passes >= 0.8 of the new behaviour < 8
                              (sufficiency's default threshold)
   reference-does-not-deliver reference arm acceptance < 0.25 (GATES floor: acceptance under it is not informative)
-  pays-unreachable           an arm accepted a change in so few tasks that a task resample misses them all > 2.5 % of the time:
-                             the cost ratio's 97.5 % bootstrap point (study F) is then infinite and PAYS cannot be read
+  pays-unreachable           a task resample has no accepted change in some arm > 2.5 % of the time (the union of the arms'
+                             misses, exact with `either`, else bounded by the marginals; across the gate it is missing): the
+                             cost ratio's 97.5 % bootstrap point (study F) is then infinite and PAYS cannot be read
   underpowered               normal power of PROVEN at the break-even margin m = min(0.20, reference acceptance x saving)
                              (PREREG-F) < 0.50 (the D-2 study's power rule); also when m is known to be 0 (no saving),
                              whatever else is missing
@@ -2023,7 +2024,7 @@ Inputs come from the set's directory (tasks, sensitivity.json, sensitivity-v2.js
 (--results: reach share and SD as in feasibility, sufficiency, reference acceptance, median cost saving, tasks with an
 accepted cell per arm) and from --inputs, a JSON object of recorded numbers that wins over both: tasks, sensitivity
 {mutants, rejected}, reach_share, sd, sufficient_share, reference_acceptance [accepted, cells], saving, accepted_task_share
-{candidate: share, reference: share}, and optionally load_sensitive, sensitivity_v2 {decision, sensitivity, interval}, declared_margin.
+{candidate: share, reference: share, either: share (optional: tasks accepted in either arm)}, and optionally load_sensitive, sensitivity_v2 {decision, sensitivity, interval}, declared_margin.
 VIABLE is no known reason to fail, not a promised verdict: the power ignores the calibrated critical value."""
 
 
@@ -2037,7 +2038,10 @@ def _viability_check(inputs):
               "reference_acceptance": lambda v: isinstance(v, list) and len(v) == 2 and all(map(count, v)) and 0 < v[1] and v[0] <= v[1],
               "sensitivity": lambda v: isinstance(v, dict) and count(v.get("mutants")) and count(v.get("rejected")) and v["rejected"] <= v["mutants"],
               # both comparison arms, by role: one favourable arm, or a misspelled one, is not the input
-              "accepted_task_share": lambda v: isinstance(v, dict) and set(v) == set(VIABILITY_ROLES) and all(map(share, v.values())),
+              # `either`, optional: tasks with an accepted change in either arm, between the larger share and the sum of both
+              "accepted_task_share": lambda v: (isinstance(v, dict) and set(VIABILITY_ROLES) <= set(v) <= {*VIABILITY_ROLES, "either"}
+                                                and all(map(share, v.values())) and ("either" not in v or max(v["candidate"], v["reference"])
+                                                <= v["either"] <= min(1, v["candidate"] + v["reference"]) + 1e-12)),
               "load_sensitive": lambda v: isinstance(v, list), "sensitivity_v2": lambda v: isinstance(v, dict) and v.get("decision") in V2_DECISIONS}
     for key, value in inputs.items():
         if key not in checks:
@@ -2082,15 +2086,23 @@ def viability_verdict(inputs):
         if rate < g["min_reference_acceptance"]:
             fail("reference-does-not-deliver", f"the reference arm was accepted in {acceptance[0]} of {acceptance[1]} cells ({rate:.1%}), "
                                                f"under {g['min_reference_acceptance']:.0%}")
-    shares = get("accepted_task_share")
+    shares, unsure = get("accepted_task_share"), False
     if shares is not None and tasks:
-        # R = cost per accepted change, candidate over reference, bootstrapped over tasks: a resample without one accepted
-        # change in an arm makes R infinite, and once more than 2.5 % do, the upper bound PAYS reads is infinite
-        miss = derived["bootstrap_miss"] = {arm: (1 - s) ** tasks for arm, s in shares.items()}
-        arm = max(miss, key=miss.get)
-        if miss[arm] > g["max_bootstrap_miss"]:
-            fail("pays-unreachable", f"`{arm}` had an accepted change in {shares[arm]:.1%} of tasks: a resample of {tasks} tasks misses every one "
-                                     f"{miss[arm]:.1%} of the time, above {g['max_bootstrap_miss']:.1%}, so the cost ratio's upper bound is infinite")
+        # R = cost per accepted change, candidate over reference, bootstrapped over tasks: a resample without one accepted change
+        # in either arm makes R infinite (_cost_ratio), and once more than 2.5 % do, the upper bound PAYS reads is infinite. The
+        # share of such resamples is P(miss candidate or miss reference) = m_c + m_r - (1 - either)^tasks; with the marginals
+        # alone it lies between max(m_c, m_r) and m_c + m_r
+        miss = derived["bootstrap_miss"] = {role: (1 - shares[role]) ** tasks for role in VIABILITY_ROLES}
+        low_m, high_m = max(miss.values()), sum(miss.values())
+        if "either" in shares:
+            low_m = high_m = miss["either"] = max(0.0, high_m - (1 - shares["either"]) ** tasks)
+        else:
+            derived["bootstrap_miss_bounds"] = [low_m, high_m]
+        if low_m > g["max_bootstrap_miss"]:
+            fail("pays-unreachable", f"a resample of {tasks} tasks has no accepted change in some arm {low_m:.1%} of the time"
+                                     + ("" if "either" in shares else " at least") + f" (candidate in {shares['candidate']:.1%} of tasks, "
+                                     f"reference in {shares['reference']:.1%}), above {g['max_bootstrap_miss']:.1%}, so the cost ratio's upper bound is infinite")
+        unsure = high_m > g["max_bootstrap_miss"] >= low_m  # across the gate: the arms' overlap decides, and it is not known
     saving, sd = get("saving"), get("sd")
     # m = min(0.20, rate x saving) is 0 as soon as either factor is known to be 0 or less: no other input can change that
     margin = (0.0 if (saving is not None and saving <= 0) or rate == 0 else
@@ -2111,7 +2123,7 @@ def viability_verdict(inputs):
             if power < g["min_power"]:
                 fail("underpowered", f"power of PROVEN at the break-even margin {margin:.4g} with {reaching:.1f} reaching tasks is {power:.2f}, "
                                      f"under {g['min_power']:g}; about {needed} reaching tasks needed")
-    missing = [key for key in VIABILITY_INPUTS if get(key) is None]
+    missing = [key for key in VIABILITY_INPUTS if get(key) is None] + (["accepted_task_share.either"] if unsure else [])
     return {"verdict": "NOT-VIABLE" if reasons else "UNKNOWN" if missing else "VIABLE", "reasons": reasons, "missing": missing,
             "derived": derived, "notes": notes, "thresholds": dict(VIABILITY)}
 
@@ -2170,8 +2182,10 @@ def viability(config_path=None, results=None, stated=None):
             if all(costs[arm] and None not in costs[arm] for arm in (low, ref)) and statistics.median(costs[ref]) > 0:
                 put("saving", 1 - statistics.median(costs[low]) / statistics.median(costs[ref]), "results (median cost per valid cell, as PREREG-F)")
             if attempted and all(tried.values()):  # an arm with no attempt is unobserved, never a measured zero
-                put("accepted_task_share", {role: len({r["task"] for r in rows if r["arm"] == arm and r.get("accepted")}) / len(attempted)
-                                            for role, arm in zip(VIABILITY_ROLES, (low, ref))}, "results (over every attempted task)")
+                put("accepted_task_share", {**{role: len({r["task"] for r in rows if r["arm"] == arm and r.get("accepted")}) / len(attempted)
+                                               for role, arm in zip(VIABILITY_ROLES, (low, ref))},
+                                            "either": len({r["task"] for r in rows if r["arm"] in (low, ref) and r.get("accepted")}) / len(attempted)},
+                    "results (over every attempted task)")
     elif results is not None:
         raise ValueError("--results needs --set: the cells are read against the set's tasks")
     for key, value in (stated or {}).items():
