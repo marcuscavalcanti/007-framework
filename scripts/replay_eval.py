@@ -1103,13 +1103,13 @@ def execute_cell(config, task, arm, replicate, output_dir, timeout_s, *, vault_r
         isolation = read_isolation_mode(config["agent_command"])
         prevention, dropped = isolation != "unenforced", []  # the layout refusals guard deny rules; detection alone drops the path
         protected = protected_paths(config, task, output_dir, vault_root, refuse=prevention, dropped=dropped)
-        inside = [label for label, path in protected if Path(path) in (workspace, *workspace.parents)
+        inside = [(label, path) for label, path in protected if Path(path) in (workspace, *workspace.parents)
                   or Path(path).resolve() in (workspace, *workspace.parents)]
         if inside and prevention:  # denying it would deny the agent its own workspace
-            raise RuntimeError(f"cell workspace lies inside a protected path ({inside[0]}): set TMPDIR elsewhere")
-        if inside:  # every call in the workspace would read as a hit: left out of detection, and said so
-            dropped += inside
-            protected = [(label, path) for label, path in protected if label not in inside]
+            raise RuntimeError(f"cell workspace lies inside a protected path ({inside[0][0]}): set TMPDIR elsewhere")
+        if inside:  # every call in the workspace would read as a hit: that path alone leaves detection, and is said so
+            dropped += [label for label, _ in inside]
+            protected = [entry for entry in protected if entry not in inside]
         denied = [path for _, path in protected]
         settings, settings_sha256 = claude_read_settings(denied)
         replacements = {
@@ -1724,6 +1724,7 @@ def main():
         parser.error(str(error))
 
     wanted = None if args.tasks == "all" else set(args.tasks.split(","))
+    declared = tasks  # every task of the set: their hidden sources stay protected however few run
     tasks = [task for task in tasks if wanted is None or task["id"] in wanted]
     arms = args.arms.split(",")
     unknown = set(arms) - set(config["arms"])
@@ -1737,7 +1738,7 @@ def main():
     validate_cell_artifacts(tasks, arms, replicates, directory=output_dir)
     # 1.11.0: each agent sees a salted token, never its arm (blind_token), and must not read the set file (protected_paths)
     cells = [cell_id(task, arm, replicate) for task in tasks for replicate in range(1, replicates + 1) for arm in arms]
-    config = {**config, "blind_salt": unique_salt(cells), "read_protect": standalone_protect(replay_set, tasks)}
+    config = {**config, "blind_salt": unique_salt(cells), "read_protect": standalone_protect(replay_set, declared)}
     rows = []
     write_summary(output_dir, replay_set, config, replicates, rows)
     for task in tasks:

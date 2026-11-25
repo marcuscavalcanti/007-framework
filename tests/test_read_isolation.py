@@ -421,6 +421,31 @@ class LabIsolation(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "HOME or the filesystem root"):
                 replay_eval.execute_cell(asked, task, "high", 1, output, 60)
 
+    def test_only_the_protected_path_holding_the_workspace_is_dropped(self):
+        """Review r2 N9: dropping the path that holds the workspace removed every protected path with the same label."""
+        config = json.loads(self.mined().read_text())
+        holder, sibling = self.root / "holder", self.root / "sibling"
+        holder.mkdir()
+        sibling.mkdir()
+        config["read_protect"] = [("extra", str(holder)), ("extra", str(sibling))]
+        real = tempfile.mkdtemp
+
+        def inside(suffix=None, prefix=None, dir=None):
+            return real(suffix, prefix, holder if prefix and prefix.startswith("007-") and "acceptance" not in prefix else dir)
+        denied = []
+        real_scan = replay_eval.scan_stream
+
+        def scan(stream, protected, workspace):
+            denied.append([p for _, p in protected])
+            return real_scan(stream, protected, workspace)
+        output = self.root / "drop-out"
+        output.mkdir()
+        with mock.patch.object(replay_eval.tempfile, "mkdtemp", side_effect=inside), mock.patch.object(replay_eval, "scan_stream", side_effect=scan):
+            row = replay_eval.execute_cell(config, config["tasks"][0], "high", 1, output, 60)
+        self.assertEqual(row["contamination"]["protection_dropped"], ["extra"])
+        self.assertIn(str(sibling), denied[0])
+        self.assertNotIn(str(holder), denied[0])
+
     def test_an_orphan_blind_receipt_is_counted_named_and_stops_a_resume(self):
         path, results = self.mined(), self.root / "results"
         self.assertIsNone(self.run_lab(path, results, replicates=1)["stop"])
@@ -568,6 +593,27 @@ class ReplayRunner(unittest.TestCase):
         tasks = [{"id": f"t{i}", "hidden_acceptance": [{"source": str(sources[i])}]} for i in range(2)]
         found = replay_eval.protected_paths({"read_protect": replay_eval.standalone_protect(self.set, tasks)}, tasks[0], self.root / "o")
         self.assertLessEqual({("hidden-test", str(s)) for s in sources}, set(found))
+
+    def test_a_filtered_run_still_protects_the_whole_sets_hidden_tests(self):
+        """Review r2 N9: `run --tasks` filtered the list before the protection was built, so an unselected task's hidden sources,
+        declared in the same set, were readable."""
+        sources = [self.root / f"hidden-{i}.py" for i in range(2)]
+        for source in sources:
+            source.write_text("")
+        config = json.loads(self.set.read_text())
+        config["tasks"] = [{**config["tasks"][0], "id": f"case{i}", "hidden_acceptance": [{"source": str(sources[i]), "target": "t.py",
+                                                                                           "sha256": hashlib.sha256(b"").hexdigest()}]}
+                           for i in range(2)]
+        self.set.write_text(json.dumps(config))
+        seen = []
+
+        def capture(config, task, *args, **kwargs):
+            seen.append(config["read_protect"])
+            raise RuntimeError("stop after the first cell")
+        argv = ["replay_eval.py", "--set", str(self.set), "run", "--arms", "alpha", "--tasks", "case0", "--out", str(self.root / "o")]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(replay_eval, "execute_cell", side_effect=capture), self.assertRaises(RuntimeError):
+            replay_eval.main()
+        self.assertLessEqual({("hidden-test", str(s)) for s in sources}, set(map(tuple, seen[0])))
 
     def test_a_summary_is_replaced_whole_never_truncated(self):
         """Review #12: summary.json, which seals the salt, was rewritten in place; a crash mid-write could lose it."""

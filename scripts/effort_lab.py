@@ -1952,11 +1952,20 @@ def feasibility(config_path, results, margin=None, sd=None):
             "tasks_needed_at_pilot_mean": tasks_needed(sd, margin, observed["mean"]) if observed and observed["mean"] is not None else None}
 
 
+def _task_dir(set_dir, tid):
+    """The task's directory under the set's `tasks/`, its id a plain name and its resolved path still inside: never a link out."""
+    root = (set_dir / "tasks").resolve()
+    directory = set_dir / "tasks" / replay_eval.validate_task_id(tid)
+    if directory.exists() and not directory.resolve().is_relative_to(root):
+        raise ValueError(f"task directory resolves outside the set: {tid}")
+    return directory
+
+
 def _sufficiency_shares(config, set_dir, rows):
     """[(task, the largest share of the behaviour its commit introduced that one valid cell passes)], None without cell or new test."""
     shares = []
     for task in config["tasks"]:
-        directory = set_dir / "tasks" / replay_eval.validate_task_id(task.get("id"))
+        directory = _task_dir(set_dir, task.get("id"))
         baseline = set(json.loads((directory / "baseline.json").read_text()))
         hidden = [k for k in json.loads((directory / "hidden.json").read_text()) if k != "__module__" and k not in baseline]
         cells = [r for r in rows if r["task"] == task["id"]]
@@ -2139,7 +2148,8 @@ def viability(config_path=None, results=None, stated=None):
             found[key], sources[key] = value, source
     if config_path is not None:
         config = json.loads(config_path.read_text())
-        set_dir, ids = config_path.parent, {replay_eval.validate_task_id(t.get("id")) for t in config["tasks"]}  # joined into paths below
+        set_dir = config_path.parent
+        ids = {_task_dir(set_dir, t.get("id")).name for t in config["tasks"]}  # joined into paths below: plain names, inside the set
         put("tasks", len(ids), "set")
         put("declared_margin", declared_margin(config), "set")
         if (set_dir / "sensitivity.json").is_file():

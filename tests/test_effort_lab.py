@@ -2190,6 +2190,18 @@ class Viability(unittest.TestCase):
             with mock.patch.object(lab, "load_cells", return_value=self.pilot()), self.assertRaisesRegex(ValueError, "different set"):
                 lab.viability(root / "set.json", root)
 
+    def test_a_task_directory_that_links_outside_the_set_is_refused(self):
+        # review r2 N9: a plain task id can still resolve through a symlink outside the set
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "set"
+            root.mkdir()
+            self.write_set(root, 8, {"immediate": {"mutants": 40, "rejected": 30}, "load_sensitive": []})
+            outside = Path(d) / "outside"
+            (root / "tasks" / "T0").rename(outside)
+            (root / "tasks" / "T0").symlink_to(outside)
+            with mock.patch.object(lab, "load_cells", return_value=self.pilot(8)), self.assertRaisesRegex(ValueError, "outside the set"):
+                lab.viability(root / "set.json", root)
+
     def test_a_task_id_that_leaves_the_set_is_refused_before_any_read(self):
         # review #13: a set's task ids were joined into paths unchecked
         with tempfile.TemporaryDirectory() as d:

@@ -27,7 +27,8 @@ schemas, and the dashboard snapshot.
   outcomes: too few tasks, an oracle that rejects 0.2968 of planted defects (under 0.30), and a reference accepted in
   4.3% of cells, which also makes `PAYS` unreachable and leaves the study underpowered. Study F's go-json numbers read
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
-  computation with it, and their output is unchanged. Both refuse a task id that is not a plain name before reading task files.
+  computation with it, and their output is unchanged. Both refuse a task id that is not a plain name, or whose directory resolves outside the set,
+  before reading task files.
   From a pilot it refuses one sealed with another set and any cell of a foreign task, counts every attempted task (invalid,
   refused, archived and dispatch-only included) in the shares' denominator, reads only the compared arms' cells (an A/A copy
   supplies no sufficiency), never reads `VIABLE` from an `unbound` pilot, reads an untried arm or a valid cell without a cost as missing rather than
@@ -87,7 +88,8 @@ schemas, and the dashboard snapshot.
   read `unrecorded` and are never rescanned. Prevention is only what each CLI enforces, detection sees only logged tool calls,
   and full isolation needs an OS sandbox, which 007 does not provide. The layout refusals (a protected path that is HOME or
   holds the workspace) apply only to cells that ask for deny rules; an `unenforced` cell leaves such a path out of detection and
-  names it in `contamination.protection_dropped`. `replay_eval run` protects every task's hidden sources. See
+  names it in `contamination.protection_dropped`. `replay_eval run` protects the hidden sources of every task the set declares, also under
+  `--tasks`; only the exact path holding the workspace leaves detection. See
   [the lab guide](docs/lab.md#read-isolation-and-contamination).
 
 ### Changed
