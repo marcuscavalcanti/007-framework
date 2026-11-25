@@ -69,7 +69,8 @@ schemas, and the dashboard snapshot.
   than 1% of the time, taking graded cells as independent. `lab_accept`'s exit contract is read only for tasks that declare it or
   run its exact invocation behind a Python interpreter; a task with its own grader command, an unknown declared contract or a task the set does not list
   (counted in `contracts`) errs or times out only as the controller recorded, and any other exit rejects. `status` is read only: it exits 3 when it cannot read a stable snapshot of the
-  results (every cell artifact and `.blind/` file unchanged across the read, three tries), else 1 while an alarm is open. `report`
+  results (two equal observations of the covered cell artifacts and `.blind/` entries around the read, three tries; a path that
+  is no directory is no reading), else 1 while an alarm is open. `report`
   adds the same block, `oracle_health`, with a per-arm breakdown. An alarm never changes a verdict: it marks the run
   `oracle-suspect`. The printed verdict gains `oracle_status` and `oracle_suspect`, and `report.md` opens with a notice while the
   alarm is open. There is no acknowledgement in 1.11.0; whoever reads the report decides whether the run stands (planned for 1.12). Runs whose cells record no grader exit read

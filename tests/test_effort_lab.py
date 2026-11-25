@@ -2608,6 +2608,31 @@ class OracleHealth(unittest.TestCase):
             with mock.patch.object(lab.replay_eval, "blind_files", side_effect=lambda _, n=iter(range(99)): [str(next(n))]):
                 self.assertEqual(lab.status(root / "set.json", results)["snapshot"], "unstable")
 
+    def test_covered_files_are_named_by_their_suffix_and_an_unusable_path_is_no_reading(self):
+        """Review r3 R3-4: a task id with a dot (`lib.v1`) lost its cell part to `split(".")`, labelled streams were not covered,
+        and a regular file given as the results directory read as a stable, empty run."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            results = self.alarmed(root)
+            row = graded("lib.v1", "medium", 1, 1)
+            (results / "lib.v1-r01-medium.json").write_text(json.dumps({**row, "runner_receipt_sha256": "unmeasured"}))
+            for name in ("lib.v1-r01-medium.json", "T0-r01-medium.stream.jsonl"):
+                with self.subTest(name):
+                    real, n = lab.replay_eval.read_cell_artifacts, iter(range(99))
+
+                    def rewriting(directory, name=name):
+                        found = real(directory)
+                        (results / name).write_text((results / name).read_text() + " " * (1 + next(n)) if (results / name).exists() else "x")
+                        return found
+                    with mock.patch.object(lab.replay_eval, "read_cell_artifacts", side_effect=rewriting):
+                        self.assertEqual(lab.status(root / "set.json", results)["snapshot"], "unstable")
+            plain = root / "not-a-directory"
+            plain.write_text("")
+            self.assertEqual(lab.status(root / "set.json", plain)["snapshot"], "unstable")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(lab.main(["status", "--set", str(root / "set.json"), "--results", str(plain)]), 3)
+            self.assertEqual(lab.status(root / "set.json", root / "absent")["snapshot"], "stable")  # nothing written yet
+
     def test_a_cell_rewritten_during_the_read_is_unstable_and_status_exits_3(self):
         """Review r2 N3: equal `.blind/` listings missed a labelled cell rewritten in place (run rewrites a refused cell with
         os.replace), and an unstable reading still exited 0 or 1. Status now compares every cell artifact and exits 3."""

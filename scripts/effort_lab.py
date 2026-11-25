@@ -2757,17 +2757,25 @@ STATUS_TRIES = 3
 STATUS_ISOLATION_MODES = ("unenforced", "claude-settings", "codex-profile", "claude-settings+codex-profile", "unrecorded")
 
 
+def _covered(name):
+    """A cell artifact's name: a recognized suffix stripped from the right leaves a cell id (task ids may hold dots)."""
+    return any(name.endswith(s) and replay_eval.is_cell_id(name[:-len(s)]) for s in replay_eval.CELL_ARTIFACT_SUFFIXES)
+
+
 def _generation(results):
-    """Every cell artifact and `.blind/` file by name, inode, size and modification time: equal before and after a read means
-    nothing the read depends on was added, removed, renamed or rewritten in between."""
+    """The covered files, cell artifacts of every recognized suffix and `.blind/` entries, by name, inode, size and modification
+    time. Two equal observations around a read say these files matched at both ends, not that nothing came and went between.
+    An absent `.blind/` is none; any other listing failure raises."""
     entries = []
     for directory in (results, results / replay_eval.BLIND_DIR):
         try:
             names = sorted(os.listdir(directory))
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError:
+            if directory == results:
+                raise
             continue
         for name in names:
-            if directory == results and not (name.endswith(".json") and replay_eval.is_cell_id(name.split(".", 1)[0])):
+            if directory == results and not _covered(name):
                 continue
             try:
                 info = os.lstat(directory / name)
@@ -2780,19 +2788,23 @@ def _generation(results):
 
 def _snapshot(results):
     """One reading of a results directory a run may be writing: the cells, receipts and `.blind/` names read between two equal
-    generations of every artifact they depend on; read again, up to STATUS_TRIES times, when anything moved or was rewritten.
-    (cells, receipts, blind names, stable); the last reading comes back unstable."""
+    observations of the covered files (_generation); read again, up to STATUS_TRIES times, when they differed or a listing or
+    read failed. (cells, receipts, blind names, stable): an absent directory is an empty, stable reading; a path that is no
+    directory, or one never read stably, comes back unstable."""
     found, receipts, names = {}, {}, []
-    if not results.is_dir():  # nothing written yet
+    if not os.path.lexists(results):  # nothing written yet
         return {}, {}, [], True
+    if not results.is_dir():  # a path that exists but is no directory: no reading, never an empty run
+        return {}, {}, [], False
     for _ in range(STATUS_TRIES):
-        before = _generation(results)
         try:
+            before = _generation(results)
             names = replay_eval.blind_files(results)
             found, receipts = replay_eval.read_cell_artifacts(results)
-        except (FileNotFoundError, ValueError):  # a file that vanished, or was caught half written
+            after = _generation(results)
+        except (OSError, ValueError):  # a file that vanished, was caught half written, or a listing that failed
             continue
-        if _generation(results) == before and replay_eval.blind_files(results) == names:
+        if after == before and replay_eval.blind_files(results) == names:
             return found, receipts, names, True
     return found, receipts, names, False
 

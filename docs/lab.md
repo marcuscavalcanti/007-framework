@@ -239,9 +239,11 @@ exited 1 before writing its report. `status` shows the grader's health while a r
 ```
 
 `status` is read only and advisory: it reads the cells written so far, A/A copies included, takes no lock, writes nothing and
-checks no receipt. It reads them between two equal generations of every cell artifact and `.blind/` file (name, inode, size and
-modification time), and again, up to three times, when anything was added, removed or rewritten in between; `snapshot` says
-`stable`, or `unstable` when the directory kept changing. It prints health pooled over every cell and never an arm, task, cell,
+checks no receipt. It reads them between two equal observations of the covered files: every cell artifact (named by a recognized suffix, so a
+task id may hold dots) and every `.blind/` entry, by name, inode, size and modification time. Equal observations say those files
+matched at both ends of the read, not that nothing came and went between. It reads again, up to three times, when they
+differed or a listing or read failed; `snapshot` says `stable`, or `unstable`. An absent results directory reads as an empty,
+stable run; a path that exists but is no directory, or one never read stably, reads `unstable`. It prints health pooled over every cell and never an arm, task, cell,
 verdict, time or free text, so it can be read during a run without peeking at the comparison. It exits 3 when it could not read a
 stable snapshot, else 1 while an alarm is open and 0 otherwise, so a driver can stop on it. `report` adds the same block (`oracle_health`) with a
 per-arm breakdown (`per_arm`). The report already shows each arm's acceptance, so it reveals nothing new. `status` prints
