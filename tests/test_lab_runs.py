@@ -636,6 +636,21 @@ class MissingDataGuard(unittest.TestCase):
         (self.root / "dispatch.jsonl").unlink()
         shutil.rmtree(self.root / "refused")
 
+    def test_attempt_numbers_are_normalized_bounded_and_keep_their_receipt(self):
+        """Review r4 R4-1: `.0000000001` (attempt 1) escaped the 9-digit pattern and vanished; a `.01` row with a `.1` receipt lost
+        the receipt's cost to the row's stem."""
+        rows, row = self.cells(), {"task": "T0", "replicate": 1, "arm": "lo"}
+        self.archived("T0-r01-lo.0000000001", row, {"cost_usd": 7.0})
+        self.assertEqual((self.guard(rows)["refused"], self.guard(rows)["accounting_unresolved"]), (1, []))
+        shutil.rmtree(self.root / "refused")
+        self.archived("T0-r01-lo.01", row)
+        self.archived("T0-r01-lo.1", None, {"cost_usd": 7.0})
+        self.assertAlmostEqual(self.guard(rows)["cost_ratio"], (60 + 7.0) / 60 / 4.0)  # the receipt's US$7, not the reserve
+        shutil.rmtree(self.root / "refused")
+        self.archived("T0-r01-lo.12345678901", row, {"cost_usd": 7.0})  # past the supported attempt numbers: unresolved, not dropped
+        self.assertEqual(self.guard(rows)["answer"], "ACCOUNTING-UNRESOLVED")
+        shutil.rmtree(self.root / "refused")
+
     def test_a_row_marked_refused_never_grades_or_sets_reach(self):
         """Review r3 R3-1/N6: a row flagged refused but valid defined reach and entered the quality readings. Refusals are now
         normalized first: such a row reads exactly like the same refusal recorded invalid."""

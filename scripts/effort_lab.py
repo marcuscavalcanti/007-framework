@@ -2396,10 +2396,14 @@ def _archive(results, arms):
     attempts, unresolved = {}, []
     for path in sorted((results / "refused").iterdir()) if (results / "refused").is_dir() else ():
         suffix = next((s for s in suffixes if path.name.endswith(s)), None)
-        match = re.fullmatch(r"(.+)\.([0-9]{1,9})", path.name[:-len(suffix)]) if suffix else None
+        match = re.fullmatch(r"(.+)\.([0-9]+)", path.name[:-len(suffix)]) if suffix else None
         if not match:
             continue
-        files = attempts.setdefault((match[1], int(match[2])), {})
+        digits = match[2].lstrip("0")  # leading zeros first, then the bound: `.0000000001` is attempt 1
+        if not digits or len(digits) > 9:  # attempt 0, or a number past the supported ones: never silently dropped
+            unresolved.append(f"refused/{path.name}: unsupported attempt number")
+            continue
+        files = attempts.setdefault((match[1], int(digits)), {})
         if suffix in files:
             unresolved.append(f"refused/{path.name}")  # the same attempt twice
             continue
@@ -2420,9 +2424,10 @@ def _archive(results, arms):
             unresolved.append(f"refused/{path.name}")
             continue
         costs[(cid, number)] = _archived_cost(row, files.get(".runner.json"))
-        if row["arm"] in arms:
+        if row["arm"] in arms:  # the cost the grouped files give (row, else the receipt at its real path), carried on the row
             found.append({**row, "cell": f"refused/{path.name[:-len('.json')]}", "attempt_of": cid, "valid": False, "accepted": False,
-                          "failure_class": REFUSED})
+                          "failure_class": REFUSED, **({"cost_usd": costs[(cid, number)]} if costs[(cid, number)] is not None else {}),
+                          **({"receipt_path": f"refused/{files['.runner.json'].name}"} if ".runner.json" in files else {})})
     history = _ledger(results) if (results / "dispatch.jsonl").exists() else None
     if (results / "dispatch.jsonl").exists() and history is None:
         if attempts:
