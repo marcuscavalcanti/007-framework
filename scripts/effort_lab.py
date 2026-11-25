@@ -2443,9 +2443,12 @@ def _archive(results, arms):
             if not _same_charge(costs[key], charged[key]):
                 unresolved.append(f"refused/{key[0]}.{key[1]}: cost {costs[key]}, ledger {charged[key]}")
         for cid in sorted(set(per_cell) | set(expected)):
-            want = set(range(1, (expected.get(cid, 0) if history is not None else max(per_cell[cid])) + 1))
-            if per_cell.get(cid, set()) != want:
-                unresolved.append(f"refused/{cid}: attempts {sorted(per_cell.get(cid, set()))}, expected {sorted(want)}")
+            have = per_cell.get(cid, set())
+            end = expected.get(cid, 0) if history is not None else max(have)
+            # exactly 1..end, checked without building the range: distinct positive numbers, as many as end, none above it
+            if len(have) != end or have and (min(have) < 1 or max(have) != end):
+                unresolved.append(f"refused/{cid}: attempts {len(have)} of {end}"
+                                  + (f", highest {max(have)}" if have else ""))
     return found, unresolved
 
 

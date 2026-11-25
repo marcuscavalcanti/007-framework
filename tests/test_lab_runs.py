@@ -583,7 +583,7 @@ class MissingDataGuard(unittest.TestCase):
                                                   + json.dumps({"cell": "T5-r01-lo", "finished_at": "2026-11-25T00:01:00+00:00", "refused": True,
                                                                 "requeued": True, "cost_usd": 7.0}) + "\n")
         g = self.guard(rows)
-        self.assertEqual((g["answer"], g["accounting_unresolved"]), ("ACCOUNTING-UNRESOLVED", ["refused/T5-r01-lo: attempts [], expected [1]"]))
+        self.assertEqual((g["answer"], g["accounting_unresolved"]), ("ACCOUNTING-UNRESOLVED", ["refused/T5-r01-lo: attempts 0 of 1"]))
         (self.root / "dispatch.jsonl").unlink()
         both = [{**r, "failure_class": "provider-rate-limit"} if (r["task"], r["replicate"], r["arm"]) == ("T0", 1, "hi") else r for r in rows]
         self.assertAlmostEqual(lab._cost_ratio(both, self.root, "lo", "hi", 10.0), (60 / 60) / (240 / 59))
@@ -649,6 +649,14 @@ class MissingDataGuard(unittest.TestCase):
         shutil.rmtree(self.root / "refused")
         self.archived("T0-r01-lo.12345678901", row, {"cost_usd": 7.0})  # past the supported attempt numbers: unresolved, not dropped
         self.assertEqual(self.guard(rows)["answer"], "ACCOUNTING-UNRESOLVED")
+        shutil.rmtree(self.root / "refused")
+
+    def test_a_huge_attempt_number_is_checked_without_building_its_range(self):
+        # review r4 R4-2: with no ledger, one file numbered 999999999 made a set of nearly a billion integers
+        self.archived("T0-r01-lo.999999999", {"task": "T0", "replicate": 1, "arm": "lo"}, {"cost_usd": 7.0})
+        g = self.guard(self.cells())
+        self.assertEqual(g["answer"], "ACCOUNTING-UNRESOLVED")
+        self.assertIn("attempts 1 of 999999999", g["accounting_unresolved"][0])
         shutil.rmtree(self.root / "refused")
 
     def test_a_row_marked_refused_never_grades_or_sets_reach(self):
