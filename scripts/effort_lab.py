@@ -2158,10 +2158,15 @@ def viability(config_path=None, results=None, stated=None):
             every = load_cells(results)
             if {r.get("task") for r in every} - ids:
                 raise ValueError("--results holds cells of tasks outside this set; give numbers from other runs in --inputs")
-            rows = [r for r in every if r["valid"] is True]
-            # attempted: every task with a cell of either arm, invalid or refused included, as the cost ratio's bootstrap counts them
-            attempted = {r["task"] for r in every if r.get("arm") in (low, ref)}
-            tried = {arm: {r["task"] for r in every if r.get("arm") == arm} for arm in (low, ref)}
+            rows = [r for r in every if r["valid"] is True and r.get("arm") in (low, ref)]  # an A/A copy or another arm never counts
+            # attempted: every task with a cell of either arm, invalid or refused included, as the cost ratio's bootstrap counts them,
+            # and every task known only from an archived refusal or a dispatch the ledger records
+            known = [(r.get("task"), r.get("arm")) for r in every] + [(r["task"], r["arm"]) for r in refused_attempts(results, (low, ref))]
+            for row in _ledger(results) or []:
+                decoded = _decode_cell(row.get("cell", ""), ids, (low, ref)) if "dispatched_at" in row else None
+                known += [decoded[:2]] if decoded else []
+            attempted = {task for task, arm in known if arm in (low, ref) and task in ids}
+            tried = {arm: {task for task, a in known if a == arm and task in ids} for arm in (low, ref)}
             costs = {arm: [cost_of(results, r["cell"], r) for r in rows if r["arm"] == arm] for arm in (low, ref)}
             pilot = {"binding": binding, "attempted_tasks": len(attempted), "valid_cells": {role: sum(r["arm"] == arm for r in rows)
                      for role, arm in zip(VIABILITY_ROLES, (low, ref))},
@@ -2190,7 +2195,11 @@ def viability(config_path=None, results=None, stated=None):
         raise ValueError("--results needs --set: the cells are read against the set's tasks")
     for key, value in (stated or {}).items():
         put(key, value, "stated")
-    return {**viability_verdict(found), "inputs": found, "sources": sources, **({"pilot": pilot} if config_path is not None and results is not None else {})}
+    result = viability_verdict(found)
+    if pilot is not None and pilot["binding"] == "unbound":  # cells no sealed dispatch produced cannot be attributed: never VIABLE
+        result["missing"].append("pilot-binding")
+        result["verdict"] = "NOT-VIABLE" if result["reasons"] else "UNKNOWN"
+    return {**result, "inputs": found, "sources": sources, **({"pilot": pilot} if pilot is not None else {})}
 
 
 def viability_text(result):

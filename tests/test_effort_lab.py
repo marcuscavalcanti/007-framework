@@ -2158,6 +2158,29 @@ class Viability(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "task files"):
                 run(self.pilot())
 
+    def test_archived_and_dispatched_tasks_count_copies_do_not_and_an_unbound_pilot_is_never_viable(self):
+        """Review r2 N5: a task known only from refused/ or the ledger left the attempted denominator; an A/A copy could supply a
+        compared task's sufficiency; an unbound pilot could read VIABLE."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.write_set(root, 12, {"immediate": {"mutants": 40, "rejected": 30}, "load_sensitive": []})
+            rows = [r for r in self.pilot(12) if r["task"] not in ("T10", "T11")]
+            (root / "refused").mkdir()
+            (root / "refused" / "T10-r01-medium.1.json").write_text(json.dumps({"task": "T10", "arm": "medium", "replicate": 1}))
+            (root / "dispatch.jsonl").write_text(json.dumps({"cell": "T11-r01-xhigh", "dispatched_at": "2026-11-25T00:00:00+00:00"}) + "\n")
+            weak = [{**r, "acceptance_outcomes": {"a": "pass"}} if r["task"] == "T0" else r for r in rows]  # compared arms reach none
+            copy = {**cell("T0", "xhigh-aa", 1, {"a", "b", "c", "d"}), "cell": "T0-r01-xhigh-aa", "accepted": True, "cost_usd": 4.0}
+            with mock.patch.object(lab, "load_cells", return_value=weak + [copy]):
+                out = lab.viability(root / "set.json", root)
+            self.assertEqual(out["pilot"]["attempted_tasks"], 12)
+            self.assertEqual(out["inputs"]["accepted_task_share"]["candidate"], 10 / 12)
+            self.assertAlmostEqual(out["inputs"]["sufficient_share"], 9 / 12)  # T0's only full pass is the copy's
+            with mock.patch.object(lab, "load_cells", return_value=self.pilot(12)), \
+                    mock.patch.object(lab, "sealed_state", return_value={"state": "unbound"}):
+                unbound = lab.viability(root / "set.json", root)
+            self.assertNotEqual(unbound["verdict"], "VIABLE")
+            self.assertIn("pilot-binding", unbound["missing"])
+
     def test_a_pilot_sealed_with_another_set_is_refused(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
