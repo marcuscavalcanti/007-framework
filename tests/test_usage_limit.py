@@ -232,6 +232,26 @@ class Controller(unittest.TestCase):
         self.assertEqual((second["stop"], second["calls"], second["resets_at"]), ("quota-hold", 0, reset))
         self.assertEqual(probes.read_text(), "x")  # one paid probe, not two
 
+    def test_a_limit_with_no_reset_cools_down_contaminated_or_probed(self):
+        """Review r2 N10: a contaminated cell the limit cut with no reset, and a failed probe that named the limit with no reset,
+        were retried at once on resume; both now get the fallback cooldown from their observation time."""
+        with mock.patch.object(lab, "RATE_LIMIT_COOLDOWN_S", 600):
+            contaminated = {"failure_class": "contaminated", "contamination": {"status": "contaminated"}}
+            execute = executor(lambda cid, n: cid == "T0-r01-a" and LIMIT(None), {"T0-r01-a": contaminated})
+            self.assertEqual(self.go(execute, max_invalid=99)["stop"], "quota-hold")
+            again = self.go(execute, max_invalid=99)
+            self.assertEqual((again["stop"], again["calls"]), ("rate-limit-cooldown", 0))
+            probes = self.root / "probes.log"
+            (self.root / "probe.py").write_text(
+                "import json\nopen(%r, 'a').write('x')\n" % str(probes)
+                + "print(json.dumps({'type': 'result', 'is_error': True, 'result': 'Claude AI usage limit reached', 'total_cost_usd': 0.0}))\n")
+            path = write_set(self.root / "gated", quota_probe={"command": [sys.executable, "-I", str(self.root / "probe.py")]})
+            out = self.root / "gated-out"
+            go = lambda: lab.run(path, out, execute=executor(lambda cid, n: None), replicates=1, jobs=1, max_calls=99, max_usd=99,
+                                 stop_usd=1, quota_gate=True)
+            self.assertEqual(go()["stop"], "quota-hold")
+            self.assertEqual((go()["stop"], probes.read_text()), ("rate-limit-cooldown", "x"))  # no second paid probe yet
+
     def test_a_finished_run_is_not_held(self):
         box = []  # the last cell dispatched is refused, and not requeued: nothing is left to hold
         execute = executor(lambda cid, n: len(box[0].calls) == 4 and LIMIT(now() + 3600))

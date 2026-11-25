@@ -196,7 +196,8 @@ schemas, and the dashboard snapshot.
   cells remain) a resume stops at once with `quota-hold`, `resets_at` and `retry_after_s`, dispatching nothing. A limit that
   named no reset falls back to the 10-minute cooldown; one whose reset has passed needs none. The reset is read from the whole
   digit token (a 13-digit millisecond time names no reset instead of one centuries away), the latest of several wins, and a
-  failed quota probe's reset holds a resume too, so no second probe is paid for before it. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
+  failed quota probe's reset holds a resume too, so no second probe is paid for before it. With no reset named, a contaminated
+  cell the limit cut and a probe that read the limit get the 10-minute cooldown from when they were seen, as a refusal does. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
   limit as `usage limit reached` instead of `no rate_limit_event`, and `quota.jsonl` records `resets_at`.
 - A refused call whose stream touched a protected path stays contaminated (`contamination.status`; its `failure_class` is
   `contaminated` unless a cleanup failure, recorded first, names the cell): it counts against `--max-invalid`, is never

@@ -1252,20 +1252,36 @@ def quota_check(config, out, left):
     return ok, reason, cost
 
 
-def probe_holds(out):
-    """The resets (Unix seconds) that failed quota probes of this run logged in quota.jsonl: the account stays held until then."""
+def _probe_rows(out):
     try:
         lines = (out / "quota.jsonl").read_text().splitlines()
     except OSError:
         return []
-    found = []
+    rows = []
     for line in lines:
         try:
             row = json.loads(line)
         except ValueError:
             continue
-        if isinstance(row, dict) and row.get("ok") is False and cli_telemetry.reset_epoch(row.get("resets_at")):
-            found.append(row["resets_at"])
+        if isinstance(row, dict) and row.get("ok") is False:
+            rows.append(row)
+    return rows
+
+
+def probe_holds(out):
+    """The resets (Unix seconds) that failed quota probes of this run logged in quota.jsonl: the account stays held until then."""
+    return [row["resets_at"] for row in _probe_rows(out) if cli_telemetry.reset_epoch(row.get("resets_at"))]
+
+
+def probe_limits_without_reset(out):
+    """When failed probes saw the usage limit with no reset (their `at`): the fallback cooldown runs from the newest."""
+    found = []
+    for row in _probe_rows(out):
+        if row.get("reason") == "usage limit reached" and not cli_telemetry.reset_epoch(row.get("resets_at")):
+            try:
+                found.append(harness_report._instant(row["at"]))
+            except (KeyError, TypeError, ValueError):
+                continue
     return found
 
 
@@ -1436,9 +1452,12 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
     if resets and remaining and max(resets) > datetime.now(timezone.utc).timestamp():
         return {"stop": "quota-hold", "calls": 0, "resets_at": max(resets),
                 "retry_after_s": math.ceil(max(resets) - datetime.now(timezone.utc).timestamp())}
-    unknown = [row for row in refusals if not known(row)]  # a refusal whose reset is known and past needs no cooldown
-    if unknown and remaining:  # resuming inside the outage would only lose cells to it (the newest refusal counts); a finished run has none to lose
-        age = (datetime.now(timezone.utc) - max(harness_report._instant(row["finished_at"]) for row in unknown)).total_seconds()
+    # a refusal whose reset is known and past needs no cooldown; one with no reset does, and so does a contaminated cell the
+    # account's limit cut (never a refusal) and a failed probe that named the limit, both with no reset
+    unknown = [harness_report._instant(row["finished_at"]) for row in history if "finished_at" in row and not known(row)
+               and (row.get("refused") is True or row.get("usage_limit") is True)] + probe_limits_without_reset(out)
+    if unknown and remaining:  # resuming inside the outage would only lose cells to it (the newest counts); a finished run has none to lose
+        age = (datetime.now(timezone.utc) - max(unknown)).total_seconds()
         if age < RATE_LIMIT_COOLDOWN_S:
             return {"stop": "rate-limit-cooldown", "calls": 0, "retry_after_s": round(RATE_LIMIT_COOLDOWN_S - age)}
     try:
