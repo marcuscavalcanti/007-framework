@@ -596,10 +596,10 @@ class MissingDataGuard(unittest.TestCase):
         if receipt is not None:
             (store / f"{name}.runner.json").write_text(json.dumps(receipt))
 
-    def ledger(self, *requeued):
+    def ledger(self, *requeued, cost=7.0):
         (self.root / "dispatch.jsonl").write_text("".join(
             json.dumps({"cell": cell, "dispatched_at": "2026-11-25T00:00:00+00:00"}) + "\n"
-            + json.dumps({"cell": cell, "finished_at": "2026-11-25T00:01:00+00:00", "refused": True, "requeued": True, "cost_usd": 1.0}) + "\n"
+            + json.dumps({"cell": cell, "finished_at": "2026-11-25T00:01:00+00:00", "refused": True, "requeued": True, "cost_usd": cost}) + "\n"
             for cell in requeued))
 
     def test_archived_attempts_are_reconciled_by_cell_and_attempt_number(self):
@@ -623,7 +623,15 @@ class MissingDataGuard(unittest.TestCase):
         self.archived("T0-r01-lo.1", row, {"cost_usd": 7.0})
         (self.root / "dispatch.jsonl").write_text("")  # a ledger that exists, empty: it records no requeue, so the archive is unexplained
         self.assertEqual(self.guard(rows)["answer"], "ACCOUNTING-UNRESOLVED")
-        self.ledger("T0-r01-lo")  # reconciled: one requeue, attempt 1 archived with its row
+        self.ledger("T0-r01-lo")  # reconciled: one requeue, attempt 1 archived with its row and the charge the ledger recorded
+        self.assertEqual(self.guard(rows)["accounting_unresolved"], [])
+        # review r4: the archive's charge must be the one the ledger recorded for that requeue; a US$1 charge cannot become US$7
+        self.ledger("T0-r01-lo", cost=1.0)
+        g = self.guard(rows)
+        self.assertEqual((g["answer"], g["accounting_unresolved"]), ("ACCOUNTING-UNRESOLVED", ["refused/T0-r01-lo.1: cost 7.0, ledger 1.0"]))
+        self.ledger("T0-r01-lo", cost=None)  # charged at the reserve when refused: an archive that now shows a cost disagrees
+        self.assertEqual(self.guard(rows)["answer"], "ACCOUNTING-UNRESOLVED")
+        self.archived("T0-r01-lo.1", row, {})  # no cost on either side: both at the reserve, consistent
         self.assertEqual(self.guard(rows)["accounting_unresolved"], [])
         (self.root / "dispatch.jsonl").unlink()
         shutil.rmtree(self.root / "refused")

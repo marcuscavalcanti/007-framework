@@ -2389,7 +2389,8 @@ def _archive(results, arms):
     its cost read from that row or its archived receipt. Files are grouped by canonical cell and attempt number (an int: `.1` and
     `.01` are one attempt). Unresolved, whatever arm it may be: a duplicate attempt, an attempt with a receipt and no row, a row
     that cannot be read or whose task, arm and replicate are not its file name's cell, and, when the ledger exists (even empty), a
-    cell whose attempts are not exactly 1 to the number of requeued refusals the ledger records for it; every archive when the
+    cell whose attempts are not exactly 1 to the number of requeued refusals the ledger records for it, and an attempt whose cost
+    (row, else archived receipt, else unmeasured) is not the charge the ledger recorded for that requeue; every archive when the
     ledger exists but cannot be read. Without a ledger (a directory not written by `run`) each cell's attempts must run 1 to n."""
     suffixes = sorted(replay_eval.CELL_ARTIFACT_SUFFIXES, key=len, reverse=True)
     attempts, unresolved = {}, []
@@ -2403,7 +2404,7 @@ def _archive(results, arms):
             unresolved.append(f"refused/{path.name}")  # the same attempt twice
             continue
         files[suffix] = path
-    found, per_cell = [], {}
+    found, per_cell, costs = [], {}, {}
     for (cid, number), files in sorted(attempts.items()):
         per_cell.setdefault(cid, set()).add(number)
         path = files.get(".json")
@@ -2418,6 +2419,7 @@ def _archive(results, arms):
         if not own or replay_eval.cell_id({"id": row["task"]}, row["arm"], row["replicate"]) != cid:
             unresolved.append(f"refused/{path.name}")
             continue
+        costs[(cid, number)] = _archived_cost(row, files.get(".runner.json"))
         if row["arm"] in arms:
             found.append({**row, "cell": f"refused/{path.name[:-len('.json')]}", "attempt_of": cid, "valid": False, "accepted": False,
                           "failure_class": REFUSED})
@@ -2426,15 +2428,37 @@ def _archive(results, arms):
         if attempts:
             unresolved.append("dispatch.jsonl")
     else:
-        expected = {}
+        expected, charged = {}, {}
         for row in history or []:
             if "finished_at" in row and row.get("refused") is True and row.get("requeued") is True:
                 expected[row["cell"]] = expected.get(row["cell"], 0) + 1
+                # the ledger's charge for this requeue, as the run computed it (cost_of: a measured cost, or None at the reserve)
+                charged[(row["cell"], expected[row["cell"]])] = row.get("cost_usd") if harness_report._valid_money(row.get("cost_usd")) else None
+        for key in sorted(set(costs) & set(charged)):  # attempt n of a cell is its n-th requeued refusal in the ledger
+            if not _same_charge(costs[key], charged[key]):
+                unresolved.append(f"refused/{key[0]}.{key[1]}: cost {costs[key]}, ledger {charged[key]}")
         for cid in sorted(set(per_cell) | set(expected)):
             want = set(range(1, (expected.get(cid, 0) if history is not None else max(per_cell[cid])) + 1))
             if per_cell.get(cid, set()) != want:
                 unresolved.append(f"refused/{cid}: attempts {sorted(per_cell.get(cid, set()))}, expected {sorted(want)}")
     return found, unresolved
+
+
+def _archived_cost(row, receipt):
+    """An archived attempt's cost as cost_of reads it: the row's own measured cost, else its archived receipt's, else None (charged
+    at the reserve)."""
+    if harness_report._valid_money(row.get("cost_usd")):
+        return row["cost_usd"]
+    try:
+        value = json.loads(receipt.read_text()).get("cost_usd") if receipt is not None and receipt.is_file() and not receipt.is_symlink() else None
+    except (OSError, ValueError, AttributeError):
+        value = None
+    return value if harness_report._valid_money(value) else None
+
+
+def _same_charge(archived, ledger):
+    """Both measured and equal to the cent's millionth, or both unmeasured (both charged at the reserve)."""
+    return archived is None and ledger is None or archived is not None and ledger is not None and abs(archived - ledger) < 1e-6
 
 
 def refused_attempts(results, arms):
