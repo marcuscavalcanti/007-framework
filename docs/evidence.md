@@ -6,7 +6,7 @@ Appended on 2026-11-25. The 1.11.0 candidate had four rounds of release review b
 returned FIX FIRST, the later rounds on the previous round's fixes only. The fixes made after the fourth round were not
 reviewed. With no SHIP verdict the candidate is not qualified as a stable release, so it is published as the pre-release
 `v1.11.0-rc.1` (package version `1.11.0rc1`), not activated, and 1.10.1 stays the stable release. The review records stay in
-the maintainer's files. Limits left open, also stated in [the lab guide](lab.md):
+the maintainer's files; the pre-release record is [evidence/v1.11.0-rc.1/release-evidence.md](../evidence/v1.11.0-rc.1/release-evidence.md). Limits left open, also stated in [the lab guide](lab.md):
 
 - the oracle alarm has no acknowledgement in this release; an open alarm marks the report until it stops ringing;
 - blind promotion guards against collisions and accidents, not against a process running with the user's authority;
@@ -34,7 +34,7 @@ without making it checkable here.
 | Second control, pre-registration ledger | `55e5e9ae94c71a144593191e261aca8bf5ed0d38c84f414780e376d5477a3ebf` |
 | Second control, `RESULT-CC2.md` | `5ed2146313f68b313d6d34d3f8f4898aad256f6d4201d72e1ef3272a0da368be` |
 | Second control, `cc2-result.json` | `bfa5b938eee70ae1fb60bd5415429bafb482a63ab777134fa2b2e95ce3383105` |
-| Version-binding rerun, `equiv.json` | `479b24d762fa2f6e0ce6bcb06e54fedc0efe8fc19e2ce192a321db411fb9f0ad` |
+| Version-binding rerun on the pre-release's `scripts/`, `equiv.json` | `71d868ad22473ec7db90aeb9108092085f30e4e046e0f8794afcd70d0e865348` |
 
 ### The arms were not blind through 1.10.1
 
@@ -142,16 +142,17 @@ F's interval, −3.0 to +4.7 points, as a roughly 92% interval.
 
 ### Version binding of the validated error control
 
-The second control validated the decision code of the `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`. Three
-files of `scripts/` differ between that tree and this release's: `effort_lab.py`, `cli_telemetry.py` and `native_runner.py`.
-1.11.0 changed `effort_lab.py` again (how a Claude usage limit is refused and requeued, and how `report` reads an arm with no
-valid cell), so the released file is not byte-identical to the validated one and the binding by identity does not hold. The
-functions the control exercised (`proven_critical`, `whole_loss_draws`, `guard_decision`, `missing_data_guard`, `_reading`,
-`_paired`, `studentized`, `false_proven`, `aa_check`) are unchanged, and no module constant changed.
+The second control validated the decision code of the `scripts/` tree `4fae7b3f8df4d2569f324fdcfbf23de5e79dd9c8`. The
+pre-release changed several `scripts/` files after that (the usage-limit hold, the empty-arm report, the release-review fixes
+and the version string), so the released files are not byte-identical to the validated ones and the binding by identity does
+not hold. The functions the control calls are `guard_decision` and `_reading`, with `proven_critical`, `whole_loss_draws`,
+`_paired`, `studentized`, `t975`, `reachable_diffs` and `paired_interval` beneath them: these are unchanged. Functions the
+control does not call did change, among them `missing_data_guard` (the cost ratio, and refusals read as invalid before
+reach) and `aa_check` (qualification and missing pairs).
 
 The binding was therefore measured, not argued. The frozen control, changed only in the line that picks the scripts
-directory, was rerun with the `scripts/` tree of this release (`2f83d292cdaf145017140eab87b661fbfdc24b09`) on the same inputs
-and seeds, and compared with the validated run's stored result, value for value and bit for bit in floats:
+directory, was rerun with the `scripts/` tree of the pre-release `v1.11.0-rc.1` (`0fe9a537d25d9fe7997aa393ecb9f1ec8ed7117b`)
+on the same inputs and seeds, and compared with the validated run's stored result, value for value and bit for bit in floats:
 
 | Part | Compared | Result |
 |---|---|---|
@@ -166,9 +167,10 @@ and seeds, and compared with the validated run's stored result, value for value 
 A negative control, the same scripts with the clustered loss model removed, was caught in 10 of 10 replicates checked. Not
 rerun: the control's sensitivity analysis (597 replicates of the same rule on inputs with one cell replaced).
 
-What 1.11.0 changed sits upstream of the decision (which refused cells are set aside and requeued in a live run) and in a
-report override that applies only when an arm has no valid cell, a case the control never produced; the control does not
-exercise those paths. The comparison holds for that `scripts/` tree only: a release whose `scripts/` differs needs it again.
+What changed after the control sits outside the functions it calls: which refused cells are set aside and requeued in a
+live run, the economic answer and its accounting, the report when an arm has no valid cell, A/A qualification, viability and
+the status reader. The control does not exercise those paths. The comparison holds for that `scripts/` tree only: a release
+whose `scripts/` differs needs it again.
 
 ### Incremental value
 

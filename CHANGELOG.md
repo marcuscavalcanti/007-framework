@@ -262,9 +262,11 @@ verdict was FIX FIRST, and the fixes made after it were not reviewed. The review
     and `PAYS` under both rules (statistic 10.841).
   - Study F's published 95% interval covers the truth about 92% of the time in its own regime (1,838/2,000 and 1,832/2,000 in
     the two controls).
-  - Version binding: the second control ran on `scripts/` tree `4fae7b3f…`. Three files differ from this release's tree
-    (`effort_lab.py`, `cli_telemetry.py`, `native_runner.py`); 1.11.0's `effort_lab.py` is not byte-identical to that tree's (the usage-limit and empty-arm fixes above changed `refused`, `_run`, `quota_check`, `_report` and `summary`).
-    The frozen control was rerun with this release's `scripts/` tree (`2f83d292…`) on the same inputs and seeds: the rebuilt
+  - Version binding: the second control ran on `scripts/` tree `4fae7b3f…`. The pre-release's `scripts/` files differ from it
+    (the usage-limit hold, the empty-arm report, the release-review fixes, the version string); the functions the control
+    calls (`guard_decision`, `_reading` and those beneath them) are unchanged, while `missing_data_guard` and `aa_check`, which
+    it does not call, changed. The frozen control was rerun with the pre-release's `scripts/` tree (`0fe9a537…`) on the same
+    inputs and seeds: the rebuilt
     floor, the coverage grid, the A/A check, the prescreen of all 29,200 replicates, the decision rule on all 979 replicates
     that reach it, the re-read of Study F and the end-to-end gate equal the validated run's output exactly. The control's
     sensitivity analysis was not rerun. A release with a different `scripts/` tree needs the comparison again.
