@@ -628,6 +628,16 @@ class MissingDataGuard(unittest.TestCase):
         (self.root / "dispatch.jsonl").unlink()
         shutil.rmtree(self.root / "refused")
 
+    def test_a_row_marked_refused_never_grades_or_sets_reach(self):
+        """Review r3 R3-1/N6: a row flagged refused but valid defined reach and entered the quality readings. Refusals are now
+        normalized first: such a row reads exactly like the same refusal recorded invalid."""
+        rows = self.cells()
+        mark = lambda valid: [{**r, "valid": valid, "failure_class": "provider-rate-limit", "acceptance_outcomes": {"x": "fail", "y": "fail"}}
+                              if (r["task"], r["replicate"], r["arm"]) == ("T9", 1, "lo") else r for r in rows]
+        inconsistent, consistent = self.guard(mark(True)), self.guard(mark(False))
+        for key in ("verdict", "readings", "missing_data"):
+            self.assertEqual(inconsistent[key], consistent[key], key)
+
     def test_a_kill_does_not_pay(self):
         g = self.guard(self.cells(low_fail={(t, r) for t in self.tasks for r in (1, 2)}))
         self.assertEqual((g["verdict"], g["answer"]), ("KILL", "DOES-NOT-PAY"))

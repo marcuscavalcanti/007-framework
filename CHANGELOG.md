@@ -188,7 +188,7 @@ schemas, and the dashboard snapshot.
   an arm the provider refused more often looked cheaper. Every refused attempt, in place or archived, now adds its cost (its
   receipt cost, else the reserve) once to its arm and task in the ratio and its bootstrap, and never an accepted change; in the
   worst case a reference refusal costs nothing, so it cannot lower the bound. A refusal is never an accepted change, whatever its
-  row's other flags; archives are grouped by cell and attempt number, and a duplicate or missing attempt, a receipt
+  row's other flags, and the guard reads a row labelled refused as invalid before it fixes reach or reads quality; archives are grouped by cell and attempt number, and a duplicate or missing attempt, a receipt
   with no row, or an archive the guard cannot read or reconcile with its file name and the ledger (even an empty one) is listed
   in `accounting_unresolved`, and a `PROVEN` verdict then answers `ACCOUNTING-UNRESOLVED`, never `PAYS`. Verdicts are unchanged: a refused attempt stays
   out of the grades. `missing_data_guard.refused` now counts the refused attempts the ratio includes.

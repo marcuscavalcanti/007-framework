@@ -2481,6 +2481,8 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
     bounds below 1), PROVEN-NOT-ECONOMIC, DOES-NOT-PAY (KILL), else the verdict. The instrument checks (serial re-grade, A/A) are
     not part of it."""
     seed, floor, frozen = config["seed"], (config.get("compare") or {}).get("critical_floor"), reach is not None
+    # a refusal is never a grade: a row the controller labelled refused reads invalid before reach or any reading is taken
+    every = [{**r, "valid": False, "accepted": False} if r.get("failure_class") == REFUSED else r for r in every]
     rows = [r for r in every if r.get("valid") is True]
     if reach is None:  # the run's own reach, fixed from the valid cells, so imputed cells cannot move the denominator
         reach = {}
