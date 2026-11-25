@@ -566,6 +566,28 @@ class MissingDataGuard(unittest.TestCase):
         self.assertEqual((g["refused"], g["missing_data"]["imputed_in_L2"]), (1, {"refused": 1}))
         self.assertAlmostEqual(g["cost_ratio"], (59 + 7.0) / 59 / 4.0)
 
+    def test_unresolved_archives_withhold_pays_and_a_refusal_is_never_an_acceptance(self):
+        """Review r2 N6: an unreadable archived row, or one whose identity is not its file name's, dropped out silently; a live
+        row flagged both refused and accepted counted as an accepted change."""
+        rows, store = self.cells(), self.root / "refused"
+        store.mkdir()
+        (store / "T0-r01-lo.1.json").write_text("{torn")
+        (store / "T0-r01-lo.1.runner.json").write_text(json.dumps({"cost_usd": 7.0}))
+        g = self.guard(rows)
+        self.assertEqual((g["verdict"], g["answer"], g["accounting_unresolved"]), ("PROVEN", "ACCOUNTING-UNRESOLVED", ["refused/T0-r01-lo.1.json"]))
+        (store / "T0-r01-lo.1.json").write_text(json.dumps({"task": "T1", "replicate": 1, "arm": "lo"}))  # another cell's row
+        self.assertEqual(self.guard(rows)["answer"], "ACCOUNTING-UNRESOLVED")
+        shutil.rmtree(store)
+        # the ledger records a requeued refusal that no archive holds
+        (self.root / "dispatch.jsonl").write_text(json.dumps({"cell": "T5-r01-lo", "dispatched_at": "2026-11-25T00:00:00+00:00"}) + "\n"
+                                                  + json.dumps({"cell": "T5-r01-lo", "finished_at": "2026-11-25T00:01:00+00:00", "refused": True,
+                                                                "requeued": True, "cost_usd": 7.0}) + "\n")
+        g = self.guard(rows)
+        self.assertEqual((g["answer"], g["accounting_unresolved"]), ("ACCOUNTING-UNRESOLVED", ["refused/T5-r01-lo"]))
+        (self.root / "dispatch.jsonl").unlink()
+        both = [{**r, "failure_class": "provider-rate-limit"} if (r["task"], r["replicate"], r["arm"]) == ("T0", 1, "hi") else r for r in rows]
+        self.assertAlmostEqual(lab._cost_ratio(both, self.root, "lo", "hi", 10.0), (60 / 60) / (240 / 59))
+
     def test_a_kill_does_not_pay(self):
         g = self.guard(self.cells(low_fail={(t, r) for t in self.tasks for r in (1, 2)}))
         self.assertEqual((g["verdict"], g["answer"]), ("KILL", "DOES-NOT-PAY"))

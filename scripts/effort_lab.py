@@ -2334,8 +2334,8 @@ def _cost_ratio(cells, results, low, ref, reserve, worst=False):
 
     def per(arm):
         mine = [r for r in cells if r["arm"] == arm]
-        accepted = sum(bool(r.get("accepted")) if r.get("valid") is True else worst and arm == ref and r.get("failure_class") != REFUSED
-                       for r in mine)
+        accepted = sum(False if r.get("failure_class") == REFUSED else bool(r.get("accepted")) if r.get("valid") is True else worst and arm == ref
+                       for r in mine)  # a refusal is never an accepted change, whatever else its row says
         return sum(map(cost, mine)) / accepted if accepted else math.inf
     a, b = per(low), per(ref)
     return a / b if math.isfinite(a) and math.isfinite(b) and b > 0 else math.inf
@@ -2344,20 +2344,44 @@ def _cost_ratio(cells, results, low, ref, reserve, worst=False):
 REFUSED = "provider-rate-limit"  # the failure class of an attempt the provider refused (refused())
 
 
-def refused_attempts(results, arms):
-    """Refused attempts set aside under refused/ (`_set_aside`, `run --requeue-refused`), as rows of `arms`: each one once, by its
-    archived row, its cost read from that row or its archived receipt. Its cell ran again, so the archive is the only trace."""
-    found = []
+def _archive(results, arms):
+    """(rows of `arms`, unresolved names): each refused attempt set aside under refused/ (`_set_aside`) once, by its archived row,
+    its cost read from that row or its archived receipt. A row that cannot be read, or whose task, arm and replicate are not its
+    file name's cell, is unresolved, whatever arm it may be; so is a cell whose archived attempts do not number the requeued
+    refusals the ledger records for it, and every archive when the ledger exists but cannot be read. Without a ledger (a
+    directory not written by `run`) the archive alone is read."""
+    found, unresolved, counts = [], [], {}
     for path in sorted((results / "refused").glob("*.json")) if (results / "refused").is_dir() else ():
         match = re.fullmatch(r"(.+)\.([0-9]+)\.json", path.name)
+        if not match or path.name.endswith(tuple(s for s in replay_eval.CELL_ARTIFACT_SUFFIXES if s != ".json")):
+            continue
         try:
-            row = json.loads(path.read_text()) if match and path.is_file() and not path.is_symlink() else None
+            row = json.loads(path.read_text()) if path.is_file() and not path.is_symlink() else None
         except (OSError, ValueError):
             row = None
-        if isinstance(row, dict) and row.get("arm") in arms and isinstance(row.get("task"), str):
+        own = isinstance(row, dict) and isinstance(row.get("task"), str) and isinstance(row.get("arm"), str) and type(row.get("replicate")) is int
+        if not own or replay_eval.cell_id({"id": row["task"]}, row["arm"], row["replicate"]) != match[1]:
+            unresolved.append(f"refused/{path.name}")
+            continue
+        counts[match[1]] = counts.get(match[1], 0) + 1
+        if row["arm"] in arms:
             found.append({**row, "cell": f"refused/{match[1]}.{match[2]}", "attempt_of": match[1], "valid": False, "accepted": False,
                           "failure_class": REFUSED})
-    return found
+    history = _ledger(results) if (results / "dispatch.jsonl").exists() else []
+    if history is None and counts:
+        unresolved.append("dispatch.jsonl")
+    elif history:
+        requeued = {}
+        for row in history:
+            if "finished_at" in row and row.get("refused") is True and row.get("requeued") is True:
+                requeued[row["cell"]] = requeued.get(row["cell"], 0) + 1
+        unresolved += [f"refused/{cell}" for cell in sorted(set(requeued) | set(counts)) if requeued.get(cell, 0) != counts.get(cell, 0)]
+    return found, unresolved
+
+
+def refused_attempts(results, arms):
+    """The archived refused attempts of `arms` that _archive resolves."""
+    return _archive(results, arms)[0]
 
 
 def _ratio_interval(cells, results, low, ref, reserve, seed, worst):
@@ -2418,13 +2442,17 @@ def missing_data_guard(config, results, task_dir, every, planned, low, ref, marg
             base = set(json.loads((task_dir / task / "baseline.json").read_text()))
             reach[task] = [k for k in hidden if k not in base and any(c["acceptance_outcomes"].get(k) == "pass" for c in rows if c["task"] == task)]
     verdict, readings, guard = guard_decision(every, planned, task_dir, low, ref, margin, seed, reach, floor)
-    charged = every + refused_attempts(results, (low, ref))  # what was paid, refusals included (decision R2-1, 1.11.0)
+    archived, unresolved = _archive(results, (low, ref))
+    charged = every + archived  # what was paid, refusals included (decision R2-1, 1.11.0)
     ratio, ratio_worst = (_cost_ratio(charged, results, low, ref, reserve, w) for w in (False, True))
     ci, ci_worst = (_ratio_interval(charged, results, low, ref, reserve, seed, w) for w in (False, True))
-    answer = ("PAYS" if max(ci[1], ci_worst[1]) < 1 else "PROVEN-NOT-ECONOMIC") if verdict == "PROVEN" else "DOES-NOT-PAY" if verdict == "KILL" else verdict
+    # an archive the guard cannot reconcile leaves the charged cost unknown: no PAYS, and no NOT-ECONOMIC either
+    answer = (("ACCOUNTING-UNRESOLVED" if unresolved else "PAYS" if max(ci[1], ci_worst[1]) < 1 else "PROVEN-NOT-ECONOMIC") if verdict == "PROVEN"
+              else "DOES-NOT-PAY" if verdict == "KILL" else verdict)
     return {"verdict": verdict, "answer": answer, "margin": margin, "critical_floor": floor, "reserve_usd": reserve, "readings": readings,
             "missing_data": guard, "cost_ratio": ratio, "cost_ratio_ci95": ci, "cost_ratio_worst": ratio_worst, "cost_ratio_worst_ci95": ci_worst,
-            "reach_frozen": frozen, "refused": sum(r.get("failure_class") == REFUSED and r["arm"] in (low, ref) for r in charged)}
+            "reach_frozen": frozen, "refused": sum(r.get("failure_class") == REFUSED and r["arm"] in (low, ref) for r in charged),
+            "accounting_unresolved": unresolved}
 
 
 def _reach_tests(rows, task_dir):

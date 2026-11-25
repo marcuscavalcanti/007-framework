@@ -183,7 +183,9 @@ schemas, and the dashboard snapshot.
   the cost per accepted change, and one set aside under `refused/` by `--requeue-refused` left the cell directory altogether, so
   an arm the provider refused more often looked cheaper. Every refused attempt, in place or archived, now adds its cost (its
   receipt cost, else the reserve) once to its arm and task in the ratio and its bootstrap, and never an accepted change; in the
-  worst case a reference refusal costs nothing, so it cannot lower the bound. Verdicts are unchanged: a refused attempt stays
+  worst case a reference refusal costs nothing, so it cannot lower the bound. A refusal is never an accepted change, whatever its
+  row's other flags; an archive the guard cannot read or reconcile with its file name and the ledger is listed in
+  `accounting_unresolved`, and a `PROVEN` verdict then answers `ACCOUNTING-UNRESOLVED`, never `PAYS`. Verdicts are unchanged: a refused attempt stays
   out of the grades. `missing_data_guard.refused` now counts the refused attempts the ratio includes.
 - **A Claude usage limit now stops dispatch as a failed quota gate does.** A usage-limit refusal pauses the run with
   `quota-hold`, not `rate-limit`, so `--rate-limit-wait-s` no longer retries a five-hour or seven-day window every 10 minutes.
