@@ -394,10 +394,17 @@ Every threshold is a gate the lab already applies or a recorded rule. The reason
 
 From pilot cells, the inputs are read as follows:
 
+- The pilot must be of this set: a sealed pilot whose manifest names another set is refused, and so is any cell, valid or not,
+  of a task outside the set. `pilot.binding` says whether it was sealed; an unsealed pilot is matched by task ids only.
+- "Attempted" is every task with a cell of either compared arm, invalid and refused cells included, as the cost ratio's task
+  bootstrap counts them. `pilot` gives the denominators: attempted tasks, valid cells per role and valid cells without a cost.
 - The reach share and SD are computed as `feasibility` computes them.
-- The sufficient share is computed as `sufficiency` computes it, over any valid cell.
-- The saving is 1 − (median cost per valid cell at the candidate ÷ median at the reference), as PREREG-F computed it.
-- The accepted-task shares are the distinct tasks with an accepted cell in each arm, over the tasks attempted. They are
+- The sufficient share is computed as `sufficiency` computes it, over any valid cell, out of the attempted tasks.
+- The saving is 1 − (median cost per valid cell at the candidate ÷ median at the reference), as PREREG-F computed it. A valid
+  cell with no measured cost leaves the saving missing, instead of being left out of the median.
+- The accepted-task shares are the distinct tasks with an accepted cell in each arm, over the tasks attempted. An arm with no
+  attempt leaves them missing (`UNKNOWN`), never a measured zero.
+- A task file the pilot needs that cannot be read is a named input error (exit 2), not a traceback. They are
   keyed by role, `{"candidate": share, "reference": share}`, in the output and in `--inputs`; both roles are required, so
   one favourable arm or a misspelled arm name is refused instead of read as the whole input.
 - A `sensitivity_v2` given in `--inputs` must carry one of the decisions `sensitivity-v2` gives (`passes`, `fails`,

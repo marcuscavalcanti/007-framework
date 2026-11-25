@@ -2089,6 +2089,51 @@ class Viability(unittest.TestCase):
             with self.assertRaises(ValueError):
                 lab.viability(None, root)
 
+    def pilot(self, n=10):
+        rows = []
+        for i in range(n):
+            for rep in (1, 2):
+                rows.append({**cell(f"T{i}", "medium", rep, {"a", "b", "c", "d"}), "cell": f"T{i}-r0{rep}-medium", "accepted": True, "cost_usd": 1.0})
+                rows.append({**cell(f"T{i}", "xhigh", rep, {"a", "b", "c", "d"}), "cell": f"T{i}-r0{rep}-xhigh", "accepted": True, "cost_usd": 4.0})
+        return rows
+
+    def test_the_pilot_is_read_with_its_whole_history_and_its_denominators(self):
+        """Review #2: shares were taken over tasks with a valid cell only; an untried arm read a measured zero; invalid cells of
+        foreign tasks escaped the set check; missing costs left the median silently; missing task files escaped as a traceback."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.write_set(root, 10, {"immediate": {"mutants": 40, "rejected": 30}, "load_sensitive": []})
+            def run(rows):
+                with mock.patch.object(lab, "load_cells", return_value=rows):
+                    return lab.viability(root / "set.json", root)
+            # T9 was attempted, but every attempt was invalid: it is in the denominator, with no accepted change
+            rows = [r if r["task"] != "T9" else {**r, "valid": False, "accepted": False, "failure_class": "agent-exit"} for r in self.pilot()]
+            out = run(rows)
+            self.assertEqual(out["inputs"]["accepted_task_share"], {"candidate": .9, "reference": .9})
+            self.assertEqual(out["pilot"]["attempted_tasks"], 10)
+            # an arm never tried is unobserved, not a measured zero: UNKNOWN, never pays-unreachable
+            out = run([r for r in self.pilot() if r["arm"] == "medium"])
+            self.assertNotIn("accepted_task_share", out["inputs"])
+            self.assertNotIn("pays-unreachable", self.reasons(out))
+            # a valid cell without a cost: no saving is computed from the rest, and the count is shown
+            out = run([{**r, "cost_usd": "unmeasured"} if r["cell"] == "T0-r01-medium" else r for r in self.pilot()])
+            self.assertNotIn("saving", out["inputs"])
+            self.assertEqual(out["pilot"]["costs_missing"], {"candidate": 1, "reference": 0})
+            with self.assertRaisesRegex(ValueError, "outside this set"):  # an invalid cell of a foreign task, too
+                run(self.pilot() + [{**self.pilot()[0], "task": "OTHER", "valid": False}])
+            (root / "tasks" / "T0" / "baseline.json").unlink()
+            with self.assertRaisesRegex(ValueError, "task files"):
+                run(self.pilot())
+
+    def test_a_pilot_sealed_with_another_set_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            self.write_set(root, 10, {"immediate": {"mutants": 40, "rejected": 30}, "load_sensitive": []})
+            (root / "run-manifest.json").write_text(json.dumps({"schema": "007-framework/lab-run-manifest/v1", "set_sha256": "0" * 64}))
+            (root / "dispatch.jsonl").write_text("")
+            with mock.patch.object(lab, "load_cells", return_value=self.pilot()), self.assertRaisesRegex(ValueError, "different set"):
+                lab.viability(root / "set.json", root)
+
     def test_a_task_id_that_leaves_the_set_is_refused_before_any_read(self):
         # review #13: a set's task ids were joined into paths unchecked
         with tempfile.TemporaryDirectory() as d:

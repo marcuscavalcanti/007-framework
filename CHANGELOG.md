@@ -28,6 +28,9 @@ schemas, and the dashboard snapshot.
   4.3% of cells, which also makes `PAYS` unreachable and leaves the study underpowered. Study F's go-json numbers read
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
   computation with it, and their output is unchanged. Both refuse a task id that is not a plain name before reading task files.
+  From a pilot it refuses one sealed with another set and any cell of a foreign task, counts every attempted task (invalid
+  and refused included) in the shares' denominator, reads an untried arm or a valid cell without a cost as missing rather than
+  as zero or as absent from the median, gives the denominators in `pilot`, and names a missing task file as an input error.
   The accepted-task shares are keyed by role (`candidate`,
   `reference`) and both are required; a `sensitivity_v2` decision must be one `sensitivity-v2` gives; and a saving of 0 or
   less reads `underpowered` at once, since it fixes the break-even margin at 0.

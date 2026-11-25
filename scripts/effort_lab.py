@@ -2119,7 +2119,7 @@ def viability_verdict(inputs):
 def viability(config_path=None, results=None, stated=None):
     """Collect the inputs from the set's directory (task count, sensitivity.json, sensitivity-v2.json), pilot cells of this
     set (`results`) and recorded numbers (`stated`, which win), then judge them. Reads files only: no model, no test run."""
-    found, sources = {}, {}
+    found, sources, pilot = {}, {}, None
     _viability_check(stated or {})
 
     def put(key, value, source):
@@ -2142,28 +2142,41 @@ def viability(config_path=None, results=None, stated=None):
             put("sensitivity_v2", {k: summary[k] for k in ("decision", "sensitivity", "interval")}, f"sensitivity-v2.json at floor {VIABILITY['min_sensitivity']:g}")
         if results is not None:
             low, ref = config["compare"]["candidate"], config["compare"]["reference"]
-            rows = [r for r in load_cells(results) if r["valid"] is True]
-            if {r["task"] for r in rows} - ids:
+            binding = sealed_state(config, results)["state"]  # a pilot sealed with another set is refused, not matched by task ids
+            every = load_cells(results)
+            if {r.get("task") for r in every} - ids:
                 raise ValueError("--results holds cells of tasks outside this set; give numbers from other runs in --inputs")
-            attempted = {r["task"] for r in rows}
-            if attempted:
-                observed, reach = _pilot_reach(config_path, rows, low, ref)
-                put("reach_share", reach, "results (as feasibility)")
-                put("sd", observed["sd"] or None, "results (as feasibility)")  # a pilot whose tasks all agree has no spread to plan with
-                put("sufficient_share", sum(t in attempted and s is not None and s >= VIABILITY["sufficiency_threshold"]
-                                            for t, s in _sufficiency_shares(config, set_dir, rows)) / len(attempted), "results (as sufficiency)")
-                refs = [r for r in rows if r["arm"] == ref]
-                put("reference_acceptance", [sum(bool(r.get("accepted")) for r in refs), len(refs)] if refs else None, "results")
-                costs = {arm: [c for r in rows if r["arm"] == arm for c in (cost_of(results, r["cell"], r),) if c is not None] for arm in (low, ref)}
-                if costs[low] and costs[ref] and statistics.median(costs[ref]) > 0:
-                    put("saving", 1 - statistics.median(costs[low]) / statistics.median(costs[ref]), "results (median cost per valid cell, as PREREG-F)")
+            rows = [r for r in every if r["valid"] is True]
+            # attempted: every task with a cell of either arm, invalid or refused included, as the cost ratio's bootstrap counts them
+            attempted = {r["task"] for r in every if r.get("arm") in (low, ref)}
+            tried = {arm: {r["task"] for r in every if r.get("arm") == arm} for arm in (low, ref)}
+            costs = {arm: [cost_of(results, r["cell"], r) for r in rows if r["arm"] == arm] for arm in (low, ref)}
+            pilot = {"binding": binding, "attempted_tasks": len(attempted), "valid_cells": {role: sum(r["arm"] == arm for r in rows)
+                     for role, arm in zip(VIABILITY_ROLES, (low, ref))},
+                     "costs_missing": {role: sum(c is None for c in costs[arm]) for role, arm in zip(VIABILITY_ROLES, (low, ref))}}
+            try:
+                if rows:
+                    observed, reach = _pilot_reach(config_path, rows, low, ref)
+                    put("reach_share", reach, "results (as feasibility)")
+                    put("sd", observed["sd"] or None, "results (as feasibility)")  # a pilot whose tasks all agree has no spread to plan with
+                if attempted:
+                    put("sufficient_share", sum(t in attempted and s is not None and s >= VIABILITY["sufficiency_threshold"]
+                                                for t, s in _sufficiency_shares(config, set_dir, rows)) / len(attempted), "results (as sufficiency)")
+            except OSError as error:
+                raise ValueError(f"cannot read the set's task files for the pilot: {error.filename or error}") from None
+            refs = [r for r in rows if r["arm"] == ref]
+            put("reference_acceptance", [sum(bool(r.get("accepted")) for r in refs), len(refs)] if refs else None, "results")
+            # a cell with no measured cost is not left out of the median: no saving is read until every valid cell has one
+            if all(costs[arm] and None not in costs[arm] for arm in (low, ref)) and statistics.median(costs[ref]) > 0:
+                put("saving", 1 - statistics.median(costs[low]) / statistics.median(costs[ref]), "results (median cost per valid cell, as PREREG-F)")
+            if attempted and all(tried.values()):  # an arm with no attempt is unobserved, never a measured zero
                 put("accepted_task_share", {role: len({r["task"] for r in rows if r["arm"] == arm and r.get("accepted")}) / len(attempted)
-                                            for role, arm in zip(VIABILITY_ROLES, (low, ref))}, "results")
+                                            for role, arm in zip(VIABILITY_ROLES, (low, ref))}, "results (over every attempted task)")
     elif results is not None:
         raise ValueError("--results needs --set: the cells are read against the set's tasks")
     for key, value in (stated or {}).items():
         put(key, value, "stated")
-    return {**viability_verdict(found), "inputs": found, "sources": sources}
+    return {**viability_verdict(found), "inputs": found, "sources": sources, **({"pilot": pilot} if config_path is not None and results is not None else {})}
 
 
 def viability_text(result):
@@ -2174,6 +2187,8 @@ def viability_text(result):
     lines += ["Inputs:"] + [f"  {key} = {json.dumps(value)} ({result['sources'][key]})" for key, value in result["inputs"].items()]
     lines += ["Derived:"] + [f"  {key} = {json.dumps(value)}" for key, value in result["derived"].items()]
     lines += [f"Note: {note}" for note in result["notes"]]
+    if result.get("pilot"):
+        lines.append("Pilot: " + json.dumps(result["pilot"], sort_keys=True))
     return "\n".join(lines)
 
 
