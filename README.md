@@ -26,8 +26,10 @@ executor, with models and efforts as requested from the CLI; what the provider s
 - At 3- and 10-point margins the quality verdicts are **NOT-PROVEN**. One Claude study (Study F) reads **PAYS** at a 20-point
   margin chosen after an exploratory reading, with whole-change acceptance 56/82 against 61/81.
 - A paired study found no detectable effect of invoking the 007 skill on acceptance (one run per arm and task, no A/A).
-- Runs before 1.11.0, Study F included, were not blind: the agent could read its arm's label in its workspace path. No blind
-  replication has been run.
+- Runs before 1.11.0, Study F included, were not blind: the agent could read its arm's label in its workspace path. Since
+  1.11.0 the controller hides the names it generates (workspace, receipt, stream and grading paths carry a token); other
+  channels remain, such as the agent command, environment, snapshot, timing and readable results
+  ([limits](docs/lab.md#blind-arms-what-the-agent-sees)). No blind replication has been run.
 - **007's incremental value over a well-informed user of the same native CLI is not demonstrated.**
 
 [Evidence and its limits](#evidence-and-current-thesis)

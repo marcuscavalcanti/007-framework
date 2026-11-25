@@ -90,7 +90,9 @@ not on F's cells or on Claude attempts (`TESE-SCORECARD` erratum of 2026-11-14).
 
 ## Blind arms: what the agent sees
 
-Since 1.11.0, no path, argument or file name a cell's agent sees names its arm. Before its first dispatch, `run` seals a random
+Since 1.11.0 the controller hides the names it generates: the workspace, the receipt and stream paths in the agent's arguments,
+and the grading directory carry a token, never the arm. That is the whole promise; the channels it leaves are listed below.
+Before its first dispatch, `run` seals a random
 salt, `blind_salt` (32 hex digits), in `run-manifest.json`. A cell's token is sixteen digits of SHA-256 over the salt and the cell
 id (`replay_eval.blind_token`). The agent works in `007-<token>-<random>` under the temporary directory. Its runner receipt and
 stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `--out/.blind/`, and the grader runs in
@@ -116,9 +118,25 @@ What still differs between arms is the treatment itself:
 - the doctrine appended to the prompt, when the arms' doctrines differ;
 - whatever the CLI does differently at another model or effort, such as speed or output length.
 
-The token hides the arm from the agent's own paths. It does not hide it from anyone who reads `--out`, where the manifest's salt and
-the cell files map tokens back to arms. An agent that can read `--out` from outside its workspace can read them too: deny that read,
-as with a host copy of the repository (see [Limits](#limits)).
+The token hides the arm from the names the controller generates. It does not hide it from anyone who reads `--out`, where the
+manifest's salt and the cell files map tokens back to arms. An agent that can read `--out` from outside its workspace can read them
+too: deny that read, as with a host copy of the repository (see [Limits](#limits)).
+
+Other channels the token does not close, recorded as limits rather than fixed:
+
+- what the set and the caller put in the agent command and its paths: the argv beyond the placeholders, `--out` and `TMPDIR` and
+  their parent directories, whose names the operator chooses;
+- the environment the agent inherits, and the CLI's own configuration;
+- the snapshot's contents and its Git metadata in the workspace;
+- treatment-dependent timing and output, which the agent can observe of itself;
+- the read-isolation settings, which name the protected paths, the running task's hidden sources included;
+- readable results: the salt, the dispatch order, labelled receipts, retained streams, reports and stage-2 task names;
+- readable session logs, sibling workspaces and installed copies that are not protected;
+- a requeued cell's retry, which reuses its token.
+
+The leakage tests strip parent paths, inherited environment values and `.git` before they look for arm names, so they do not cover
+those channels, and whether a CLI enforces the deny rules is not verified here. Stronger blinding needs neutral paths, a controlled
+environment and host-enforced separation.
 
 **Runs before 1.11.0, Study F included, exposed the arm label to the agent.** The workspace path, which is the agent's working
 directory, carried the arm name (`007-<task>-<arm>-r01-<random>`). The runner receipt path in the agent command's arguments

@@ -118,7 +118,7 @@ schemas, and the dashboard snapshot.
   `007-<task>-<arm>-r01-<random>`, and the runner receipt path in its arguments was `<task>-r01-<arm>.runner.json`. A stage-2
   task id also carried its stage-1 arm. This was a visible difference between the arms of the main comparison, and its effect
   on any verdict was not measured. Since 1.11.0, `run` seals a random `blind_salt` in `run-manifest.json`. Each cell gets a token,
-  sixteen digits of a salted SHA-256 of its id, and its agent sees only that token:
+  sixteen digits of a salted SHA-256 of its id, and the names the controller generates carry only that token:
   - the workspace is `007-<token>-<random>`;
   - the receipt and stream copy are written under `--out/.blind/` and given the cell's own names once the agent exits, relative to
     directories opened before the agent ran, never through a link and never over an existing file; a file at the cell's own
@@ -133,7 +133,10 @@ schemas, and the dashboard snapshot.
   `manifest-mismatch`, `framework_sha256`, as checked once with the real 1.10.1 tree); its report reads as before apart from
   the clustered critical value. Each cell records `stream_copy`, its stream's name beside it, since the receipt, kept byte for
   byte, names the token's. The
-  model and effort flags, and any doctrine that differs between arms, still reach the agent: they are the treatment. See
+  model and effort flags, and any doctrine that differs between arms, still reach the agent: they are the treatment. The promise
+  is that the controller hides the names it generates, no more: the agent command and its parent paths, the environment, the
+  snapshot and Git metadata, timing, the isolation settings, readable results and session logs, and a retry's reused token are
+  listed as limits. See
   [the lab guide](docs/lab.md#blind-arms-what-the-agent-sees).
 - An agent receipt left in `--out/.blind/` by a controller that died is now counted. `report` lists it in
   `orphan_blind_files`, named by its cell when the salt and the ledger or plan trace it, and counts that cell as attempted
