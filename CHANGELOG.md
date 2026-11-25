@@ -29,7 +29,7 @@ schemas, and the dashboard snapshot.
   `VIABLE`. Exit codes: 0 `VIABLE`, 1 `NOT-VIABLE`, 3 `UNKNOWN`. `feasibility` and `sufficiency` now share their
   computation with it, and their output is unchanged. Both refuse a task id that is not a plain name, and a `tasks/` root, task directory or
   `hidden.json`/`baseline.json` that resolves outside the set, before reading task files.
-  From a pilot it refuses one sealed with another set and any cell or readable archive of a foreign task, counts as attempted
+  From a pilot it refuses one sealed with another set and any live cell or readable compared-arm archive of a foreign task, counts as attempted
   every task with a cell result, a readable archived refusal or a ledger dispatch of a compared arm (not one that left only an
   orphan receipt) in the accepted-task and sufficient shares' denominator, reads only the compared arms' cells (an A/A copy
   supplies no sufficiency), never reads `VIABLE` from an `unbound` pilot, reads an untried arm or a valid cell without a cost as missing rather than
@@ -68,7 +68,8 @@ schemas, and the dashboard snapshot.
 
   The 17 and 44 thresholds are where an honest oracle at the verdict's own acceptance gates (25% and 90%) gives one outcome less
   than 1% of the time, taking graded cells as independent. `lab_accept`'s exit contract is read only for tasks that declare it or
-  run its exact invocation behind a Python interpreter; a task with its own grader command, an unknown declared contract or a task the set does not list
+  run its exact invocation behind this Python or a program named `python`, `python3` or `python3.N` (a name heuristic,
+  not a verified interpreter identity); a task with its own grader command, an unknown declared contract or a task the set does not list
   (counted in `contracts`) errs or times out only as the controller recorded, and any other exit rejects. `status` is read only: it exits 3 when it cannot read a stable snapshot of the
   results (two equal observations of the covered cell artifacts and `.blind/` entries around the read, three tries; a path that
   is no directory is no reading), else 1 while an alarm is open. `report`
@@ -193,8 +194,8 @@ schemas, and the dashboard snapshot.
   worst case a reference refusal costs nothing, so it cannot lower the bound. A refusal is never an accepted change, whatever its
   row's other flags, and the guard reads a row labelled refused as invalid before it fixes reach or reads quality; archives are grouped by cell and attempt number, and a duplicate or missing attempt, an archived
   cost that is not the ledger's charge for that requeue, a receipt with no row, or an archive the guard cannot read or reconcile with its file name and the ledger (even an empty one) is listed
-  in `accounting_unresolved`, and a `PROVEN` verdict then answers `ACCOUNTING-UNRESOLVED`, never `PAYS`. Verdicts are unchanged: a refused attempt stays
-  out of the grades. `missing_data_guard.refused` now counts the refused attempts the ratio includes.
+  in `accounting_unresolved`, and a `PROVEN` verdict then answers `ACCOUNTING-UNRESOLVED`, never `PAYS`. For refusals recorded consistently (invalid), the guard's verdicts are
+  unchanged; a row labelled refused but recorded valid now reads invalid, so it no longer grades, which can change a guard verdict. `missing_data_guard.refused` now counts the refused attempts the ratio includes.
 - **A Claude usage limit now stops dispatch as a failed quota gate does.** A usage-limit refusal pauses the run with
   `quota-hold`, not `rate-limit`, so `--rate-limit-wait-s` no longer retries a five-hour or seven-day window every 10 minutes.
   The ledger row records `usage_limit` and `resets_at`, `run` returns `resets_at`, and while that reset lies ahead (and planned

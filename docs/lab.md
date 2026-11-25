@@ -269,8 +269,8 @@ Each cell falls in one class. Classes are read from the grader's exits and never
 
 These exit readings are `lab_accept`'s contract. They apply to tasks that declare `acceptance_exit_contract: "lab-accept-v1"`,
 or whose only acceptance command is `lab_accept`'s exact invocation as `mine` writes it: `-I -B .007-accept/lab_accept.py
-.007-accept/lab.json .007-accept/hidden.json .007-accept/baseline.json` behind the Python interpreter (this one, or a program
-named `python`, `python3` or `python3.N`). A command that merely mentions the file, or another program with these arguments,
+.007-accept/lab.json .007-accept/hidden.json .007-accept/baseline.json` behind this Python or a program named `python`, `python3`
+or `python3.N`. That is a name heuristic, not a verified interpreter identity: a wrapper with such a name passes. A command that merely mentions the file, or another program with these arguments,
 does not count unless the task declares the contract. A declared contract 007 does not know, and a cell of a task the set does not list, read
 `unknown`; `contracts` counts the cells of each. A task with its own grader command, or an unknown contract, reads differently: it is
 an `oracle-error` or `timeout` only when the controller recorded the grader failing or timing out (`acceptance-harness-error`,
