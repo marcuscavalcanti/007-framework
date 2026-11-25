@@ -108,8 +108,8 @@ stream copy are written as `<token>.runner.json` and `<token>.stream.jsonl` in `
 (`<task>-r01-<arm>.runner.json`). It finds them relative to directories it opened before the agent started, never through a link,
 and never over a file already there: a file at a cell's own name that this attempt did not create, a staged file that is a link
 or not a regular file, or a `.blind` that is not a directory of its own fails the cell (a link is removed, never its target), and
-only the stream this attempt promoted is scanned for contamination. The controller opens each staged file without following a link and without waiting (a FIFO or device fails the
-regular-file check at once) before publishing it, publishes it without replacing anything, checks that the published name is the file it opened (a mismatch
+only the stream this attempt promoted is scanned for contamination. The controller opens each staged file without following a link and non-blocking (opening a FIFO does not wait for a
+writer), rejects an opened descriptor that is not a regular file, and only then publishes it, publishes it without replacing anything, checks that the published name is the file it opened (a mismatch
 fails the cell). The receipt is read once from its opened descriptor into a buffer, and that buffer is both parsed and hashed;
 the stream is scanned from its own verified descriptor. Each name is recorded as created right after its link and as verified right after its identity check, so any failure,
 opening a staged file and an identity mismatch included, fails the cell and says which names were created and which were
