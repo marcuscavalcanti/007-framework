@@ -548,15 +548,16 @@ def _replace_text(path, text):
     """Write `text` to a temporary file beside `path` and rename it over `path`; on any failure the old file stands, and the
     temporary one is removed."""
     with tempfile.NamedTemporaryFile("w", dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
-        try:
+        name = handle.name
+    try:
+        with open(name, "w") as handle:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        except BaseException:
-            handle.close()
-            os.unlink(handle.name)
-            raise
-    os.replace(handle.name, path)
+        os.replace(name, path)
+    finally:
+        if os.path.lexists(name):  # anything that stopped before the rename: the old file stands, the temporary one goes
+            os.unlink(name)
 
 
 def write_summary(output_dir, replay_set, config, replicates, rows):
@@ -953,9 +954,9 @@ def scan_stream(stream, protected, workspace):
     """Contamination check of one retained stream: every string a tool call carries (a path, a pattern, a shell command, written
     content) is matched against each protected path, as text and, for each path-like token, resolved against the workspace (`..`,
     `~`). Case is ignored. It sees only what the stream logs: a path built at run time (a variable, an encoded or globbed name, a
-    script that computes it) or a read by a program the agent started is invisible to it. `clean` needs every line read: a stream
-    with no readable line is `unscanned` (`empty-stream`), and one with an unreadable line (torn, too long, too deep) and no hit is
-    `incomplete`."""
+    script that computes it) or a read by a program the agent started is invisible to it. `clean` needs every line read as an
+    event (an object with a `type`): a stream with no such line is `unscanned` (`empty-stream`), and one with another line (torn,
+    too long, too deep, or no event) and no hit is `incomplete`."""
     if stream is None or not hasattr(stream, "readline") and not Path(stream).is_file():
         return {"status": "unscanned", "reason": "no-retained-stream"}
     # as text: not inside a longer path (`/a/x/out` is not `/x/out`), and ending at a separator, `/` or the end
@@ -971,6 +972,8 @@ def scan_stream(stream, protected, workspace):
                 if not whole:
                     raise ValueError("line too long")
                 row = json.loads(line)
+                if not isinstance(row, dict) or not isinstance(row.get("type"), str):
+                    raise ValueError("not an event")  # null, a list, a bare value or an object with no event type
                 found = []
                 for tool, call_id, arguments in _tool_calls(row):
                     key = call_id if isinstance(call_id, (str, int, float, bool)) else json.dumps([tool, call_id, arguments], sort_keys=True, default=str)

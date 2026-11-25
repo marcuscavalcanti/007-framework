@@ -125,6 +125,12 @@ class StreamScan(unittest.TestCase):
             long = self.scan(self.claude("Read", file_path="ok"), self.claude("Bash", command="x" * 2000), self.claude("Read", file_path="z"))
         self.assertEqual((long["status"], long["tool_calls"], long["unparsed_lines"]), ("incomplete", 2, 1))
 
+    def test_lines_that_are_no_event_are_never_clean(self):
+        # review r2 N12: `null`, a list or an object with no event type parsed and counted toward `clean`
+        self.assertEqual(self.scan(raw=b'null\n[]\n{}\n"x"\n')["status"], "unscanned")
+        mixed = self.scan(self.claude("Read", file_path="ok"), raw=b"null\n")
+        self.assertEqual((mixed["status"], mixed["unparsed_lines"]), ("incomplete", 1))
+
     def test_no_retained_stream_is_unscanned(self):
         self.assertEqual(replay_eval.scan_stream(None, self.protected, str(self.work))["status"], "unscanned")
         self.assertEqual(replay_eval.scan_stream(self.root / "absent.jsonl", self.protected, str(self.work))["status"], "unscanned")
@@ -480,6 +486,11 @@ class LabIsolation(unittest.TestCase):
         rows = lab.load_cells(results)
         self.assertEqual(lab.blind_orphans(config, results, rows)[0]["cell"], None)  # without the plan: not traced, kept explicit
         self.assertEqual(lab.blind_orphans(config, results, rows, planned_replicates=4)[0]["cell"], lost)
+        # review r2 N12: a declared plan is the plan, with no replicate guessed past it
+        beyond = lab.replay_eval.cell_id(config["tasks"][0], "medium", 2)
+        (results / ".blind" / (replay_eval.blind_token(salt, lost) + ".runner.json")).unlink()
+        (results / ".blind" / (replay_eval.blind_token(salt, beyond) + ".runner.json")).write_text("{}")
+        self.assertEqual(lab.blind_orphans(config, results, rows, planned_replicates=1)[0]["cell"], None)
 
     def test_a_blind_file_alone_stops_a_resume_even_without_its_dispatch(self):
         """The ledger normally names the lost attempt too; without that row the `.blind/` file alone still stops the resume."""
@@ -624,6 +635,10 @@ class ReplayRunner(unittest.TestCase):
         with mock.patch.object(replay_eval.os, "fsync", side_effect=OSError("disk full")), self.assertRaises(OSError):
             replay_eval.write_summary(out, self.set, {"seed": 5, "blind_salt": "a" * 32}, 1, [{"cell": 1}])
         self.assertEqual((out / "summary.json").read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["summary.json"])
+        # review r2 N12: a rename that fails leaves no temporary file either
+        with mock.patch.object(replay_eval.os, "replace", side_effect=OSError("cross-device")), self.assertRaises(OSError):
+            replay_eval.write_summary(out, self.set, {"seed": 5, "blind_salt": "a" * 32}, 1, [{"cell": 1}])
         self.assertEqual(sorted(p.name for p in out.iterdir()), ["summary.json"])
 
     def test_records_from_before_1_11_still_load_unchanged(self):

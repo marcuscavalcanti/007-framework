@@ -82,8 +82,9 @@ schemas, and the dashboard snapshot.
   `{read_isolation_codex_profile}` gives Codex a permission profile that denies each path. Each cell records
   `read_isolation`, which is `unenforced` when the command asks nothing. Detection reads the retained stream
   (`--stream-copy {stream_copy}`): a tool call that names a protected path marks the cell `contaminated` and invalid, and it
-  counts against `--max-invalid`. A scan is `clean` only when every line was read: an empty or wholly unreadable stream is
-  `unscanned` (`empty-stream`), and a torn, over-long (16 MiB) or too deeply nested line with no hit makes it `incomplete`.
+  counts against `--max-invalid`. A scan is `clean` only when every line was read as an event (an object with a `type`): an empty or
+  wholly unreadable stream is `unscanned` (`empty-stream`), and a torn, over-long (16 MiB), too deeply nested or non-event line
+  with no hit makes it `incomplete`.
   `report` and `status` (pooled) show the modes and the scan results; cells from before 1.11.0
   read `unrecorded` and are never rescanned. Prevention is only what each CLI enforces, detection sees only logged tool calls,
   and full isolation needs an OS sandbox, which 007 does not provide. The layout refusals (a protected path that is HOME or

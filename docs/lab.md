@@ -214,10 +214,11 @@ command. `report` adds `read_isolation`, with the modes, the scan statuses and t
 the invalid cells. `status` pools the same counts and names no cell. Cells written before 1.11.0 read `unrecorded`; nothing
 rescans them, so their verdicts are unchanged.
 
-A line is read up to 16 MiB; a longer, torn or too deeply nested line is counted unparsed and makes the scan `incomplete`, never
-`clean`. `replay_eval run` replaces `summary.json` whole (written beside it, then renamed), so a crash cannot truncate the salt it
-seals. With the dispatch ledger lost, `report` traces a `.blind/` token against the plan given with `--replicates`; without it,
-up to one replicate past the highest cell, and a file it cannot trace stays listed with no cell.
+A line is read up to 16 MiB and must be an event (a JSON object with a `type`); a longer, torn or too deeply nested line, or
+one that is no event (`null`, a list, a bare value), is counted unparsed and makes the scan `incomplete`, never `clean`. `replay_eval run` replaces `summary.json` whole (written beside it, then renamed; the temporary file is removed if either step
+fails), so a crash cannot truncate the salt it seals. With the dispatch ledger lost, `report` traces a `.blind/` token against
+the plan given with `--replicates` exactly, plus the cells with a result; without it, up to one replicate past the highest cell.
+A file it cannot trace stays listed with no cell.
 
 The scan cannot see a path built at run time (a variable, an encoded, globbed or concatenated name, a script that computes
 it), a read made by a program the agent started, or a call the CLI does not log. It is conservative the other way too: a call

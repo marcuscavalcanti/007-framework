@@ -2671,8 +2671,9 @@ def _oracle_state(config_path, rows, margin):
 
 def blind_orphans(config, results, rows, planned_replicates=None):
     """Files left in `.blind/` (an agent whose controller died, or one still running), each named by its cell when the sealed
-    salt and the ledger or the plan identify it, else None. Counted beside orphan receipts, never dropped. Without the declared
-    plan (`planned_replicates`, the run's --replicates), the plan is guessed up to one replicate past the highest cell."""
+    salt and the ledger or the plan identify it, else None. Counted beside orphan receipts, never dropped. The candidates are the
+    cells with a result or a dispatch and the declared plan (`planned_replicates`, the run's --replicates); without it, the plan is
+    guessed up to one replicate past the highest cell."""
     names = replay_eval.blind_files(results)
     if not names:
         return []
@@ -2684,9 +2685,8 @@ def blind_orphans(config, results, rows, planned_replicates=None):
     if isinstance(aa, dict) and aa.get("label") not in arms:
         arms = {**arms, aa.get("label"): None}
     # the cells a token can belong to: those with a result or a dispatch, and every planned one up to one replicate past the last
-    reps = max([r["replicate"] for r in rows if type(r.get("replicate")) is int] + [1]) + 1
-    if planned_replicates is not None:
-        reps = max(reps, planned_replicates)
+    # the declared plan exactly; without it, a guess up to one replicate past the last cell
+    reps = planned_replicates if planned_replicates is not None else max([r["replicate"] for r in rows if type(r.get("replicate")) is int] + [1]) + 1
     candidates = {r["cell"] for r in rows} | {row["cell"] for row in (_ledger(results) or [])}
     candidates |= {replay_eval.cell_id(t, a, k) for t in config.get("tasks", []) for a in arms for k in range(1, reps + 1)}
     return [{"file": name, "cell": replay_eval.blind_cell(salt, name, candidates)} for name in names]
