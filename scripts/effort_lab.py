@@ -1236,7 +1236,7 @@ def quota_check(config, out, left):
                 found = cli_telemetry.CLAUDE_USAGE_LIMIT.search(row["result"])  # the probe's own call hit the account's limit
                 if found:
                     limited = True
-                    resets.append(cli_telemetry.reset_epoch(int(found[1])) if found[1] else None)
+                    resets.append(cli_telemetry.reset_field(found[1]))
             if isinstance(row, dict) and row.get("type") == "result" and harness_report._valid_money(row.get("total_cost_usd")):
                 cost = row["total_cost_usd"]  # the probe is a real call: its cost joins the run's spend
     except (OSError, subprocess.TimeoutExpired) as error:

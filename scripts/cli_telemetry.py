@@ -36,8 +36,14 @@ SEVERITY = ["native-error-transient", "native-error", "native-error-rate-limit"]
 # A Claude subscription usage limit (1.11.0): the CLI's error result names it, "Claude AI usage limit reached|<reset epoch>" in
 # study F-1's receipt, or a rate_limit_event says "rejected" with the window's resetsAt. Only that fact, its source and the reset
 # time leave the stream, never the text. It is evidence that the account, not the cell, stopped the call, even after the agent worked.
-# The whole digit token after `|` is read (a longer one, such as milliseconds, is no reset in seconds, never its first digits).
-CLAUDE_USAGE_LIMIT = re.compile(r"usage limit reached(?:\|(\d{1,20})(?!\d))?", re.I)
+# The whole field after `|`, up to whitespace or another `|`, is read: it is a reset only when it is all digits and a Unix time
+# in seconds (milliseconds, a fraction, an exponent or a suffix name none, never their first digits).
+CLAUDE_USAGE_LIMIT = re.compile(r"usage limit reached(?:\|([^\s|]{1,64}))?", re.I)
+
+
+def reset_field(text):
+    """The reset a "usage limit reached|<field>" names, or None: the field must be the provider's integer, digits only."""
+    return reset_epoch(int(text)) if isinstance(text, str) and re.fullmatch(r"[0-9]{1,20}", text) else None
 
 
 def reset_epoch(value):
@@ -266,6 +272,10 @@ class NativeTelemetry:
                 if (self.result_seen or not isinstance(session, str) or not session
                         or self.session != hashlib.sha256(session.encode()).hexdigest()):
                     raise ValueError("ambiguous-terminal")
+                failed = row.get("subtype") != "success" or row.get("is_error") is not False
+                limit = CLAUDE_USAGE_LIMIT.search(row["result"]) if failed and isinstance(row.get("result"), str) else None
+                if limit:  # recorded before usage is checked: a malformed usage keeps its own error, never hides the limit
+                    self.note_usage_limit("result", reset_field(limit[1]))
                 self.add_usage(row.get("usage"))  # per turn: a continuation's usage adds up
                 self.result_seen = True
                 turns = row.get("num_turns") if type(row.get("num_turns")) is int and row["num_turns"] >= 0 else None
@@ -286,9 +296,6 @@ class NativeTelemetry:
                 if row.get("subtype") != "success" or row.get("is_error") is not False:
                     # the error text only (never usage numbers): "usage limit reached" is a rate limit, like a rejected event
                     text = {key: row.get(key) for key in ("subtype", "result", "error", "errors", "api_error_status")}
-                    limit = CLAUDE_USAGE_LIMIT.search(row["result"]) if isinstance(row.get("result"), str) else None
-                    if limit:
-                        self.note_usage_limit("result", reset_epoch(int(limit[1])) if limit[1] else None)
                     raise ValueError("native-error-rate-limit" if self.refused else native_error_class(text))
         except (ValueError, TypeError, AttributeError, UnicodeDecodeError, RecursionError) as error:
             # keep our own fixed codes (e.g. native-error); anything else, such as a JSON parser message, stays generic

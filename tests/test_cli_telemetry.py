@@ -883,6 +883,18 @@ class ClaudeRefusalAndContinuationTests(unittest.TestCase):
         for rows in ([self.init, early, late, error], [self.init, late, early, error]):
             self.assertEqual(self.parse("claude", rows)["usage_limit"], {"source": "rate-limit-event", "resets_at": 1795039200})
 
+    def test_a_reset_field_must_be_a_whole_integer_and_a_limit_survives_missing_usage(self):
+        """Review r2 N11: `(?!\d)` let a fractional or exponent field give its integer prefix; a result with no usage raised
+        before its usage limit was recorded."""
+        for text in ("Claude AI usage limit reached|1795039200.5", "Claude AI usage limit reached|1795039200e3",
+                     "Claude AI usage limit reached|1795039200x"):
+            with self.subTest(text):
+                self.assertEqual(self.parse("claude", [self.init, self.result(is_error=True, result=text)])["usage_limit"],
+                                 {"source": "result", "resets_at": None})
+        bare = {k: v for k, v in self.result(is_error=True, result="Claude AI usage limit reached|1795039200").items() if k != "usage"}
+        got = self.parse("claude", [self.init, bare])
+        self.assertEqual((got["problem"], got["usage_limit"]), ("missing-usage", {"source": "result", "resets_at": 1795039200}))
+
     def test_other_errors_and_served_calls_name_no_usage_limit(self):
         for rows in ([self.init, self.result()],
                      [self.init, self.result(is_error=True, subtype="error_max_turns", result="Reached max turns")],

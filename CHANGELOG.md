@@ -195,7 +195,8 @@ schemas, and the dashboard snapshot.
   The ledger row records `usage_limit` and `resets_at`, `run` returns `resets_at`, and while that reset lies ahead (and planned
   cells remain) a resume stops at once with `quota-hold`, `resets_at` and `retry_after_s`, dispatching nothing. A limit that
   named no reset falls back to the 10-minute cooldown; one whose reset has passed needs none. The reset is read from the whole
-  digit token (a 13-digit millisecond time names no reset instead of one centuries away), the latest of several wins, and a
+  field after `|`, which must be all digits (a 13-digit millisecond time, a fraction or an exponent names no reset instead of
+  one centuries away or a prefix), the limit is recorded before the result's usage is checked, the latest of several wins, and a
   failed quota probe's reset holds a resume too, so no second probe is paid for before it. With no reset named, a contaminated
   cell the limit cut and a probe that read the limit get the 10-minute cooldown from when they were seen, as a refusal does. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
   limit as `usage limit reached` instead of `no rate_limit_event`, and `quota.jsonl` records `resets_at`.
