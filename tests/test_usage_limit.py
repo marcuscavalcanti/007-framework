@@ -209,6 +209,29 @@ class Controller(unittest.TestCase):
         second = self.go(execute, requeue_refused=True)  # no reset to hold until: the (patched) 10-minute cooldown alone
         self.assertEqual((second["stop"], len(lab.load_cells(self.out))), (None, 4))
 
+    def test_an_expired_reset_needs_no_cooldown_and_a_probe_hold_is_honoured(self):
+        """Review #14: a usage limit whose reset has passed fell through to the 10-minute cooldown; a failed quota probe's reset was
+        logged but not read on resume, so the next resume paid for another probe at once."""
+        with mock.patch.object(lab, "RATE_LIMIT_COOLDOWN_S", 600):
+            execute = executor(lambda cid, n: n == 1 and cid == "T0-r01-a" and LIMIT(now() - 5))
+            self.assertEqual(self.go(execute, requeue_refused=True)["stop"], "quota-hold")
+            again = self.go(execute, requeue_refused=True)
+            self.assertEqual((again["stop"], len(lab.load_cells(self.out))), (None, 4))
+        probes = self.root / "probes.log"
+        reset = now() + 3600
+        (self.root / "probe.py").write_text(
+            "import json\nopen(%r, 'a').write('x')\n" % str(probes)
+            + "print(json.dumps({'type': 'result', 'is_error': True, 'result': 'Claude AI usage limit reached|%d', 'total_cost_usd': 0.0}))\n" % reset)
+        path = write_set(self.root / "gated", quota_probe={"command": [sys.executable, "-I", str(self.root / "probe.py")]})
+        out = self.root / "gated-out"
+        go = lambda: lab.run(path, out, execute=executor(lambda cid, n: None), replicates=1, jobs=1, max_calls=99, max_usd=99,
+                             stop_usd=1, quota_gate=True)
+        first = go()
+        self.assertEqual((first["stop"], first["calls"], first["resets_at"]), ("quota-hold", 0, reset))
+        second = go()
+        self.assertEqual((second["stop"], second["calls"], second["resets_at"]), ("quota-hold", 0, reset))
+        self.assertEqual(probes.read_text(), "x")  # one paid probe, not two
+
     def test_a_finished_run_is_not_held(self):
         box = []  # the last cell dispatched is refused, and not requeued: nothing is left to hold
         execute = executor(lambda cid, n: len(box[0].calls) == 4 and LIMIT(now() + 3600))

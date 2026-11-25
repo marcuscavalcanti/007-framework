@@ -871,6 +871,18 @@ class ClaudeRefusalAndContinuationTests(unittest.TestCase):
         for text in ("Claude AI usage limit reached", "Claude AI usage limit reached|12"):  # no reset, or one that is no Unix time
             self.assertEqual(self.parse("claude", [self.init, self.result(is_error=True, result=text)])["usage_limit"], {"source": "result", "resets_at": None})
 
+    def test_the_whole_reset_token_is_read_and_the_latest_reset_wins(self):
+        # review #14: `\d{9,11}` took the first 11 digits of a 13-digit millisecond time, a reset centuries away
+        for text in ("Claude AI usage limit reached|1795039200123", "Claude AI usage limit reached|" + "9" * 30):
+            self.assertEqual(self.parse("claude", [self.init, self.result(is_error=True, result=text)])["usage_limit"],
+                             {"source": "result", "resets_at": None})
+        # two rejected windows: the account is held until the later one reopens, whichever came first in the stream
+        early = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "resetsAt": 1794434400, "rateLimitType": "five_hour"}}
+        late = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "resetsAt": 1795039200, "rateLimitType": "seven_day"}}
+        error = self.result(is_error=True, subtype="error_during_execution", result="Claude AI usage limit reached|1794500000")
+        for rows in ([self.init, early, late, error], [self.init, late, early, error]):
+            self.assertEqual(self.parse("claude", rows)["usage_limit"], {"source": "rate-limit-event", "resets_at": 1795039200})
+
     def test_other_errors_and_served_calls_name_no_usage_limit(self):
         for rows in ([self.init, self.result()],
                      [self.init, self.result(is_error=True, subtype="error_max_turns", result="Reached max turns")],

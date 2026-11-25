@@ -1252,6 +1252,23 @@ def quota_check(config, out, left):
     return ok, reason, cost
 
 
+def probe_holds(out):
+    """The resets (Unix seconds) that failed quota probes of this run logged in quota.jsonl: the account stays held until then."""
+    try:
+        lines = (out / "quota.jsonl").read_text().splitlines()
+    except OSError:
+        return []
+    found = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("ok") is False and cli_telemetry.reset_epoch(row.get("resets_at")):
+            found.append(row["resets_at"])
+    return found
+
+
 def validate_quota_probe(config):
     probe = config.get("quota_probe")
     if not isinstance(probe, dict) or not isinstance(probe.get("command"), list) or not probe["command"] or not all(isinstance(p, str) for p in probe["command"]):
@@ -1412,13 +1429,15 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
         return {"stop": "uncertain-attempts" if orphans else "stopped-before", "orphans": sorted(orphans)}
     refusals = [row for row in history if "finished_at" in row and row.get("refused") is True]
     remaining = any(replay_eval.cell_id(t, a, r) not in done for t, r, a in cells)
-    # a Claude usage limit lasts until the reset its refusal named, not 10 minutes: hold until then, as a failed quota gate does
-    resets = [row["resets_at"] for row in refusals if row.get("usage_limit") is True and cli_telemetry.reset_epoch(row.get("resets_at"))]
+    # a Claude usage limit lasts until the reset its refusal (or a failed quota probe) named, not 10 minutes: hold until then
+    known = lambda row: row.get("usage_limit") is True and cli_telemetry.reset_epoch(row.get("resets_at"))
+    resets = [row["resets_at"] for row in refusals if known(row)] + probe_holds(out)
     if resets and remaining and max(resets) > datetime.now(timezone.utc).timestamp():
         return {"stop": "quota-hold", "calls": 0, "resets_at": max(resets),
                 "retry_after_s": math.ceil(max(resets) - datetime.now(timezone.utc).timestamp())}
-    if refusals and remaining:  # resuming inside the outage would only lose cells to it (the newest refusal counts); a finished run has none to lose
-        age = (datetime.now(timezone.utc) - max(harness_report._instant(row["finished_at"]) for row in refusals)).total_seconds()
+    unknown = [row for row in refusals if not known(row)]  # a refusal whose reset is known and past needs no cooldown
+    if unknown and remaining:  # resuming inside the outage would only lose cells to it (the newest refusal counts); a finished run has none to lose
+        age = (datetime.now(timezone.utc) - max(harness_report._instant(row["finished_at"]) for row in unknown)).total_seconds()
         if age < RATE_LIMIT_COOLDOWN_S:
             return {"stop": "rate-limit-cooldown", "calls": 0, "retry_after_s": round(RATE_LIMIT_COOLDOWN_S - age)}
     try:
@@ -1575,6 +1594,9 @@ def _run(config_path, out, *, replicates, jobs, max_calls, max_usd, stop_usd, ti
                     charge(cost)
                     if not ok:
                         stop = "quota-hold"
+                        held = [r for r in probe_holds(out) if r > datetime.now(timezone.utc).timestamp()]
+                        if held:
+                            limit_resets = max(limit_resets or 0, *held)
                         break
                 pending, active, sent = list(todo[:size]), set(), 0
                 while True:

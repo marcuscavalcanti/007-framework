@@ -36,7 +36,8 @@ SEVERITY = ["native-error-transient", "native-error", "native-error-rate-limit"]
 # A Claude subscription usage limit (1.11.0): the CLI's error result names it, "Claude AI usage limit reached|<reset epoch>" in
 # study F-1's receipt, or a rate_limit_event says "rejected" with the window's resetsAt. Only that fact, its source and the reset
 # time leave the stream, never the text. It is evidence that the account, not the cell, stopped the call, even after the agent worked.
-CLAUDE_USAGE_LIMIT = re.compile(r"usage limit reached(?:\|(\d{9,11}))?", re.I)
+# The whole digit token after `|` is read (a longer one, such as milliseconds, is no reset in seconds, never its first digits).
+CLAUDE_USAGE_LIMIT = re.compile(r"usage limit reached(?:\|(\d{1,20})(?!\d))?", re.I)
 
 
 def reset_epoch(value):
@@ -157,9 +158,10 @@ class NativeTelemetry:
         self.usage_limit = None  # Claude: {"source", "resets_at"} once the stream shows the account's usage limit
 
     def note_usage_limit(self, source, resets_at):
+        """The first evidence names the source; the latest known reset wins: the account is held until every rejected window reopens."""
         if self.usage_limit is None:
             self.usage_limit = {"source": source, "resets_at": resets_at}
-        elif self.usage_limit["resets_at"] is None:
+        elif resets_at is not None and (self.usage_limit["resets_at"] is None or resets_at > self.usage_limit["resets_at"]):
             self.usage_limit["resets_at"] = resets_at
 
     def feed(self, chunk):

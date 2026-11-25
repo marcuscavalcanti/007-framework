@@ -163,7 +163,9 @@ schemas, and the dashboard snapshot.
   `quota-hold`, not `rate-limit`, so `--rate-limit-wait-s` no longer retries a five-hour or seven-day window every 10 minutes.
   The ledger row records `usage_limit` and `resets_at`, `run` returns `resets_at`, and while that reset lies ahead (and planned
   cells remain) a resume stops at once with `quota-hold`, `resets_at` and `retry_after_s`, dispatching nothing. A limit that
-  named no reset falls back to the 10-minute cooldown. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
+  named no reset falls back to the 10-minute cooldown; one whose reset has passed needs none. The reset is read from the whole
+  digit token (a 13-digit millisecond time names no reset instead of one centuries away), the latest of several wins, and a
+  failed quota probe's reset holds a resume too, so no second probe is paid for before it. The quota probe (`--quota-gate`) now reads a probe whose own call hit the
   limit as `usage limit reached` instead of `no rate_limit_event`, and `quota.jsonl` records `resets_at`.
 - A refused call whose stream touched a protected path stays `contaminated`: it counts against `--max-invalid`, is never
   relabelled `provider-rate-limit` and is never requeued. Before, a contaminated cell whose receipt also named a refusal was
