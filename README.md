@@ -330,7 +330,7 @@ directories request owner-only permissions. Existing host permissions govern exi
   cell records `unenforced`. The generated Claude and Codex rules were not checked against a running CLI. Detection needs a
   retained stream and sees only logged tool calls. Full isolation needs an OS sandbox, which 007 does not provide.
 - Blind promotion (since 1.11.0) gives an agent's receipt and stream their cell names without following a link or replacing a
-  file, and reads, hashes and scans the very files it opened. It guards against collisions and accidents, not against a
+  file, parses and hashes the receipt from one buffer read from the file it opened, and scans the stream from its opened file. It guards against collisions and accidents, not against a
   process running with your authority that swaps files during the promotion: 007 runs as you and isolates nothing
   ([SECURITY.md](SECURITY.md)).
 
